@@ -1,0 +1,15 @@
+{
+    "build": {
+        "preview": {
+            "android": {
+                "buildType": "apk",
+                "image": "latest"
+            }
+        },
+        "production": {
+            "android": {
+                "buildType": "app-bundle"
+            }
+        }
+    }
+}

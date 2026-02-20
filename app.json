@@ -1,0 +1,80 @@
+{
+  "expo": {
+    "name": "AppRecordatorio",
+    "slug": "AppRecordatorio",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.ralo.apprecordatorio",
+      "associatedDomains": [
+        "applinks:apprecordatorio.app"
+      ]
+    },
+    "android": {
+      "package": "com.ralo.apprecordatorio",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#ffffff"
+      },
+      "permissions": [
+        "RECEIVE_BOOT_COMPLETED",
+        "SCHEDULE_EXACT_ALARM",
+        "VIBRATE",
+        "WAKE_LOCK",
+        "POST_NOTIFICATIONS"
+      ],
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "autoVerify": true,
+          "data": [
+            {
+              "scheme": "apprecordatorio",
+              "host": "*"
+            }
+          ],
+          "category": [
+            "BROWSABLE",
+            "DEFAULT"
+          ]
+        }
+      ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-font",
+      [
+        "expo-notifications",
+        {
+          "sounds": [
+            "./assets/sounds/alarm_normal.wav",
+            "./assets/sounds/alarm_strict.wav",
+            "./assets/sounds/alarm_critical.wav"
+          ]
+        }
+      ],
+      "expo-localization"
+    ],
+    "scheme": "apprecordatorio",
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "01983506-e77d-4420-9219-4d451f832e9a"
+      }
+    }
+  }
+}
