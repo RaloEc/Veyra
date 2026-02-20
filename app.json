@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "AppRecordatorio",
-    "slug": "AppRecordatorio",
+    "name": "Veyra",
+    "slug": "veyra",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -16,13 +16,13 @@
     ],
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.ralo.apprecordatorio",
+      "bundleIdentifier": "com.ralo.veyra",
       "associatedDomains": [
-        "applinks:apprecordatorio.app"
+        "applinks:veyra.app"
       ]
     },
     "android": {
-      "package": "com.ralo.apprecordatorio",
+      "package": "com.ralo.veyra",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
@@ -40,7 +40,7 @@
           "autoVerify": true,
           "data": [
             {
-              "scheme": "apprecordatorio",
+              "scheme": "veyra",
               "host": "*"
             }
           ],
@@ -69,7 +69,7 @@
       ],
       "expo-localization"
     ],
-    "scheme": "apprecordatorio",
+    "scheme": "veyra",
     "extra": {
       "router": {},
       "eas": {

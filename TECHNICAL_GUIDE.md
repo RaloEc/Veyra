@@ -1,4 +1,4 @@
-# 🔧 Guía Técnica de Implementación - AppRecordatorio
+# 🔧 Guía Técnica de Implementación - Veyra
 
 ## 📋 Resumen de Mejoras Implementadas
 
@@ -161,7 +161,7 @@ Configurar `expo-linking` para abrir la app desde notificaciones:
 // app.json
 {
   "expo": {
-    "scheme": "apprecordatorio",
+    "scheme": "veyra",
     "android": {
       "intentFilters": [...]
     }

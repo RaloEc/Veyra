@@ -1,7 +1,7 @@
-# 📱 AppRecordatorio - Documentación del Proyecto
+# 📱 Veyra - Documentación del Proyecto
 
 ## 📖 Descripción General
-**AppRecordatorio** es un gestor de productividad avanzado diseñado no solo para listar tareas, sino para **asegurar su cumplimiento** mediante diferentes niveles de "presión" o control. Está enfocada en la disciplina personal, diferenciando entre recordatorios casuales y tareas críticas que no pueden ser ignoradas, actuando como un asistente activo.
+**Veyra** es un gestor de productividad avanzado diseñado no solo para listar tareas, sino para **asegurar su cumplimiento** mediante diferentes niveles de "presión" o control. Está enfocada en la disciplina personal, diferenciando entre recordatorios casuales y tareas críticas que no pueden ser ignoradas, actuando como un asistente activo.
 
 ---
 

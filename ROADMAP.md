@@ -1,4 +1,4 @@
-# 🚀 Roadmap de Mejoras Futuras - AppRecordatorio
+# 🚀 Roadmap de Mejoras Futuras - Veyra
 
 ## Prioridad 1: Críticas (Implementar Próximamente)
 
@@ -10,14 +10,14 @@
 // app.json
 {
   "expo": {
-    "scheme": "apprecordatorio",
+    "scheme": "veyra",
     "android": {
       "intentFilters": [
         {
           "action": "VIEW",
           "data": [
             {
-              "scheme": "apprecordatorio",
+              "scheme": "veyra",
               "host": "*"
             }
           ],
@@ -26,7 +26,7 @@
       ]
     },
     "ios": {
-      "associatedDomains": ["applinks:apprecordatorio.app"]
+      "associatedDomains": ["applinks:veyra.app"]
     }
   }
 }
@@ -34,7 +34,7 @@
 // En notificaciones
 data: { 
   reminderId: reminder.id,
-  url: `apprecordatorio://confirm/${reminder.id}` 
+  url: `veyra://confirm/${reminder.id}` 
 }
 ```
 
@@ -328,4 +328,4 @@ enableStrictMode: (durationHours: number) => {
 ---
 
 **Última actualización:** 2026-02-06  
-**Mantenedor:** Equipo AppRecordatorio
+**Mantenedor:** Equipo Veyra

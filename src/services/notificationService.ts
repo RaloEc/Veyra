@@ -143,7 +143,7 @@ export const NotificationService = {
             body: 'Es hora de actuar. Confirma tu acción.',
             data: {
                 reminderId: reminder.id,
-                url: `apprecordatorio://confirm/${reminder.id}`
+                url: `veyra://confirm/${reminder.id}`
             },
             sound: soundFile, // iOS custom sound
             categoryIdentifier: 'REMINDER_ACTION',
@@ -247,7 +247,7 @@ export const NotificationService = {
                 body: 'Este recordatorio está pendiente. Por favor, actúa ahora.',
                 data: {
                     reminderId: reminder.id,
-                    url: `apprecordatorio://confirm/${reminder.id}`
+                    url: `veyra://confirm/${reminder.id}`
                 },
                 sound: soundFile,
                 categoryIdentifier: 'REMINDER_ACTION',
