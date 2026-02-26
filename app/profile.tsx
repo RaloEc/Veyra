@@ -4,8 +4,11 @@ import { useStore } from '../src/store/useStore';
 import { User, Mail, Calendar, Award, TrendingUp, Target, Flame, CheckCircle2, AlertCircle, XCircle, ChevronRight } from '@tamagui/lucide-icons';
 import { useState, useEffect, useMemo } from 'react';
 import { ComplianceService } from '../src/services/complianceService';
+import { useTranslation } from 'react-i18next';
+import { useAccentColor } from '../src/theme/accentColors';
 
 export default function ProfileScreen() {
+    const { t } = useTranslation();
     const { theme, userProfile, userName, userEmail, setUserName, setUserEmail } = useStore();
 
     const [name, setName] = useState('');
@@ -19,6 +22,7 @@ export default function ProfileScreen() {
     });
 
     const isDark = theme === 'dark';
+    const { accent } = useAccentColor();
 
     const colors = {
         bg: isDark ? '#0a0a0a' : '#F8FAFC',
@@ -28,7 +32,7 @@ export default function ProfileScreen() {
         border: isDark ? '#262626' : '#E2E8F0',
         surface: isDark ? '#171717' : '#FFFFFF',
         inputBg: isDark ? '#1f1f1f' : '#f1f5f9',
-        accent: '#3b82f6',
+        accent: accent,
         success: '#10b981',
         error: '#ef4444',
         warning: '#f59e0b',
@@ -69,16 +73,16 @@ export default function ProfileScreen() {
 
     const handleSave = () => {
         if (!name.trim()) {
-            showToast('error', 'Nombre requerido', 'Por favor ingresa tu nombre para continuar.');
+            showToast('error', t('profile.toasts.name_required_title'), t('profile.toasts.name_required_msg'));
             return;
         }
         if (email && !email.includes('@')) {
-            showToast('error', 'Email inválido', 'Por favor ingresa un correo válido.');
+            showToast('error', t('profile.toasts.email_invalid_title'), t('profile.toasts.email_invalid_msg'));
             return;
         }
         setUserName(name.trim());
         if (email) setUserEmail(email.trim());
-        showToast('success', 'Perfil actualizado', 'Tus cambios han sido guardados con éxito.');
+        showToast('success', t('profile.toasts.profile_updated_title'), t('profile.toasts.profile_updated_msg'));
     };
 
     return (
@@ -130,12 +134,12 @@ export default function ProfileScreen() {
 
                         <YStack alignItems="center" space="$1">
                             <Text fontSize="$8" fontWeight="900" color={colors.textPrimary} letterSpacing={-0.5}>
-                                {userName || 'Nuevo Usuario'}
+                                {userName || t('profile.new_user')}
                             </Text>
                             <XStack space="$2" alignItems="center" backgroundColor={isDark ? '#222' : '#F1F5F9'} px="$3" py="$1" borderRadius="$10">
                                 <Award size={14} color={colors.accent} />
                                 <Text color={colors.textSecondary} fontSize="$2" fontWeight="700" textTransform="uppercase">
-                                    {userProfile || 'Perfil Estándar'}
+                                    {userProfile ? t(`menu.profiles.${userProfile}`) : t('profile.standard_profile')}
                                 </Text>
                             </XStack>
                         </YStack>
@@ -146,10 +150,10 @@ export default function ProfileScreen() {
                         <YStack gap="$5">
                             <XStack justifyContent="space-between" alignItems="center">
                                 <Text fontSize="$4" fontWeight="900" color={colors.textPrimary} letterSpacing={0.5}>
-                                    RENDIMIENTO
+                                    {t('profile.performance')}
                                 </Text>
                                 <XStack space="$1" alignItems="center">
-                                    <Text fontSize="$2" fontWeight="700" color={colors.accent}>Ver todo</Text>
+                                    <Text fontSize="$2" fontWeight="700" color={colors.accent}>{t('profile.view_all')}</Text>
                                     <ChevronRight size={14} color={colors.accent} />
                                 </XStack>
                             </XStack>
@@ -161,7 +165,7 @@ export default function ProfileScreen() {
                                     </YStack>
                                     <YStack>
                                         <Text fontSize="$8" fontWeight="900" color="#22C55E">{stats.totalCompleted}</Text>
-                                        <Text fontSize="$1" fontWeight="700" color={colors.textMuted} textTransform="uppercase">Éxitos</Text>
+                                        <Text fontSize="$1" fontWeight="700" color={colors.textMuted} textTransform="uppercase">{t('profile.successes')}</Text>
                                     </YStack>
                                 </YStack>
 
@@ -171,7 +175,7 @@ export default function ProfileScreen() {
                                     </YStack>
                                     <YStack>
                                         <Text fontSize="$8" fontWeight="900" color="#F59E0B">{stats.currentStreak}</Text>
-                                        <Text fontSize="$1" fontWeight="700" color={colors.textMuted} textTransform="uppercase">Racha</Text>
+                                        <Text fontSize="$1" fontWeight="700" color={colors.textMuted} textTransform="uppercase">{t('profile.streak')}</Text>
                                     </YStack>
                                 </YStack>
                             </XStack>
@@ -183,7 +187,7 @@ export default function ProfileScreen() {
                                     </YStack>
                                     <YStack>
                                         <Text fontSize="$8" fontWeight="900" color={colors.accent}>{stats.completionRate.toFixed(0)}%</Text>
-                                        <Text fontSize="$1" fontWeight="700" color={colors.textMuted} textTransform="uppercase">Cumplimiento</Text>
+                                        <Text fontSize="$1" fontWeight="700" color={colors.textMuted} textTransform="uppercase">{t('profile.compliance')}</Text>
                                     </YStack>
                                 </YStack>
 
@@ -193,7 +197,7 @@ export default function ProfileScreen() {
                                     </YStack>
                                     <YStack>
                                         <Text fontSize="$8" fontWeight="900" color="#EF4444">{stats.totalFailed}</Text>
-                                        <Text fontSize="$1" fontWeight="700" color={colors.textMuted} textTransform="uppercase">Fallos</Text>
+                                        <Text fontSize="$1" fontWeight="700" color={colors.textMuted} textTransform="uppercase">{t('profile.failures')}</Text>
                                     </YStack>
                                 </YStack>
                             </XStack>
@@ -202,18 +206,18 @@ export default function ProfileScreen() {
                         {/* ACCOUNT INFORMATION - Clean Inputs */}
                         <YStack gap="$5">
                             <Text fontSize="$4" fontWeight="900" color={colors.textPrimary} letterSpacing={0.5}>
-                                INFORMACIÓN DE CUENTA
+                                {t('profile.account_info')}
                             </Text>
 
                             <YStack gap="$6">
                                 <YStack space="$2">
                                     <XStack space="$2" alignItems="center" px="$1">
                                         <User size={14} color={colors.textMuted} />
-                                        <Text fontSize="$2" fontWeight="800" color={colors.textMuted} textTransform="uppercase">Nombre Completo</Text>
+                                        <Text fontSize="$2" fontWeight="800" color={colors.textMuted} textTransform="uppercase">{t('profile.full_name')}</Text>
                                     </XStack>
                                     <Input
                                         size="$5"
-                                        placeholder="Tú nombre"
+                                        placeholder={t('profile.full_name_placeholder')}
                                         value={name}
                                         onChangeText={setName}
                                         backgroundColor={colors.inputBg}
@@ -229,11 +233,11 @@ export default function ProfileScreen() {
                                 <YStack space="$2">
                                     <XStack space="$2" alignItems="center" px="$1">
                                         <Mail size={14} color={colors.textMuted} />
-                                        <Text fontSize="$2" fontWeight="800" color={colors.textMuted} textTransform="uppercase">Correo Electrónico</Text>
+                                        <Text fontSize="$2" fontWeight="800" color={colors.textMuted} textTransform="uppercase">{t('profile.email')}</Text>
                                     </XStack>
                                     <Input
                                         size="$5"
-                                        placeholder="email@ejemplo.com"
+                                        placeholder={t('profile.email_placeholder')}
                                         value={email}
                                         onChangeText={setEmail}
                                         backgroundColor={colors.inputBg}
@@ -262,8 +266,8 @@ export default function ProfileScreen() {
                                     <Calendar size={18} color={colors.textPrimary} />
                                 </YStack>
                                 <YStack>
-                                    <Text fontSize="$2" fontWeight="700" color={colors.textMuted}>MIEMBRO DESDE</Text>
-                                    <Text fontSize="$4" fontWeight="800" color={colors.textPrimary}>Febrero 2026</Text>
+                                    <Text fontSize="$2" fontWeight="700" color={colors.textMuted}>{t('profile.member_since')}</Text>
+                                    <Text fontSize="$4" fontWeight="800" color={colors.textPrimary}>{t('profile.member_date')}</Text>
                                 </YStack>
                             </XStack>
                         </XStack>
@@ -286,7 +290,7 @@ export default function ProfileScreen() {
                                 textTransform="uppercase"
                                 letterSpacing={1}
                             >
-                                ACTUALIZAR PERFIL
+                                {t('profile.update_button')}
                             </Text>
                         </Button>
                     </YStack>

@@ -2,8 +2,8 @@ import { createV5Theme, defaultChildrenThemes } from '@tamagui/config/v5'
 import { v5ComponentThemes } from '@tamagui/themes/v5'
 import { yellow, yellowDark, red, redDark, green, greenDark } from '@tamagui/colors'
 
-const darkPalette = ['hsla(0, 15%, 1%, 1)', 'hsla(0, 15%, 6%, 1)', 'hsla(0, 15%, 12%, 1)', 'hsla(0, 15%, 17%, 1)', 'hsla(0, 15%, 23%, 1)', 'hsla(0, 15%, 28%, 1)', 'hsla(0, 15%, 34%, 1)', 'hsla(0, 15%, 39%, 1)', 'hsla(0, 15%, 45%, 1)', 'hsla(0, 15%, 50%, 1)', 'hsla(0, 15%, 93%, 1)', 'hsla(0, 15%, 99%, 1)']
-const lightPalette = ['hsla(0, 15%, 99%, 1)', 'hsla(0, 15%, 94%, 1)', 'hsla(0, 15%, 88%, 1)', 'hsla(0, 15%, 83%, 1)', 'hsla(0, 15%, 77%, 1)', 'hsla(0, 15%, 72%, 1)', 'hsla(0, 15%, 66%, 1)', 'hsla(0, 15%, 61%, 1)', 'hsla(0, 15%, 55%, 1)', 'hsla(0, 15%, 50%, 1)', 'hsla(0, 15%, 15%, 1)', 'hsla(0, 15%, 1%, 1)']
+const darkPalette = ['hsla(0, 0%, 1%, 1)', 'hsla(0, 0%, 6%, 1)', 'hsla(0, 0%, 12%, 1)', 'hsla(0, 0%, 17%, 1)', 'hsla(0, 0%, 23%, 1)', 'hsla(0, 0%, 28%, 1)', 'hsla(0, 0%, 34%, 1)', 'hsla(0, 0%, 39%, 1)', 'hsla(0, 0%, 45%, 1)', 'hsla(0, 0%, 50%, 1)', 'hsla(0, 0%, 93%, 1)', 'hsla(0, 0%, 99%, 1)']
+const lightPalette = ['hsla(0, 0%, 99%, 1)', 'hsla(0, 0%, 94%, 1)', 'hsla(0, 0%, 88%, 1)', 'hsla(0, 0%, 83%, 1)', 'hsla(0, 0%, 77%, 1)', 'hsla(0, 0%, 72%, 1)', 'hsla(0, 0%, 66%, 1)', 'hsla(0, 0%, 61%, 1)', 'hsla(0, 0%, 55%, 1)', 'hsla(0, 0%, 50%, 1)', 'hsla(0, 0%, 15%, 1)', 'hsla(0, 0%, 1%, 1)']
 
 // Your custom accent color theme
 const accentLight = {

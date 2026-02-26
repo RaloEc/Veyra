@@ -2,6 +2,12 @@ import * as Notifications from 'expo-notifications';
 import { Reminder, ControlLevel } from '../types/db';
 import { Platform } from 'react-native';
 import { useStore } from '../store/useStore';
+import i18n from '../lib/i18n';
+
+const stripHtml = (html: string) => {
+    if (!html) return '';
+    return html.replace(/<[^>]*>?/gm, '').trim();
+};
 
 export const NotificationService = {
     async setup() {
@@ -21,7 +27,14 @@ export const NotificationService = {
         let finalStatus = existingStatus;
 
         if (existingStatus !== 'granted') {
-            const { status } = await Notifications.requestPermissionsAsync();
+            const { status } = await Notifications.requestPermissionsAsync({
+                ios: {
+                    allowAlert: true,
+                    allowBadge: true,
+                    allowSound: true,
+                    allowCriticalAlerts: true,
+                },
+            });
             finalStatus = status;
         }
 
@@ -43,12 +56,16 @@ export const NotificationService = {
             // Strict Channel
             await Notifications.setNotificationChannelAsync('strict', {
                 name: 'Estricto',
-                importance: Notifications.AndroidImportance.HIGH,
+                importance: Notifications.AndroidImportance.MAX,
                 vibrationPattern: [0, 500, 250, 500],
                 lightColor: '#f59e0b',
                 sound: soundSettings.strict,
                 lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
                 bypassDnd: true,
+                audioAttributes: {
+                    usage: Notifications.AndroidAudioUsage.ALARM,
+                    contentType: Notifications.AndroidAudioContentType.SONIFICATION,
+                }
             });
 
             // Critical Channel (Max Priority)
@@ -138,9 +155,12 @@ export const NotificationService = {
                 break;
         }
 
+        const t = i18n.t.bind(i18n);
+        const descriptionBody = stripHtml(reminder.description || '');
+
         const baseContent = {
             title: reminder.title,
-            body: 'Es hora de actuar. Confirma tu acción.',
+            body: descriptionBody || t('notifications.default_body'),
             data: {
                 reminderId: reminder.id,
                 url: `veyra://confirm/${reminder.id}`
@@ -148,6 +168,7 @@ export const NotificationService = {
             sound: soundFile, // iOS custom sound
             categoryIdentifier: 'REMINDER_ACTION',
             priority: reminder.control_level === 'critical' ? Notifications.AndroidNotificationPriority.MAX : Notifications.AndroidNotificationPriority.HIGH,
+            interruptionLevel: (reminder.control_level === 'critical' ? 'critical' : reminder.control_level === 'strict' ? 'timeSensitive' : 'active') as any,
         };
 
         // Schedule primary notification
@@ -170,7 +191,7 @@ export const NotificationService = {
                 const followUpId = await Notifications.scheduleNotificationAsync({
                     content: {
                         ...baseContent,
-                        body: `RECORDATORIO ${reminder.control_level.toUpperCase()}: ${reminder.title} sigue pendiente.`,
+                        body: t('notifications.follow_up_body', { level: reminder.control_level.toUpperCase(), title: reminder.title }),
                     },
                     trigger: {
                         type: Notifications.SchedulableTriggerInputTypes.DATE,
@@ -199,17 +220,18 @@ export const NotificationService = {
     },
 
     async registerCategories() {
+        const t = i18n.t.bind(i18n);
         await Notifications.setNotificationCategoryAsync('REMINDER_ACTION', [
             {
                 identifier: 'DONE',
-                buttonTitle: 'Ya lo hice',
+                buttonTitle: t('notifications.action_done'),
                 options: {
-                    opensAppToForeground: false, // Background action ideally, but we might want to open app to confirm for "Active Control"
+                    opensAppToForeground: false,
                 },
             },
             {
                 identifier: 'SNOOZE',
-                buttonTitle: 'Posponer',
+                buttonTitle: t('notifications.action_snooze'),
                 options: {
                     opensAppToForeground: false,
                 },
@@ -241,10 +263,11 @@ export const NotificationService = {
                 break;
         }
 
+        const t = i18n.t.bind(i18n);
         await Notifications.scheduleNotificationAsync({
             content: {
-                title: `⚠️ VENCIDO: ${reminder.title}`,
-                body: 'Este recordatorio está pendiente. Por favor, actúa ahora.',
+                title: t('notifications.overdue_title', { title: reminder.title }),
+                body: t('notifications.overdue_body'),
                 data: {
                     reminderId: reminder.id,
                     url: `veyra://confirm/${reminder.id}`

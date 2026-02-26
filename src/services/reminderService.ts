@@ -64,6 +64,14 @@ export const ReminderService = {
         );
     },
 
+    async getReminderById(id: string): Promise<Reminder | null> {
+        const db = await getDB();
+        return await db.getFirstAsync<Reminder>(
+            `SELECT * FROM reminders WHERE id = ?`,
+            [id]
+        );
+    },
+
     async getHistory(): Promise<Reminder[]> {
         const db = await getDB();
         // Fetch Completed OR Deleted items

@@ -98,6 +98,7 @@ export const initDatabase = async () => {
   await db.execAsync(`
     CREATE TABLE IF NOT EXISTS notes (
       id TEXT PRIMARY KEY,
+      user_id TEXT,
       title TEXT,
       content TEXT,
       created_at_ms INTEGER NOT NULL,
@@ -105,14 +106,38 @@ export const initDatabase = async () => {
       is_pinned INTEGER DEFAULT 0,
       attachments TEXT,
       links TEXT,
-      deleted INTEGER DEFAULT 0
+      deleted INTEGER DEFAULT 0,
+      last_modified_ms INTEGER
     );
   `);
   console.log('Notes table checked');
 
+  // Migrations for notes (add columns if they don't exist)
+  try {
+    await db.execAsync('ALTER TABLE notes ADD COLUMN user_id TEXT;');
+  } catch (e) { }
+  try {
+    await db.execAsync('ALTER TABLE notes ADD COLUMN last_modified_ms INTEGER;');
+  } catch (e) { }
+
+  // Set last_modified_ms for existing notes that don't have it
+  await db.runAsync(
+    `UPDATE notes SET last_modified_ms = updated_at_ms WHERE last_modified_ms IS NULL`
+  );
+
+  // Sync metadata table to track last sync timestamps
+  await db.execAsync(`
+    CREATE TABLE IF NOT EXISTS sync_metadata (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
+  `);
+  console.log('Sync metadata table checked');
+
   // Indices for Notes
   await db.execAsync(`
     CREATE INDEX IF NOT EXISTS idx_notes_updated_at ON notes (updated_at_ms);
+    CREATE INDEX IF NOT EXISTS idx_notes_last_modified ON notes (last_modified_ms);
   `);
   console.log('Notes indices created');
 

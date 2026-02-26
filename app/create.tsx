@@ -1,4 +1,4 @@
-import { TouchableOpacity, StyleSheet, KeyboardAvoidingView, Platform, Keyboard } from 'react-native';
+import { TouchableOpacity, StyleSheet, KeyboardAvoidingView, Platform, Keyboard, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { YStack, XStack, Text, Button, ScrollView } from 'tamagui';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -11,10 +11,13 @@ import { RichTextEditorSection } from '../src/components/create/RichTextEditorSe
 import { AttachmentsSection } from '../src/components/create/AttachmentsSection';
 import { RichTextToolbar } from '../src/components/create/RichTextToolbar';
 import { ImageCropperModal } from '../src/components/create/ImageCropperModal';
+import { RecurrenceSelector } from '../src/components/create/RecurrenceSelector';
 import { PremiumAlert } from '../src/components/ui/PremiumAlert';
 import { useState, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 
 export default function CreateScreen() {
+    const { t } = useTranslation();
     const router = useRouter();
     const { id } = useLocalSearchParams<{ id: string }>();
     const [isNotesFocused, setIsNotesFocused] = useState(false);
@@ -48,6 +51,8 @@ export default function CreateScreen() {
         handleSave,
         handleDelete,
         handleComplete,
+        recurrenceType,
+        setRecurrenceType,
         MAX_ATTACHMENTS,
         alertVisible,
         setAlertVisible,
@@ -56,17 +61,17 @@ export default function CreateScreen() {
 
     return (
         <SafeAreaView style={{ flex: 1, backgroundColor: isDark ? '#0a0a0a' : '#f8f9fa' }} edges={['top', 'right', 'left']}>
-            <View style={{ flex: 1 }} onStartShouldSetResponder={() => true}>
+            <View style={{ flex: 1 }}>
                 {/* Custom Header */}
                 <XStack style={{ paddingHorizontal: 16, paddingVertical: 8, alignItems: 'center', justifyContent: 'space-between', zIndex: 100 }}>
                     <TouchableOpacity onPress={() => router.back()} style={styles.iconButton}>
                         <ChevronLeft size={28} color={isDark ? 'white' : 'black'} />
                     </TouchableOpacity>
                     <Text fontSize="$5" fontWeight="800" letterSpacing={-0.5} color={isDark ? 'white' : 'black'}>
-                        {isEditing ? 'Editar Recordatorio' : 'Crear Recordatorio'}
+                        {isEditing ? t('create.title_edit') : t('create.title_new')}
                     </Text>
                     <TouchableOpacity onPress={handleSave} disabled={!title} style={{ opacity: !title ? 0.3 : 1 }}>
-                        <Text color="$blue10" fontWeight="700" fontSize="$5">Listo</Text>
+                        <Text color="$blue10" fontWeight="700" fontSize="$5">{t('create.btn_save')}</Text>
                     </TouchableOpacity>
                 </XStack>
 
@@ -84,7 +89,7 @@ export default function CreateScreen() {
                         contentContainerStyle={{ flexGrow: 1, paddingBottom: 150 }}
                         keyboardShouldPersistTaps="handled"
                         keyboardDismissMode="interactive"
-                        automaticallyAdjustKeyboardInsets={Platform.OS === 'android'}
+                        automaticallyAdjustKeyboardInsets={false}
                     >
                         <YStack gap="$5" pb="$10">
 
@@ -102,6 +107,12 @@ export default function CreateScreen() {
                                 showPicker={showPicker}
                                 setShowPicker={setShowPicker}
                                 animationHeight={animationHeight}
+                                isDark={isDark}
+                            />
+
+                            <RecurrenceSelector
+                                value={recurrenceType}
+                                onChange={setRecurrenceType}
                                 isDark={isDark}
                             />
 
@@ -141,7 +152,7 @@ export default function CreateScreen() {
                                             style={{ borderRadius: 10 }}
                                             onPress={handleComplete}
                                         >
-                                            <Text color="white" fontWeight="700">Completar ahora</Text>
+                                            <Text color="white" fontWeight="700">{t('create.btn_complete')}</Text>
                                         </Button>
                                     )}
                                     <Button
@@ -151,7 +162,7 @@ export default function CreateScreen() {
                                         icon={Trash2}
                                         onPress={handleDelete}
                                     >
-                                        <Text color="$red10" fontWeight="600">Eliminar recordatorio</Text>
+                                        <Text color="$red10" fontWeight="600">{t('create.btn_delete')}</Text>
                                     </Button>
                                 </YStack>
                             )}

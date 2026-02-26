@@ -1,4 +1,5 @@
 import { XStack, YStack, Label, Card, Text } from 'tamagui';
+import { useTranslation } from 'react-i18next';
 import { Zap, Bell, AlertCircle, ShieldAlert } from '@tamagui/lucide-icons';
 import { TouchableOpacity, StyleSheet } from 'react-native';
 import { ControlLevel } from '../../types/db';
@@ -10,11 +11,12 @@ interface PrioritySelectorProps {
 }
 
 export function PrioritySelector({ controlLevel, setControlLevel, isDark }: PrioritySelectorProps) {
+    const { t } = useTranslation();
     return (
         <YStack gap="$3">
             <XStack alignItems="center" gap="$2">
                 <Zap size={18} color="$orange10" />
-                <Label fontWeight="700" fontSize="$4" color={isDark ? '$gray11' : '$gray11'}>Prioridad y Control</Label>
+                <Label fontWeight="700" fontSize="$4" color={isDark ? '$gray11' : '$gray11'}>{t('create.sections.priority')}</Label>
             </XStack>
             <XStack gap="$3" justifyContent="space-between">
                 <LevelButton
@@ -22,7 +24,7 @@ export function PrioritySelector({ controlLevel, setControlLevel, isDark }: Prio
                     onPress={() => setControlLevel('normal')}
                     color="#3b82f6"
                     icon={Bell}
-                    label="Normal"
+                    label={t('create.priority.normal.label')}
                     isDark={isDark}
                 />
                 <LevelButton
@@ -30,7 +32,7 @@ export function PrioritySelector({ controlLevel, setControlLevel, isDark }: Prio
                     onPress={() => setControlLevel('strict')}
                     color="#f59e0b"
                     icon={AlertCircle}
-                    label="Estricto"
+                    label={t('create.priority.strict.label')}
                     isDark={isDark}
                 />
                 <LevelButton
@@ -38,7 +40,7 @@ export function PrioritySelector({ controlLevel, setControlLevel, isDark }: Prio
                     onPress={() => setControlLevel('critical')}
                     color="#ef4444"
                     icon={ShieldAlert}
-                    label="Crítico"
+                    label={t('create.priority.critical.label')}
                     isDark={isDark}
                 />
             </XStack>
@@ -55,9 +57,7 @@ export function PrioritySelector({ controlLevel, setControlLevel, isDark }: Prio
                     {controlLevel === 'strict' && <AlertCircle size={18} color="#f59e0b" />}
                     {controlLevel === 'critical' && <ShieldAlert size={18} color="#ef4444" />}
                     <Text fontSize="$3" color={isDark ? '$gray11' : '$gray11'} flex={1}>
-                        {controlLevel === 'normal' && "Notificación estándar. Ideal para tareas rutinarias y hábitos."}
-                        {controlLevel === 'strict' && "Recordatorios persistentes cada 5 minutos hasta que confirmes la acción."}
-                        {controlLevel === 'critical' && "Alarma sonora continua. No se detendrá hasta que realices la tarea."}
+                        {t(`create.priority.${controlLevel}.desc`)}
                     </Text>
                 </XStack>
             </Card>

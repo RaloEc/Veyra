@@ -1,296 +1,451 @@
-import React from 'react';
-import { YStack, XStack, H2, Paragraph, Button, Theme, Card, Text } from 'tamagui';
+import React, { useState } from 'react';
+import { YStack, XStack, H2, Paragraph, Button, Theme, Text, useTheme, AnimatePresence, View, Circle } from 'tamagui';
 import { useRouter } from 'expo-router';
 import { useStore } from '../src/store/useStore';
 import * as Notifications from 'expo-notifications';
 import { ControlLevel } from '../src/types/db';
-import { ArrowLeft } from '@tamagui/lucide-icons';
-import { ScrollView } from 'react-native';
+import { ArrowLeft, Sun, Moon, Zap, Shield, Flame, Bell, Cloud, ChevronRight, ArrowRight } from '@tamagui/lucide-icons';
+import { Dimensions, TouchableOpacity, StyleSheet, Alert } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
-// --- SUB-COMPONENTES PARA LOS PASOS ---
+import { useTranslation } from 'react-i18next';
 
-const Step0_Theme = ({ selectedTheme, onSelect, onLogin }: any) => (
-    <YStack f={1} ai="center" jc="center" p="$4" gap="$6">
-        <YStack gap="$2" ai="center">
-            <H2 ta="center" size="$9" color="$color">Elige tu estilo</H2>
-            <Paragraph ta="center" size="$5" opacity={0.6}>Selecciona el tema de la app</Paragraph>
-        </YStack>
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
+const TOTAL_STEPS = 3;
 
-        <XStack gap="$4" w="100%" maxWidth={500} jc="center" flexWrap="wrap">
-            {/* Tema Claro */}
-            <Card
-                elevation={5}
-                w={160}
-                h={200}
-                borderWidth={selectedTheme === 'light' ? 4 : 1}
-                borderColor={selectedTheme === 'light' ? '$blue10' : '$gray5'}
-                backgroundColor="#FFFFFF"
-                pressStyle={{ scale: 0.95 }}
-                onPress={() => onSelect('light')}
-            >
-                <YStack f={1} p="$3" gap="$2">
-                    <XStack jc="space-between" ai="center">
-                        <YStack w={8} h={8} borderRadius={10} backgroundColor="#E0E0E0" />
-                        <XStack gap="$1">
-                            <YStack w={4} h={4} borderRadius={10} backgroundColor="#F0F0F0" />
-                            <YStack w={4} h={4} borderRadius={10} backgroundColor="#F0F0F0" />
-                        </XStack>
-                    </XStack>
+// ─── Animación de entrada/salida ───────────────────────────────────────────
+const StepContainer = ({ children, direction }: { children: React.ReactNode; direction: number }) => (
+    <YStack
+        flex={1}
+        width={SCREEN_WIDTH}
+        animation="lazy"
+        enterStyle={{ opacity: 0, x: direction > 0 ? 40 : -40 }}
+        exitStyle={{ opacity: 0, x: direction > 0 ? -40 : 40 }}
+        x={0}
+        opacity={1}
+    >
+        {children}
+    </YStack>
+);
 
-                    <YStack gap="$1.5" mt="$2">
-                        <YStack h={12} borderRadius={4} backgroundColor="#E0E0E0" w="60%" />
-                        <YStack h={6} borderRadius={4} backgroundColor="#F0F0F0" w="80%" />
-                        <YStack h={6} borderRadius={4} backgroundColor="#F0F0F0" w="70%" />
-                    </YStack>
+// ─── PASO 0: Selección de tema ─────────────────────────────────────────────
+const Step0_Theme = ({ selectedTheme, onSelect, onLogin, t }: any) => {
+    return (
+        <YStack flex={1} paddingHorizontal="$7" justifyContent="center" gap="$10">
 
-                    <YStack mt="auto" gap="$1.5">
-                        <YStack h={8} borderRadius={4} backgroundColor="#F5F5F5" />
-                        <YStack h={8} borderRadius={4} backgroundColor="#F5F5F5" />
-                    </YStack>
+            {/* Gran tipografía superior */}
+            <YStack gap="$3" mb="$4">
+                <Text
+                    color="$color"
+                    fontWeight="800"
+                    fontSize={48}
+                    lineHeight={52}
+                    letterSpacing={-2}
+                >
+                    {t('onboarding.step0.title')}
+                </Text>
+                <Text color="$gray10" fontSize={17} lineHeight={24} fontWeight="400" maxWidth={280}>
+                    {t('onboarding.step0.desc')}
+                </Text>
+            </YStack>
+
+            {/* Selector de tema */}
+            <XStack gap="$4" width="100%">
+                {/* Claro */}
+                <YStack
+                    flex={1}
+                    height={160}
+                    borderRadius={20}
+                    padding={20}
+                    borderWidth={2}
+                    borderColor={selectedTheme === 'light' ? '$color' : '$borderColor'}
+                    backgroundColor="#fcfcfc"
+                    justifyContent="flex-start"
+                    cur="pointer"
+                    onPress={() => onSelect('light')}
+                >
+                    <Sun size={28} color="#111" strokeWidth={1.5} />
+                    <View flex={1} />
+                    <Text color="#111" fontWeight="800" fontSize={15} letterSpacing={0.5}>
+                        {t('onboarding.step0.light')}
+                    </Text>
+                    {selectedTheme === 'light' && (
+                        <View style={[styles.selectedDot, { backgroundColor: '#111' }]} />
+                    )}
                 </YStack>
-                <YStack backgroundColor="#EEEEEE" p="$2" ai="center">
-                    <Text fontWeight="800" color="#111111">CLARO</Text>
+
+                {/* Oscuro */}
+                <YStack
+                    flex={1}
+                    height={160}
+                    borderRadius={20}
+                    padding={20}
+                    borderWidth={2}
+                    borderColor={selectedTheme === 'dark' ? '$color' : '$borderColor'}
+                    backgroundColor="#111"
+                    justifyContent="flex-start"
+                    cur="pointer"
+                    onPress={() => onSelect('dark')}
+                >
+                    <Moon size={28} color="#fff" strokeWidth={1.5} />
+                    <View flex={1} />
+                    <Text color="#fff" fontWeight="800" fontSize={15} letterSpacing={0.5}>
+                        {t('onboarding.step0.dark')}
+                    </Text>
+                    {selectedTheme === 'dark' && (
+                        <View style={[styles.selectedDot, { backgroundColor: '#fff' }]} />
+                    )}
                 </YStack>
-            </Card>
+            </XStack>
 
-            {/* Tema Oscuro */}
-            <Card
-                elevation={5}
-                w={160}
-                h={200}
-                borderWidth={selectedTheme === 'dark' ? 4 : 1}
-                borderColor={selectedTheme === 'dark' ? '$blue10' : '$gray5'}
-                backgroundColor="#1A1A1A"
-                pressStyle={{ scale: 0.95 }}
-                onPress={() => onSelect('dark')}
-            >
-                <YStack f={1} p="$3" gap="$2">
-                    <XStack jc="space-between" ai="center">
-                        <YStack w={8} h={8} borderRadius={10} backgroundColor="#333333" />
-                        <XStack gap="$1">
-                            <YStack w={4} h={4} borderRadius={10} backgroundColor="#444444" />
-                            <YStack w={4} h={4} borderRadius={10} backgroundColor="#444444" />
-                        </XStack>
-                    </XStack>
-
-                    <YStack gap="$1.5" mt="$2">
-                        <YStack h={12} borderRadius={4} backgroundColor="#333333" w="60%" />
-                        <YStack h={6} borderRadius={4} backgroundColor="#444444" w="80%" />
-                        <YStack h={6} borderRadius={4} backgroundColor="#444444" w="70%" />
-                    </YStack>
-
-                    <YStack mt="auto" gap="$1.5">
-                        <YStack h={8} borderRadius={4} backgroundColor="#222222" />
-                        <YStack h={8} borderRadius={4} backgroundColor="#222222" />
-                    </YStack>
-                </YStack>
-                <YStack backgroundColor="#333333" p="$2" ai="center">
-                    <Text fontWeight="800" color="#FFFFFF">OSCURO</Text>
-                </YStack>
-            </Card>
-        </XStack>
-
-        <XStack jc="center" ai="center" gap="$2" mt="$4">
-            <Text color="$gray10">¿Ya tienes una cuenta?</Text>
-            <Button chromeless p={0} onPress={onLogin}>
-                <Text color="$blue10" fontWeight="700">Inicia sesión</Text>
-            </Button>
-        </XStack>
-    </YStack>
-);
-
-const Step1_Profile = ({ onSelect, onSkip }: any) => (
-    <YStack f={1} ai="center" jc="center" p="$4" gap="$5">
-        <YStack gap="$2" ai="center">
-            <H2 ta="center" size="$9" color="$color">¿Para qué la vas a usar?</H2>
-            <Paragraph ta="center" size="$5" opacity={0.6}>Selecciona tu perfil principal</Paragraph>
+            {/* Login link */}
+            <TouchableOpacity onPress={onLogin} activeOpacity={0.6}>
+                <XStack alignItems="center" justifyContent="center" gap="$1">
+                    <Text color="$gray9" fontSize={15} fontWeight="500">{t('onboarding.step0.already_have_account')}</Text>
+                    <Text color="$color" fontWeight="700" fontSize={15}>{t('onboarding.step0.login')}</Text>
+                    <ChevronRight size={16} color="$color" />
+                </XStack>
+            </TouchableOpacity>
         </YStack>
+    );
+};
 
-        <YStack gap="$3" w="100%" maxWidth={350}>
-            <Button size="$6" onPress={() => onSelect('student')} theme="active" icon={<Paragraph size="$6">🎓</Paragraph>}>Estudio</Button>
-            <Button size="$6" onPress={() => onSelect('work')} icon={<Paragraph size="$6">💼</Paragraph>}>Trabajo</Button>
-            <Button size="$6" onPress={() => onSelect('personal')} icon={<Paragraph size="$6">🏠</Paragraph>}>Uso personal</Button>
-            <Button size="$6" onPress={() => onSelect('custom')} icon={<Paragraph size="$6">⚙️</Paragraph>}>Personalizado</Button>
+// ─── PASO 1: Nivel de disciplina ───────────────────────────────────────────
+const Step1_Control = ({ selected, onSelect }: { selected: string | null; onSelect: (id: string) => void }) => {
+    const { t } = useTranslation();
+    const levels = [
+        {
+            id: 'normal',
+            label: t('onboarding.step1.levels.normal.label'),
+            sub: t('onboarding.step1.levels.normal.sub'),
+            Icon: Zap,
+            colorToken: '$green10',
+            bgToken: '$green2',
+        },
+        {
+            id: 'strict',
+            label: t('onboarding.step1.levels.strict.label'),
+            sub: t('onboarding.step1.levels.strict.sub'),
+            Icon: Shield,
+            colorToken: '$blue10',
+            bgToken: '$blue2',
+        },
+        {
+            id: 'critical',
+            label: t('onboarding.step1.levels.critical.label'),
+            sub: t('onboarding.step1.levels.critical.sub'),
+            Icon: Flame,
+            colorToken: '$orange10',
+            bgToken: '$orange2',
+        },
+    ] as const;
+
+    return (
+        <YStack flex={1} px="$7" justifyContent="center" pb="$8" gap="$8">
+            <YStack gap="$3" mb="$4">
+                <Text
+                    color="$color"
+                    fontWeight="800"
+                    fontSize={44}
+                    lineHeight={48}
+                    letterSpacing={-2}
+                >
+                    {t('onboarding.step1.title')}
+                </Text>
+                <Text color="$gray10" fontSize={17} lineHeight={24} fontWeight="400">
+                    {t('onboarding.step1.desc')}
+                </Text>
+            </YStack>
+
+            <YStack gap="$3">
+                {levels.map(({ id, label, sub, Icon, colorToken, bgToken }) => {
+                    const isActive = selected === id;
+                    return (
+                        <TouchableOpacity
+                            key={id}
+                            activeOpacity={0.75}
+                            onPress={() => onSelect(id)}
+                            style={[
+                                styles.levelRow,
+                                isActive && { borderColor: colorToken as any, backgroundColor: bgToken as any },
+                            ]}
+                        >
+                            <View width={46} height={46} borderRadius={14} justifyContent="center" alignItems="center" backgroundColor={bgToken as any}>
+                                <Icon size={22} color={colorToken as any} strokeWidth={2} />
+                            </View>
+                            <YStack flex={1} gap={2}>
+                                <Text color={(isActive ? colorToken : '$color') as any} fontWeight="700" fontSize={17}>
+                                    {label}
+                                </Text>
+                                <Text color="$gray10" fontSize={14} fontWeight="400">
+                                    {sub}
+                                </Text>
+                            </YStack>
+                            <ArrowRight size={18} color={(isActive ? colorToken : '$gray8') as any} strokeWidth={2} />
+                        </TouchableOpacity>
+                    );
+                })}
+            </YStack>
         </YStack>
+    );
+};
 
-        <Button chromeless size="$3" onPress={onSkip}>
-            Saltar
-        </Button>
-    </YStack>
-);
+// ─── PASO 2: Notificaciones ────────────────────────────────────────────────
+const Step2_Permissions = ({ onAction, onSkip, t }: any) => {
+    return (
+        <YStack flex={1} px="$7" justifyContent="center" pb="$8" gap="$10">
+            <YStack gap="$3" mb="$4">
+                {/* Ilustración minimalista */}
+                <View style={styles.bigIconWrap}>
+                    <Bell size={52} color="$color" strokeWidth={1.3} />
+                </View>
+                <Text
+                    color="$color"
+                    fontWeight="800"
+                    fontSize={44}
+                    lineHeight={48}
+                    letterSpacing={-2}
+                    mt="$4"
+                >
+                    {t('onboarding.step2.title')}
+                </Text>
+                <Text color="$gray10" fontSize={17} lineHeight={26} fontWeight="400" maxWidth={300}>
+                    {t('onboarding.step2.desc')}
+                </Text>
+            </YStack>
 
-const Step2_Control = ({ onSelect }: any) => (
-    <YStack f={1} ai="center" jc="center" p="$4" gap="$5">
-        <YStack gap="$2" ai="center">
-            <H2 ta="center" size="$8">¿Cómo quieres que te trate?</H2>
-            <Paragraph ta="center" size="$5" opacity={0.6}>Define la presión de los recordatorios</Paragraph>
+            <YStack gap="$4" w="100%">
+                <Button
+                    height={60}
+                    borderRadius={18}
+                    backgroundColor="$color"
+                    pressStyle={{ opacity: 0.9, scale: 0.98 }}
+                    onPress={onAction}
+                >
+                    <Text color="$background" fontWeight="800" fontSize={17}>
+                        {t('onboarding.step2.enable_btn')}
+                    </Text>
+                </Button>
+                <Button
+                    chromeless
+                    onPress={onSkip}
+                    pressStyle={{ opacity: 0.4 }}
+                    alignSelf="center"
+                >
+                    <Text color="$gray9" fontWeight="600" fontSize={15}>{t('onboarding.step2.now_not_btn')}</Text>
+                </Button>
+            </YStack>
         </YStack>
+    );
+};
 
-        <YStack gap="$3" w="100%" maxWidth={350}>
-            <Button size="$6" onPress={() => onSelect('normal')} theme="green" icon={<Paragraph size="$6">😌</Paragraph>}>Suave (Normal)</Button>
-            <Button size="$6" onPress={() => onSelect('strict')} theme="orange" icon={<Paragraph size="$6">😐</Paragraph>}>Firme (Estricto)</Button>
-            <Button size="$6" onPress={() => onSelect('critical')} theme="red" icon={<Paragraph size="$6">🔴</Paragraph>}>Implacable (Crítico)</Button>
-        </YStack>
-    </YStack>
-);
 
-const Step3_Permissions = ({ onAction, onSkip }: any) => (
-    <YStack f={1} ai="center" jc="center" p="$4" gap="$6">
-        <YStack gap="$2" ai="center">
-            <H2 ta="center" size="$8">Permisos</H2>
-            <Paragraph ta="center" size="$5" opacity={0.7} px="$4">
-                Para que no olvides nada, necesitamos enviarte notificaciones.
-            </Paragraph>
-        </YStack>
+// ─── ESTILOS NATIVOS ───────────────────────────────────────────────────────
+const styles = StyleSheet.create({
+    selectedDot: {
+        width: 8,
+        height: 8,
+        borderRadius: 4,
+        backgroundColor: '$color',
+        position: 'absolute',
+        top: 16,
+        right: 16,
+    },
+    levelRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 16,
+        padding: 18,
+        borderRadius: 18,
+        borderWidth: 1.5,
+        borderColor: '$borderColor',
+        backgroundColor: '$background0',
+    },
+    bigIconWrap: {
+        width: 80,
+        height: 80,
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+});
 
-        <Button size="$6" theme="active" onPress={onAction} w="100%" maxWidth={350}>
-            Activar notificaciones
-        </Button>
-        <Button chromeless onPress={onSkip}>
-            Continuar sin activar
-        </Button>
-    </YStack>
-);
-
-const Step4_CloudSync = ({ onRegister, onLogin, onSkip }: any) => (
-    <YStack f={1} ai="center" jc="center" p="$4" gap="$6">
-        <YStack gap="$2" ai="center">
-            <Text fontSize="$9">☁️</Text>
-            <H2 ta="center" size="$8">Sincronización en la nube</H2>
-            <Paragraph ta="center" size="$5" opacity={0.7} px="$4">
-                Crea una cuenta para guardar tus recordatorios y acceder a ellos desde cualquier dispositivo.
-            </Paragraph>
-        </YStack>
-
-        <YStack gap="$3" w="100%" maxWidth={350}>
-            <Button size="$5" theme="active" onPress={onRegister}>
-                Crear cuenta gratis
-            </Button>
-            <Button size="$5" chromeless onPress={onLogin}>
-                Ya tengo cuenta (Entrar)
-            </Button>
-            <Button size="$5" chromeless onPress={onSkip} opacity={0.6}>
-                Continuar sin cuenta (Solo local)
-            </Button>
-        </YStack>
-    </YStack>
-);
-
-const Step5_Finish = ({ onFinish }: any) => (
-    <YStack f={1} ai="center" jc="center" p="$4" gap="$6">
-        <H2 ta="center" size="$10">¡Todo listo!</H2>
-        <Paragraph ta="center" size="$6">Empieza a organizar tu vida.</Paragraph>
-        <Button size="$6" theme="active" onPress={onFinish} w="100%" maxWidth={350}>
-            ➕ Crear primer recordatorio
-        </Button>
-    </YStack>
-);
-
-// --- COMPONENTE PRINCIPAL ---
-
+// ─── COMPONENTE PRINCIPAL ──────────────────────────────────────────────────
 export default function OnboardingScreen() {
     const router = useRouter();
     const {
         theme,
-        onboardingStep,
-        setOnboardingStep,
         completeOnboarding,
-        setUserProfile,
         setDefaultControlLevel,
-        toggleTheme
+        setTheme,
     } = useStore();
 
+    const [onboardingStep, setOnboardingStep] = useState(0);
+    const [direction, setDirection] = useState(1);
+    const [selectedControlLevel, setSelectedControlLevel] = useState<string | null>(null);
+    const tamaguiTheme = useTheme();
+    const { t } = useTranslation();
+
+    const goToStep = (step: number) => {
+        setDirection(step > onboardingStep ? 1 : -1);
+        setOnboardingStep(step);
+    };
+
     const handleThemeSelect = (selected: 'light' | 'dark') => {
-        console.log('[Onboarding] Selección de tema:', selected);
-        console.log('[Onboarding] Tema actual:', theme);
-
-        // Obligamos al cambio de tema en el store primero
-        if (theme !== selected) {
-            console.log('[Onboarding] Cambiando tema (toggleTheme)...');
-            toggleTheme();
-        } else {
-            console.log('[Onboarding] El tema ya coincide, no se cambia.');
-        }
-        // Agregamos un pequeño delay mental para asegurar que el usuario vea el cambio antes de avanzar
-        setTimeout(() => {
-            console.log('[Onboarding] Avanzando al paso 1...');
-            setOnboardingStep(1);
-        }, 500); // Aumenté un poco el delay para depuración visual
+        setTheme(selected);
     };
 
-    const handleProfileSelect = (profile: 'student' | 'work' | 'personal' | 'custom') => {
-        setUserProfile(profile);
-        if (profile === 'student' || profile === 'work') setDefaultControlLevel('strict');
-        else setDefaultControlLevel('normal');
-        setOnboardingStep(2);
-    };
-
-    const handleControlSelect = (level: ControlLevel) => {
-        setDefaultControlLevel(level);
-        setOnboardingStep(3);
+    const handleControlSelect = (level: string) => {
+        setSelectedControlLevel(level);
+        setDefaultControlLevel(level as ControlLevel);
     };
 
     const handlePermissions = async () => {
-        await Notifications.requestPermissionsAsync();
-        setOnboardingStep(4);
+        const { status } = await Notifications.requestPermissionsAsync();
+
+        if (status === 'granted') {
+            handleFinish();
+        } else {
+            Alert.alert(
+                t('onboarding.step2.alert.title'),
+                t('onboarding.step2.alert.msg'),
+                [
+                    {
+                        text: t('onboarding.step2.alert.retry'),
+                        onPress: () => handlePermissions()
+                    },
+                    {
+                        text: t('onboarding.step2.alert.continue'),
+                        onPress: handleFinish,
+                        style: "destructive"
+                    }
+                ]
+            );
+        }
     };
 
     const handleFinish = () => {
         completeOnboarding();
-        setOnboardingStep(0);
         router.replace('/');
     };
 
+    const handleLogin = () => {
+        completeOnboarding();
+        router.push('/login');
+    };
+
+    // ── Navegación: Siguiente ──
+    const handleNext = () => {
+        if (onboardingStep < TOTAL_STEPS - 1) {
+            goToStep(onboardingStep + 1);
+        } else {
+            // Último paso → finalizar
+            handleFinish();
+        }
+    };
+
+    // ── Navegación: Saltar ──
+    const handleSkip = () => {
+        if (onboardingStep < TOTAL_STEPS - 1) {
+            goToStep(onboardingStep + 1);
+        } else {
+            handleFinish();
+        }
+    };
+
+    const isLastStep = onboardingStep === TOTAL_STEPS - 1;
+
     return (
         <Theme name={theme}>
-            <ScrollView contentContainerStyle={{ flexGrow: 1 }} scrollEnabled={false}>
-                <YStack f={1} bg="$background">
-                    {onboardingStep > 0 && (
-                        <XStack position="absolute" top="$4" left="$4" zIndex={10}>
-                            <Button
-                                icon={ArrowLeft}
-                                circular
-                                size="$4"
-                                backgroundColor="$gray5"
-                                pressStyle={{ scale: 0.9 }}
-                                onPress={() => setOnboardingStep(onboardingStep - 1)}
-                            />
+            <SafeAreaView style={{ flex: 1, backgroundColor: tamaguiTheme.background.val }}>
+                <YStack flex={1} backgroundColor="$background" overflow="hidden">
+
+                    {/* ── Contenido por paso ── */}
+                    <AnimatePresence exitBeforeEnter custom={{ direction }}>
+                        <StepContainer key={onboardingStep} direction={direction}>
+                            {onboardingStep === 0 && (
+                                <Step0_Theme
+                                    selectedTheme={theme}
+                                    onSelect={handleThemeSelect}
+                                    onLogin={handleLogin}
+                                    t={t}
+                                />
+                            )}
+                            {onboardingStep === 1 && (
+                                <Step1_Control
+                                    selected={selectedControlLevel}
+                                    onSelect={handleControlSelect}
+                                />
+                            )}
+                            {onboardingStep === 2 && (
+                                <Step2_Permissions
+                                    onAction={handlePermissions}
+                                    onSkip={handleFinish}
+                                    t={t}
+                                />
+                            )}
+                        </StepContainer>
+                    </AnimatePresence>
+
+                    {/* ── Barra inferior: SALTAR · ● ● ● · SIGUIENTE ── */}
+                    <XStack
+                        px="$6"
+                        pb="$4"
+                        pt="$3"
+                        alignItems="center"
+                        justifyContent="space-between"
+                    >
+                        {/* Botón SALTAR */}
+                        <Button
+                            chromeless
+                            onPress={handleSkip}
+                            pressStyle={{ opacity: 0.5 }}
+                            paddingHorizontal="$2"
+                        >
+                            <Text
+                                color="$gray9"
+                                fontSize={14}
+                                fontWeight="700"
+                                letterSpacing={1}
+                                textTransform="uppercase"
+                            >
+                                {t('onboarding.footer.skip')}
+                            </Text>
+                        </Button>
+
+                        {/* Indicadores de puntos */}
+                        <XStack gap={8} alignItems="center">
+                            {Array.from({ length: TOTAL_STEPS }).map((_, i) => (
+                                <View
+                                    key={i}
+                                    width={i === onboardingStep ? 10 : 8}
+                                    height={i === onboardingStep ? 10 : 8}
+                                    borderRadius={10}
+                                    backgroundColor={i === onboardingStep ? '$color' : '$gray7'}
+                                    opacity={i === onboardingStep ? 1 : 0.5}
+                                />
+                            ))}
                         </XStack>
-                    )}
-                    {onboardingStep === 0 && (
-                        <Step0_Theme
-                            selectedTheme={theme}
-                            onSelect={handleThemeSelect}
-                            onLogin={() => router.push('/login')}
-                        />
-                    )}
-                    {onboardingStep === 1 && (
-                        <Step1_Profile
-                            onSelect={handleProfileSelect}
-                            onSkip={() => { setUserProfile('personal'); setOnboardingStep(3); }}
-                        />
-                    )}
-                    {onboardingStep === 2 && (
-                        <Step2_Control onSelect={handleControlSelect} />
-                    )}
-                    {onboardingStep === 3 && (
-                        <Step3_Permissions
-                            onAction={handlePermissions}
-                            onSkip={() => setOnboardingStep(4)}
-                        />
-                    )}
-                    {onboardingStep === 4 && (
-                        <Step4_CloudSync
-                            onRegister={() => router.push('/register')}
-                            onLogin={() => router.push('/login')}
-                            onSkip={() => setOnboardingStep(5)}
-                        />
-                    )}
-                    {onboardingStep === 5 && (
-                        <Step5_Finish onFinish={handleFinish} />
-                    )}
+
+                        {/* Botón SIGUIENTE */}
+                        <Button
+                            chromeless
+                            onPress={handleNext}
+                            pressStyle={{ opacity: 0.5 }}
+                            paddingHorizontal="$2"
+                        >
+                            <Text
+                                color="$color"
+                                fontSize={14}
+                                fontWeight="700"
+                                letterSpacing={1}
+                                textTransform="uppercase"
+                            >
+                                {isLastStep ? t('onboarding.footer.done') : t('onboarding.footer.next')}
+                            </Text>
+                        </Button>
+                    </XStack>
                 </YStack>
-            </ScrollView>
+            </SafeAreaView>
         </Theme>
     );
 }

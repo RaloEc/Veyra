@@ -4,9 +4,11 @@ import { Note } from '../types/db';
 
 interface NotesState {
     notes: Note[];
+    deletedNotes: Note[];
     isLoading: boolean;
     selectedNote: Note | null;
     loadNotes: () => Promise<void>;
+    loadDeletedNotes: () => Promise<void>;
     addNote: (title?: string, content?: string, attachments?: string, links?: string, isPinned?: boolean) => Promise<void>;
     updateNote: (id: string, updates: Partial<Note>) => Promise<void>;
     deleteNote: (id: string) => Promise<void>;
@@ -17,6 +19,7 @@ interface NotesState {
 
 export const useNotesStore = create<NotesState>((set, get) => ({
     notes: [],
+    deletedNotes: [],
     isLoading: false,
     selectedNote: null,
 
@@ -29,6 +32,15 @@ export const useNotesStore = create<NotesState>((set, get) => ({
             console.error('Failed to load notes', error);
         } finally {
             set({ isLoading: false });
+        }
+    },
+
+    loadDeletedNotes: async () => {
+        try {
+            const deletedNotes = await NoteService.getDeletedNotes();
+            set({ deletedNotes });
+        } catch (error) {
+            console.error('Failed to load deleted notes', error);
         }
     },
 

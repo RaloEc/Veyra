@@ -1,0 +1,478 @@
+{
+    "settings": {
+        "title": "Ajustes",
+        "general": "GENERAL",
+        "dark_mode": "Modo Oscuro",
+        "language": "Idioma",
+        "time_format": "Formato de Hora",
+        "notifications": "NOTIFICACIONES",
+        "notifications_label": "Notificaciones",
+        "sound": "Sonido",
+        "tones": "TONOS",
+        "normal": "Normal",
+        "strict": "Estricto",
+        "critical": "Crítico",
+        "control_level": "NIVEL DE CONTROL",
+        "battery_optimization": "Optimización de Batería",
+        "battery_desc": "Desactiva las restricciones para garantizar que las alarmas suenen.",
+        "version": "Versión",
+        "spanish": "Español",
+        "english": "Inglés",
+        "hours_format": "24 horas",
+        "time_format_label": "Formato de Hora",
+        "notifications_section": "NOTIFICACIONES",
+        "cloud_sync": "SINCRONIZACIÓN EN LA NUBE",
+        "cloud_sync_toggle": "Sincronización Automática",
+        "sync_now": "Sincronizar Ahora",
+        "syncing": "Sincronizando...",
+        "never": "Nunca",
+        "accent_theme": "TEMA DE COLOR",
+        "accent_purple": "Púrpura",
+        "accent_blue": "Azul",
+        "accent_red": "Rojo",
+        "accent_green": "Verde",
+        "accent_amber": "Ámbar",
+        "accent_pink": "Rosa"
+    },
+    "home": {
+        "urgent": "URGENTE",
+        "today": "HOY",
+        "upcoming": "PRÓXIMOS",
+        "completed": "completados",
+        "overdue": "vencidos",
+        "in_calm": "EN CALMA",
+        "no_attention": "No hay nada que requiera tu atención inmediata.",
+        "snooze_overdue": "POSPONER VENCIDOS (10m)",
+        "delete_confirm": "¿Eliminar {{count}} recordatorio?",
+        "delete_confirm_plural": "¿Eliminar {{count}} recordatorios?",
+        "delete_desc": "Esta acción no se puede deshacer. Se cancelarán todas las notificaciones asociadas.",
+        "cancel": "Cancelar",
+        "delete": "ELIMINAR",
+        "next_objective": "PRÓXIMO OBJETIVO",
+        "selected": "seleccionados",
+        "all": "Todo",
+        "done": "HECHO",
+        "hello": "Hola",
+        "overdue_label": "VENCIDO",
+        "remaining_label": "FALTAN",
+        "overdue_ago": "Vencido hace {{time}}",
+        "in_time": "En {{time}}",
+        "create_fab": "Crear",
+        "delete_reminder_q": "¿Eliminar recordatorio?",
+        "action_irreversible": "Esta acción no se puede deshacer."
+    },
+    "menu": {
+        "start": "Inicio",
+        "profile": "Mi Perfil",
+        "settings": "Ajustes",
+        "strict_mode": "Modo Estricto",
+        "stats": "Estadísticas",
+        "history": "Historial",
+        "welcome": "Bienvenida",
+        "help": "Ayuda",
+        "upgrade": "Mejorar a Pro",
+        "logout": "Cerrar Sesión",
+        "login": "Iniciar Sesión",
+        "sync": "Inicia sesión para sincronizar",
+        "profiles": {
+            "student": "ESTUDIANTE",
+            "word": "TRABAJO",
+            "personal": "PERSONAL",
+            "custom": "PERSONALIZADO",
+            "default": "PERFIL"
+        }
+    },
+    "common": {
+        "save": "Guardar",
+        "cancel": "Cancelar",
+        "edit": "Editar",
+        "delete": "Eliminar",
+        "done": "Listo"
+    },
+    "history": {
+        "title": "Historial",
+        "completed_tab": "Completados",
+        "trash_tab": "Papelera",
+        "empty_completed_title": "Sin actividad",
+        "empty_completed_desc": "Tus recordatorios completados aparecerán aquí.",
+        "empty_trash_title": "Papelera vacía",
+        "empty_trash_desc": "Los recordatorios eliminados se guardan temporalmente."
+    },
+    "notes_history": {
+        "title": "Historial de Notas",
+        "trash_tab": "Papelera",
+        "empty_trash_title": "Papelera vacía",
+        "empty_trash_desc": "Las notas eliminadas se guardarán aquí temporalmente.",
+        "restore": "Restaurar",
+        "delete_forever": "Eliminar permanente"
+    },
+    "discipline": {
+        "title": "Modo Estricto",
+        "rules_title": "REGLAS ANTI-PROCRASTINACIÓN",
+        "intro": "Configura límites estrictos para asegurar que tus tareas se cumplan sin excusas.",
+        "status_card_title": "Estatus del Modo",
+        "status_standard": "Modo estándar",
+        "status_strict": "Presión alta activada",
+        "reinforced_system": "SISTEMA REFORZADO",
+        "reinforced_desc": "Seguimientos automáticos cada 15 min y sonidos de alta frecuencia activados.",
+        "restrictions_title": "Restricciones",
+        "block_snooze_title": "Bloqueo total de \"Snooze\"",
+        "block_snooze_desc": "Elimina el botón para posponer",
+        "daily_limit_title": "Límite diario de intentos",
+        "mode_validity_title": "Vigencia del Modo",
+        "apply_button": "APLICAR CONFIGURACIÓN",
+        "footer_note": "El Modo Estricto anulará cualquier configuración individual de recordatorios para priorizar el cumplimiento.",
+        "durations": {
+            "1_hour": "1 hora",
+            "24_hours": "24 horas",
+            "1_week": "1 semana",
+            "indefinite": "Indefinido"
+        }
+    },
+    "profile": {
+        "title": "Perfil",
+        "new_user": "Nuevo Usuario",
+        "standard_profile": "Perfil Estándar",
+        "performance": "RENDIMIENTO",
+        "view_all": "Ver todo",
+        "successes": "Éxitos",
+        "streak": "Racha",
+        "compliance": "Cumplimiento",
+        "failures": "Fallos",
+        "account_info": "INFORMACIÓN DE CUENTA",
+        "full_name": "Nombre Completo",
+        "full_name_placeholder": "Tu nombre",
+        "email": "Correo Electrónico",
+        "email_placeholder": "email@ejemplo.com",
+        "member_since": "MIEMBRO DESDE",
+        "member_date": "Febrero 2026",
+        "update_button": "ACTUALIZAR PERFIL",
+        "toasts": {
+            "name_required_title": "Nombre requerido",
+            "name_required_msg": "Por favor ingresa tu nombre para continuar.",
+            "email_invalid_title": "Email inválido",
+            "email_invalid_msg": "Por favor ingresa un correo válido.",
+            "profile_updated_title": "Perfil actualizado",
+            "profile_updated_msg": "Tus cambios han sido guardados con éxito."
+        }
+    },
+    "stats": {
+        "title": "Estadísticas",
+        "compliance_rate": "Tasa de Cumplimiento",
+        "total_tasks": "De {{count}} tareas totales",
+        "completed": "Completadas",
+        "completed_desc": "Total completadas",
+        "failed": "Fallidas",
+        "failed_desc": "No completadas",
+        "snoozed": "Posposiciones",
+        "snoozed_desc": "Veces pospuestas",
+        "current_streak": "Racha Actual",
+        "days_streak": "Días consecutivos",
+        "best_streak": "Mejor Racha",
+        "best_streak_desc": "Racha más larga alcanzada",
+        "days": "{{count}} día",
+        "days_plural": "{{count}} días",
+        "best_moment": "¡Estás en tu mejor momento!",
+        "record_motivation": "¡Completa tareas diariamente para superar tu récord!",
+        "productive_hours": "Horas Productivas",
+        "productive_hours_empty": "Completa más tareas para ver tus horarios más productivos",
+        "tasks_count": "{{count}} tarea",
+        "tasks_count_plural": "{{count}} tareas",
+        "motivation_start": "💪 ¡Empecemos hoy!",
+        "motivation_streak": "🔥 ¡Llevas {{count}} días!",
+        "motivation_desc_start": "Completa tu primer recordatorio hoy para iniciar tu racha.",
+        "motivation_desc_streak": "No dejes que se apague la llama.",
+        "tooltip_score": "Puntuación calculada en base a tu tasa de cumplimiento, racha activa y frecuencia de posposiciones.",
+        "tooltip_streak": "Días consecutivos en que completaste al menos un recordatorio. Si fallas un día, vuelve a cero.",
+        "tooltip_today": "Recordatorios que ya completaste el día de hoy.",
+        "tooltip_compliance": "Porcentaje de recordatorios completados vs. el total de decididos (completados + fallidos). Los pospuestos no cuentan.",
+        "notes_section_title": "Notas",
+        "notes_total": "Total",
+        "notes_pinned": "Fijadas",
+        "notes_attachments": "Con adjuntos",
+        "tap_for_info": "Toca para más info",
+        "weekly_activity": "Actividad Semanal",
+        "weekly_activity_desc": "Últimas 4 semanas",
+        "level_distribution": "Por Nivel de Control",
+        "level_rate": "{{rate}}% cumplimiento",
+        "behavior": "Comportamiento",
+        "avg_response": "Respuesta Promedio",
+        "avg_response_value": "{{minutes}} min",
+        "snooze_rate": "Tasa de Posposición",
+        "avg_snoozes": "Snoozes por Tarea",
+        "mass_snoozes": "Posposiciones Masivas",
+        "daily": "Resumen del Día",
+        "completed_today": "Completadas Hoy",
+        "daily_average": "Promedio Diario",
+        "total_created": "Total Creadas",
+        "active_now": "Activas",
+        "overdue_now": "Vencidas",
+        "monthly_trend": "Tendencia Mensual",
+        "vs_last_month": "vs. mes anterior",
+        "this_month": "Este mes",
+        "last_month": "Mes anterior",
+        "notes_section": "Notas",
+        "total_notes": "Total Notas",
+        "pinned_notes": "Fijadas",
+        "notes_attachments": "Con Adjuntos",
+        "insights_title": "Insights",
+        "insight_best_hour": "Tu hora más productiva son las {{hour}}:00",
+        "insight_best_day": "Tu mejor día es {{day}}",
+        "insight_level_comparison": "Cumples el {{best_rate}}% de los {{best_level}} pero solo el {{worst_rate}}% de los {{worst_level}}",
+        "insight_no_snooze": "¡No has pospuesto ningún recordatorio!",
+        "insight_high_snooze": "Pospones el {{rate}}% de tus tareas. Intenta reducirlo.",
+        "insight_improving": "¡Mejoraste un {{percent}}% respecto al mes pasado!",
+        "insight_declining": "Tu actividad bajó un {{percent}}% vs. el mes anterior",
+        "insight_great_streak": "¡Increíble! Llevas {{days}} días sin parar",
+        "empty_state": "Aún no hay datos",
+        "empty_state_desc": "Completa recordatorios para ver tus estadísticas",
+        "days_short": {
+            "0": "Dom",
+            "1": "Lun",
+            "2": "Mar",
+            "3": "Mié",
+            "4": "Jue",
+            "5": "Vie",
+            "6": "Sáb"
+        },
+        "levels": {
+            "normal": "Normal",
+            "strict": "Estricto",
+            "critical": "Crítico"
+        },
+        "score": "Puntuación"
+    },
+    "help": {
+        "title": "Ayuda y Soporte",
+        "description": "Encuentra respuestas a tus preguntas",
+        "faqs_title": "Preguntas Frecuentes",
+        "faqs": {
+            "q1": "¿Cómo funcionan los niveles de control?",
+            "a1": "Los niveles de control determinan qué tan insistente es la aplicación con tus recordatorios:\n\n• Normal: Una notificación única.\n• Estricto: Notificación + 2 recordatorios cada 15 minutos.\n• Crítico: Notificación + 5 recordatorios cada 5 minutos con sonido y vibración intensos.",
+            "q2": "¿Puedo desactivar las notificaciones repetidas?",
+            "a2": "Sí, puedes cambiar el nivel de control de cualquier recordatorio a \"Normal\" editándolo. También puedes ajustar las configuraciones globales en Ajustes.",
+            "q3": "¿Qué pasa si elimino un recordatorio?",
+            "a3": "Al eliminar un recordatorio, se cancela automáticamente y se marca como \"fallido\" en tu historial. Esto afecta tu tasa de cumplimiento.",
+            "q4": "¿Cómo funciona el Modo Estricto?",
+            "a4": "El Modo Estricto convierte TODOS tus recordatorios en nivel \"Estricto\" temporalmente y puede bloquear las posposiciones según tu configuración.",
+            "q5": "¿Puedo exportar mis datos?",
+            "a5": "Actualmente puedes ver tu historial completo en la sección de Historial. La función de exportación a CSV estará disponible pronto."
+        },
+        "contact_support": "Contactar Soporte",
+        "contact_desc": "¿No encontraste lo que buscabas? Estamos aquí para ayudarte.",
+        "send_email": "Enviar Email",
+        "report_problem": "Reportar un Problema",
+        "report_desc": "Ayúdanos a mejorar reportando bugs o sugerencias.",
+        "report_bug": "Reportar Bug",
+        "app_version": "Versión de la App"
+    },
+    "sounds": {
+        "title": "Elegir Tono",
+        "level_title": "Nivel {{label}}",
+        "levels": {
+            "normal": {
+                "label": "Normal",
+                "desc": "Notificaciones estándar y sutiles"
+            },
+            "strict": {
+                "label": "Estricto",
+                "desc": "Alertas notables que requieren atención"
+            },
+            "critical": {
+                "label": "Crítico",
+                "desc": "Sonidos persistentes e intensos"
+            }
+        }
+    },
+    "upgrade": {
+        "title": "Aumenta tu Productividad a Nivel PRO",
+        "description": "Desbloquea sincronización en la nube, multimedia ilimitada y herramientas de control exclusivas.",
+        "features_title": "Comparación de Beneficios",
+        "free_label": "Básico",
+        "pro_label": "Pro",
+        "popular": "MÁS POPULAR",
+        "coming_soon": "PRÓXIMAMENTE",
+        "coming_soon_btn": "Disponible Pronto",
+        "coming_soon_lifetime": "🔥 PAGO ÚNICO",
+        "footer_msg": "Las suscripciones premium y pagos estarán disponibles en las próximas actualizaciones.",
+        "features": {
+            "sync": {
+                "title": "Sincronización en la Nube",
+                "desc": "Accede a tus datos en tiempo real en todos tus dispositivos con backup automático.",
+                "free": "Solo Local",
+                "pro": "Ilimitada"
+            },
+            "media": {
+                "title": "Archivos Multimedia",
+                "desc": "Sube imágenes y documentos (PDF, Word, etc.) a tus notas y recordatorios.",
+                "free": "Límite 3 MB",
+                "pro": "100 MB / Alta Calidad"
+            },
+            "levels": {
+                "title": "Niveles de Control de Alarma",
+                "desc": "Acceso al Nivel Crítico: 10 reintentos cada 5 min para tareas de vida o muerte.",
+                "free": "Normal y Estricto",
+                "pro": "Crítico"
+            },
+            "stats": {
+                "title": "Análisis y Exportación",
+                "desc": "Exporta tu historial a CSV/JSON y obtén análisis detallados de eficiencia.",
+                "free": "Racha básica",
+                "pro": "Historial y Exportación"
+            }
+        },
+        "plans": {
+            "title": "Elige tu Plan",
+            "monthly": "Mensual",
+            "yearly": "Anual",
+            "lifetime": "De por vida",
+            "period_month": "/ mes",
+            "period_year": "/ año",
+            "period_lifetime": "pago único",
+            "savings": "Ahorra {{percent}}%"
+        }
+    },
+    "create": {
+        "title_new": "Crear Recordatorio",
+        "title_edit": "Editar Recordatorio",
+        "btn_save": "Listo",
+        "btn_complete": "Completar ahora",
+        "btn_delete": "Eliminar recordatorio",
+        "placeholder_title": "Título del recordatorio",
+        "placeholder_notes": "Empieza a escribir...",
+        "sections": {
+            "date_time": "Fecha y Hora",
+            "recurrence": "Repetir",
+            "notes": "Notas",
+            "multimedia": "Multimedia",
+            "priority": "Prioridad y Control"
+        },
+        "recurrence": {
+            "none": "No repetir",
+            "daily": "Todos los días",
+            "daily_desc": "Se repetirá cada día a la misma hora",
+            "weekly": "Todas las semanas",
+            "weekly_desc": "Se repetirá el mismo día cada semana",
+            "monthly": "Todos los meses",
+            "monthly_desc": "Se repetirá el mismo día cada mes",
+            "yearly": "Todos los años",
+            "yearly_desc": "Se repetirá la misma fecha cada año"
+        },
+        "priority": {
+            "normal": {
+                "label": "Normal",
+                "desc": "Notificación estándar. Ideal para tareas rutinarias y hábitos."
+            },
+            "strict": {
+                "label": "Estricto",
+                "desc": "Recordatorios persistentes cada 5 minutos hasta que confirmes la acción."
+            },
+            "critical": {
+                "label": "Crítico",
+                "desc": "Alarma sonora continua. No se detendrá hasta que realices la tarea."
+            }
+        },
+        "multimedia": {
+            "camera": "Cámara",
+            "gallery": "Galería",
+            "file": "Archivo"
+        },
+        "alerts": {
+            "limit_reached": "Límite alcanzado",
+            "limit_msg": "Máximo {{count}} archivos por recordatorio.",
+            "permission_denied": "Permiso denegado",
+            "camera_permission": "Se requiere permiso para acceder a la cámara.",
+            "gallery_permission": "Se requiere permiso para acceder a la galería.",
+            "error_attaching": "No se pudo adjuntar el archivo",
+            "premium_content": "Contenido Premium",
+            "limit_images_editor": "Límite máximo de {{count}} imágenes alcanzado.",
+            "upgrade_msg": "Límite de {{count}} imágenes en el plan gratuito. Hazte Premium para subir hasta 20.",
+            "upgrade_files_msg": "Límite de 3 archivos en plan gratuito. Pásate a Premium para subir hasta 10."
+        }
+    },
+    "onboarding": {
+        "step0": {
+            "title": "Elige tu\nambiente.",
+            "desc": "Puedes cambiarlo después desde ajustes.",
+            "light": "Claro",
+            "dark": "Oscuro",
+            "already_have_account": "¿Ya tienes cuenta? ",
+            "login": "Entrar"
+        },
+        "step1": {
+            "title": "¿Qué tan\ncomprometido?",
+            "desc": "Define tu modo de trabajo diario.",
+            "levels": {
+                "normal": {
+                    "label": "Tranquilo",
+                    "sub": "Recordatorios suaves y amigables"
+                },
+                "strict": {
+                    "label": "Enfocado",
+                    "sub": "Constante y sin distracciones"
+                },
+                "critical": {
+                    "label": "Sin piedad",
+                    "sub": "Máxima intensidad. Cero excusas."
+                }
+            }
+        },
+        "step2": {
+            "title": "No te vayas\nsin permiso.",
+            "desc": "Las notificaciones son esenciales para que la app funcione. Sin ellas, no hay recordatorios.",
+            "enable_btn": "Activar notificaciones",
+            "now_not_btn": "Ahora no",
+            "alert": {
+                "title": "Notificaciones desactivadas",
+                "msg": "Sin permisos de notificación, no podremos avisarte de tus recordatorios importantes. ¿Quieres intentar activarlas de nuevo o continuar sin ellas?",
+                "retry": "Reintentar",
+                "continue": "Continuar sin avisos"
+            }
+        },
+        "footer": {
+            "skip": "Saltar",
+            "next": "Siguiente",
+            "done": "Listo"
+        }
+    },
+    "auth": {
+        "login_title": "Bienvenido",
+        "login_desc": "Inicia sesión para sincronizar tus recordatorios",
+        "register_title": "Crear Cuenta",
+        "register_desc": "Empieza a organizar tu vida hoy",
+        "email": "Email",
+        "password": "Contraseña",
+        "email_placeholder": "tu@email.com",
+        "password_placeholder": "Tu contraseña",
+        "password_hint": "Mínimo 6 caracteres",
+        "login_btn": "Entrar",
+        "register_btn": "Crear Cuenta",
+        "no_account": "¿No tienes cuenta?",
+        "already_have_account": "¿Ya tienes cuenta?",
+        "back": "Volver",
+        "go_to_register": "Regístrate",
+        "go_to_login": "Inicia Sesión",
+        "verify_email_title": "Verifica tu correo",
+        "verify_email_msg": "Te hemos enviado un enlace de confirmación.",
+        "fill_all_fields": "Por favor completa todos los campos",
+        "password_too_short": "La contraseña debe tener al menos 6 caracteres"
+    },
+    "notes": {
+        "title": "Mis Notas",
+        "search_placeholder": "Buscar en tus notas...",
+        "no_notes": "No tienes notas aún",
+        "fab_note": "Nota",
+        "selected": "seleccionadas",
+        "no_title": "Sin título",
+        "no_content": "Sin contenido adicional",
+        "done": "Listo"
+    },
+    "notifications": {
+        "default_body": "Es hora de actuar. Confirma tu acción.",
+        "follow_up_body": "RECORDATORIO {{level}}: {{title}} sigue pendiente.",
+        "overdue_title": "⚠️ VENCIDO: {{title}}",
+        "overdue_body": "Este recordatorio está pendiente. Por favor, actúa ahora.",
+        "action_done": "Ya lo hice",
+        "action_snooze": "Posponer"
+    }
+}

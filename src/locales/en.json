@@ -1,0 +1,482 @@
+{
+    "settings": {
+        "title": "Settings",
+        "general": "GENERAL",
+        "dark_mode": "Dark Mode",
+        "language": "Language",
+        "time_format": "Time Format",
+        "notifications": "NOTIFICATIONS",
+        "notifications_label": "Notifications",
+        "sound": "Sound",
+        "tones": "TONES",
+        "normal": "Normal",
+        "strict": "Strict",
+        "critical": "Critical",
+        "control_level": "CONTROL LEVEL",
+        "battery_optimization": "Battery Optimization",
+        "battery_desc": "Disable restrictions to ensure alarms ring.",
+        "version": "Version",
+        "spanish": "Spanish",
+        "english": "English",
+        "hours_format": "24 hours",
+        "time_format_label": "Time Format",
+        "notifications_section": "NOTIFICATIONS",
+        "cloud_sync": "CLOUD SYNC",
+        "cloud_sync_toggle": "Auto Sync",
+        "sync_now": "Sync Now",
+        "syncing": "Syncing...",
+        "never": "Never",
+        "accent_theme": "COLOR THEME",
+        "accent_purple": "Purple",
+        "accent_blue": "Blue",
+        "accent_red": "Red",
+        "accent_green": "Green",
+        "accent_amber": "Amber",
+        "accent_pink": "Pink"
+    },
+    "home": {
+        "urgent": "URGENT",
+        "today": "TODAY",
+        "upcoming": "UPCOMING",
+        "completed": "completed",
+        "overdue": "overdue",
+        "in_calm": "IN CALM",
+        "no_attention": "Nothing requires your immediate attention.",
+        "snooze_overdue": "SNOOZE OVERDUE (10m)",
+        "delete_confirm": "Delete {{count}} reminder?",
+        "delete_confirm_plural": "Delete {{count}} reminders?",
+        "delete_desc": "This action cannot be undone. All associated notifications will be cancelled.",
+        "cancel": "Cancel",
+        "delete": "DELETE",
+        "next_objective": "NEXT OBJECTIVE",
+        "selected": "selected",
+        "all": "All",
+        "done": "DONE",
+        "hello": "Hello",
+        "overdue_label": "OVERDUE",
+        "remaining_label": "REMAINING",
+        "overdue_ago": "{{time}} overdue",
+        "in_time": "In {{time}}",
+        "create_fab": "Create",
+        "delete_reminder_q": "Delete reminder?",
+        "action_irreversible": "This action cannot be undone."
+    },
+    "menu": {
+        "start": "Home",
+        "profile": "My Profile",
+        "settings": "Settings",
+        "strict_mode": "Strict Mode",
+        "stats": "Statistics",
+        "history": "History",
+        "welcome": "Welcome",
+        "help": "Help",
+        "upgrade": "Upgrade to Pro",
+        "go_to_register": "Register",
+        "go_to_login": "Sign In",
+        "verify_email_title": "Check your email",
+        "verify_email_msg": "We've sent you a confirmation link.",
+        "logout": "Logout",
+        "login": "Login",
+        "sync": "Sign in to sync",
+        "profiles": {
+            "student": "STUDENT",
+            "work": "WORK",
+            "personal": "PERSONAL",
+            "custom": "CUSTOM",
+            "default": "PROFILE"
+        }
+    },
+    "common": {
+        "save": "Save",
+        "cancel": "Cancel",
+        "edit": "Edit",
+        "delete": "Delete",
+        "done": "Done"
+    },
+    "history": {
+        "title": "History",
+        "completed_tab": "Completed",
+        "trash_tab": "Trash",
+        "empty_completed_title": "No activity",
+        "empty_completed_desc": "Your completed reminders will appear here.",
+        "empty_trash_title": "Empty trash",
+        "empty_trash_desc": "Deleted reminders are stored temporarily."
+    },
+    "notes_history": {
+        "title": "Notes History",
+        "trash_tab": "Trash",
+        "empty_trash_title": "Empty trash",
+        "empty_trash_desc": "Deleted notes will be stored here temporarily.",
+        "restore": "Restore",
+        "delete_forever": "Delete forever"
+    },
+    "discipline": {
+        "title": "Strict Mode",
+        "rules_title": "ANTI-PROCRASTINATION RULES",
+        "intro": "Set strict limits to ensure your tasks are completed without excuses.",
+        "status_card_title": "Mode Status",
+        "status_standard": "Standard mode",
+        "status_strict": "High pressure activated",
+        "reinforced_system": "REINFORCED SYSTEM",
+        "reinforced_desc": "Automatic follow-ups every 15 min and high-frequency sounds enabled.",
+        "restrictions_title": "Restrictions",
+        "block_snooze_title": "Total \"Snooze\" block",
+        "block_snooze_desc": "Removes the button to postpone",
+        "daily_limit_title": "Daily attempts limit",
+        "mode_validity_title": "Mode Validity",
+        "apply_button": "APPLY SETTINGS",
+        "footer_note": "Strict Mode will override any individual reminder settings to prioritize compliance.",
+        "durations": {
+            "1_hour": "1 hour",
+            "24_hours": "24 hours",
+            "1_week": "1 week",
+            "indefinite": "Indefinite"
+        }
+    },
+    "profile": {
+        "title": "Profile",
+        "new_user": "New User",
+        "standard_profile": "Standard Profile",
+        "performance": "PERFORMANCE",
+        "view_all": "View all",
+        "successes": "Successes",
+        "streak": "Streak",
+        "compliance": "Compliance",
+        "failures": "Failures",
+        "account_info": "ACCOUNT INFORMATION",
+        "full_name": "Full Name",
+        "full_name_placeholder": "Your name",
+        "email": "Email Address",
+        "email_placeholder": "email@example.com",
+        "member_since": "MEMBER SINCE",
+        "member_date": "February 2026",
+        "update_button": "UPDATE PROFILE",
+        "toasts": {
+            "name_required_title": "Name required",
+            "name_required_msg": "Please enter your name to continue.",
+            "email_invalid_title": "Invalid email",
+            "email_invalid_msg": "Please enter a valid email.",
+            "profile_updated_title": "Profile updated",
+            "profile_updated_msg": "Your changes have been saved successfully."
+        }
+    },
+    "stats": {
+        "title": "Statistics",
+        "compliance_rate": "Compliance Rate",
+        "total_tasks": "From {{count}} total tasks",
+        "completed": "Completed",
+        "completed_desc": "Total completed",
+        "failed": "Failed",
+        "failed_desc": "Uncompleted",
+        "snoozed": "Snoozes",
+        "snoozed_desc": "Times snoozed",
+        "current_streak": "Current Streak",
+        "days_streak": "Consecutive days",
+        "best_streak": "Best Streak",
+        "best_streak_desc": "Longest streak achieved",
+        "days": "{{count}} day",
+        "days_plural": "{{count}} days",
+        "best_moment": "You're at your best!",
+        "record_motivation": "Complete tasks daily to beat your record!",
+        "productive_hours": "Productive Hours",
+        "productive_hours_empty": "Complete more tasks to see your most productive times",
+        "tasks_count": "{{count}} task",
+        "tasks_count_plural": "{{count}} tasks",
+        "motivation_start": "💪 Let's start today!",
+        "motivation_streak": "🔥 You're on a {{count}}-day streak!",
+        "motivation_desc_start": "Complete your first reminder today to start your streak.",
+        "motivation_desc_streak": "Don't let the fire go out.",
+        "tooltip_score": "Score calculated based on your compliance rate, active streak and snooze frequency.",
+        "tooltip_streak": "Consecutive days where you completed at least one reminder. Miss a day and it resets to zero.",
+        "tooltip_today": "Reminders you have already completed today.",
+        "tooltip_compliance": "Percentage of reminders completed vs. the total decided (completed + failed). Snoozed ones are not counted.",
+        "notes_section_title": "Notes",
+        "notes_total": "Total",
+        "notes_pinned": "Pinned",
+        "notes_attachments": "With attachments",
+        "tap_for_info": "Tap for more info",
+        "weekly_activity": "Weekly Activity",
+        "weekly_activity_desc": "Last 4 weeks",
+        "level_distribution": "By Control Level",
+        "level_rate": "{{rate}}% compliance",
+        "behavior": "Behavior",
+        "avg_response": "Avg. Response",
+        "avg_response_value": "{{minutes}} min",
+        "snooze_rate": "Snooze Rate",
+        "avg_snoozes": "Snoozes per Task",
+        "mass_snoozes": "Mass Snoozes",
+        "daily": "Today's Summary",
+        "completed_today": "Completed Today",
+        "daily_average": "Daily Average",
+        "total_created": "Total Created",
+        "active_now": "Active",
+        "overdue_now": "Overdue",
+        "monthly_trend": "Monthly Trend",
+        "vs_last_month": "vs. last month",
+        "this_month": "This month",
+        "last_month": "Last month",
+        "notes_section": "Notes",
+        "total_notes": "Total Notes",
+        "pinned_notes": "Pinned",
+        "notes_attachments": "With Attachments",
+        "insights_title": "Insights",
+        "insight_best_hour": "Your most productive hour is {{hour}}:00",
+        "insight_best_day": "Your best day is {{day}}",
+        "insight_level_comparison": "You complete {{best_rate}}% of {{best_level}} but only {{worst_rate}}% of {{worst_level}}",
+        "insight_no_snooze": "You haven't snoozed any reminder!",
+        "insight_high_snooze": "You snooze {{rate}}% of your tasks. Try to reduce it.",
+        "insight_improving": "You improved {{percent}}% vs. last month!",
+        "insight_declining": "Your activity dropped {{percent}}% vs. last month",
+        "insight_great_streak": "Incredible! {{days}} days and counting",
+        "empty_state": "No data yet",
+        "empty_state_desc": "Complete reminders to see your statistics",
+        "days_short": {
+            "0": "Sun",
+            "1": "Mon",
+            "2": "Tue",
+            "3": "Wed",
+            "4": "Thu",
+            "5": "Fri",
+            "6": "Sat"
+        },
+        "levels": {
+            "normal": "Normal",
+            "strict": "Strict",
+            "critical": "Critical"
+        },
+        "score": "Score"
+    },
+    "help": {
+        "title": "Help & Support",
+        "description": "Find answers to your questions",
+        "faqs_title": "Frequently Asked Questions",
+        "faqs": {
+            "q1": "How do control levels work?",
+            "a1": "Control levels determine how persistent the app is with your reminders:\n\n• Normal: A single notification.\n• Strict: Notification + 2 reminders every 15 minutes.\n• Critical: Notification + 5 reminders every 5 minutes with intense sound and vibration.",
+            "q2": "Can I disable repeated notifications?",
+            "a2": "Yes, you can change the control level of any reminder to \"Normal\" by editing it. You can also adjust global settings in Settings.",
+            "q3": "What happens if I delete a reminder?",
+            "a3": "When you delete a reminder, it's automatically canceled and marked as \"failed\" in your history. This affects your compliance rate.",
+            "q4": "How does Strict Mode work?",
+            "a4": "Strict Mode temporarily turns ALL your reminders to \"Strict\" level and can block snoozing based on your settings.",
+            "q5": "Can I export my data?",
+            "a5": "Currently you can see your full history in the History section. The CSV export feature will be available soon."
+        },
+        "contact_support": "Contact Support",
+        "contact_desc": "Didn't find what you were looking for? We're here to help.",
+        "send_email": "Send Email",
+        "report_problem": "Report a Problem",
+        "report_desc": "Help us improve by reporting bugs or suggestions.",
+        "report_bug": "Report Bug",
+        "app_version": "App Version"
+    },
+    "sounds": {
+        "title": "Choose Tone",
+        "level_title": "{{label}} Level",
+        "levels": {
+            "normal": {
+                "label": "Normal",
+                "desc": "Standard and subtle notifications"
+            },
+            "strict": {
+                "label": "Strict",
+                "desc": "Noticeable alerts that require attention"
+            },
+            "critical": {
+                "label": "Critical",
+                "desc": "Persistent and intense sounds"
+            }
+        }
+    },
+    "upgrade": {
+        "title": "Boost your Productivity to PRO Level",
+        "description": "Unlock cloud sync, unlimited multimedia, and exclusive control tools.",
+        "features_title": "Features Comparison",
+        "free_label": "Basic",
+        "pro_label": "Pro",
+        "popular": "MOST POPULAR",
+        "coming_soon": "COMING SOON",
+        "coming_soon_btn": "Coming Soon",
+        "coming_soon_lifetime": "🔥 ONE-TIME PAYMENT",
+        "footer_msg": "Premium subscriptions and payments will be available in future updates.",
+        "features": {
+            "sync": {
+                "title": "Cloud Sync",
+                "desc": "Access your data in real-time across all your devices with automatic backup.",
+                "free": "Local Only",
+                "pro": "Unlimited"
+            },
+            "media": {
+                "title": "Multimedia Attachments",
+                "desc": "Upload images and documents (PDF, Word, etc.) to your notes and reminders.",
+                "free": "3 MB Limit",
+                "pro": "100 MB / HD Quality"
+            },
+            "levels": {
+                "title": "Alarm Control Levels",
+                "desc": "Access to Critical Level: 10 retries every 5 min for life-or-death tasks.",
+                "free": "Normal & Strict",
+                "pro": "Critical"
+            },
+            "stats": {
+                "title": "Analysis & Export",
+                "desc": "Export your history to CSV/JSON and get detailed efficiency analytics.",
+                "free": "Basic Streak",
+                "pro": "History & Export"
+            }
+        },
+        "plans": {
+            "title": "Choose your Plan",
+            "monthly": "Monthly",
+            "yearly": "Yearly",
+            "lifetime": "Lifetime",
+            "period_month": "/ mo",
+            "period_year": "/ yr",
+            "period_lifetime": "pay once",
+            "savings": "Save {{percent}}%"
+        }
+    },
+    "create": {
+        "title_new": "Create Reminder",
+        "title_edit": "Edit Reminder",
+        "btn_save": "Done",
+        "btn_complete": "Complete now",
+        "btn_delete": "Delete reminder",
+        "placeholder_title": "Reminder title",
+        "placeholder_notes": "Start typing...",
+        "sections": {
+            "date_time": "Date and Time",
+            "recurrence": "Repeat",
+            "notes": "Notes",
+            "multimedia": "Multimedia",
+            "priority": "Priority and Control"
+        },
+        "recurrence": {
+            "none": "Don't repeat",
+            "daily": "Every day",
+            "daily_desc": "Repeats every day at the same time",
+            "weekly": "Every week",
+            "weekly_desc": "Repeats on the same day each week",
+            "monthly": "Every month",
+            "monthly_desc": "Repeats on the same day each month",
+            "yearly": "Every year",
+            "yearly_desc": "Repeats on the same date each year"
+        },
+        "priority": {
+            "normal": {
+                "label": "Normal",
+                "desc": "Standard notification. Ideal for routine tasks and habits."
+            },
+            "strict": {
+                "label": "Strict",
+                "desc": "Persistent reminders every 5 minutes until action is confirmed."
+            },
+            "critical": {
+                "label": "Critical",
+                "desc": "Continuous sound alarm. Will not stop until task is completed."
+            }
+        },
+        "multimedia": {
+            "camera": "Camera",
+            "gallery": "Gallery",
+            "file": "File"
+        },
+        "alerts": {
+            "limit_reached": "Limit reached",
+            "limit_msg": "Maximum {{count}} files per reminder.",
+            "permission_denied": "Permission denied",
+            "camera_permission": "Permission required to access camera.",
+            "gallery_permission": "Permission required to access gallery.",
+            "error_attaching": "Could not attach file",
+            "premium_content": "Premium Content",
+            "limit_images_editor": "Maximum limit of {{count}} images reached.",
+            "upgrade_msg": "Limit of {{count}} images on free plan. Go Premium to upload up to 20.",
+            "upgrade_files_msg": "Limit of 3 files on free plan. Go Premium to upload up to 10."
+        }
+    },
+    "onboarding": {
+        "step0": {
+            "title": "Choose your\nenvironment.",
+            "desc": "You can change it later in settings.",
+            "light": "Light",
+            "dark": "Dark",
+            "already_have_account": "Already have an account? ",
+            "login": "Login"
+        },
+        "step1": {
+            "title": "How\ncommitted?",
+            "desc": "Define your daily work mode.",
+            "levels": {
+                "normal": {
+                    "label": "Calm",
+                    "sub": "Soft and friendly reminders"
+                },
+                "strict": {
+                    "label": "Focused",
+                    "sub": "Constant and distraction-free"
+                },
+                "critical": {
+                    "label": "No mercy",
+                    "sub": "Maximum intensity. Zero excuses."
+                }
+            }
+        },
+        "step2": {
+            "title": "Don't leave\nwithout permission.",
+            "desc": "Notifications are essential for the app to function. Without them, there are no reminders.",
+            "enable_btn": "Enable notifications",
+            "now_not_btn": "Not now",
+            "alert": {
+                "title": "Notifications disabled",
+                "msg": "Without notification permissions, we won't be able to alert you of important reminders. Do you want to try enabling them again or continue without them?",
+                "retry": "Retry",
+                "continue": "Continue without alerts"
+            }
+        },
+        "footer": {
+            "skip": "Skip",
+            "next": "Next",
+            "done": "Done"
+        }
+    },
+    "auth": {
+        "login_title": "Welcome",
+        "login_desc": "Login to sync your reminders",
+        "register_title": "Create Account",
+        "register_desc": "Start organizing your life today",
+        "email": "Email",
+        "password": "Password",
+        "email_placeholder": "your@email.com",
+        "password_placeholder": "Your password",
+        "password_hint": "At least 6 characters",
+        "login_btn": "Login",
+        "register_btn": "Create Account",
+        "no_account": "Don't have an account?",
+        "already_have_account": "Already have an account?",
+        "back": "Back",
+        "go_to_register": "Register",
+        "go_to_login": "Login",
+        "verify_email_title": "Check your email",
+        "verify_email_msg": "We've sent you a confirmation link.",
+        "fill_all_fields": "Please fill in all fields",
+        "password_too_short": "Password must be at least 6 characters"
+    },
+    "notes": {
+        "title": "My Notes",
+        "search_placeholder": "Search in your notes...",
+        "no_notes": "You don't have any notes yet",
+        "fab_note": "Note",
+        "selected": "selected",
+        "no_title": "Untitled",
+        "no_content": "No additional content",
+        "done": "Done"
+    },
+    "notifications": {
+        "default_body": "It's time to act. Confirm your action.",
+        "follow_up_body": "{{level}} REMINDER: {{title}} is still pending.",
+        "overdue_title": "⚠️ OVERDUE: {{title}}",
+        "overdue_body": "This reminder is pending. Please act now.",
+        "action_done": "Done",
+        "action_snooze": "Snooze"
+    }
+}

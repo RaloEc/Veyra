@@ -1,26 +1,25 @@
 import { useState, useCallback } from 'react';
-import { View, Text, YStack, XStack, Button, H2, H3, Paragraph, Theme, AnimatePresence } from 'tamagui';
+import { View, Text, YStack, XStack, H2 } from 'tamagui';
 import { useRouter } from 'expo-router';
 import { useStore } from '../src/store/useStore';
+import { useNotesStore } from '../src/store/useNotesStore';
 import { useFocusEffect } from 'expo-router';
 import { FlatList, TouchableOpacity, StyleSheet, LayoutAnimation } from 'react-native';
 import { format } from 'date-fns';
 import { es, enUS } from 'date-fns/locale';
-import { ChevronLeft, RefreshCw, Trash2, CheckCircle2, Trash, AlertCircle, Clock, Check } from '@tamagui/lucide-icons';
-import { Reminder } from '../src/types/db';
+import { ChevronLeft, RefreshCw, Trash2, FileText, Pin, Check } from '@tamagui/lucide-icons';
+import { Note } from '../src/types/db';
 import { useTranslation } from 'react-i18next';
-import { useAccentColor } from '../src/theme/accentColors';
 
-export default function HistoryScreen() {
+export default function NotesHistoryScreen() {
     const router = useRouter();
     const { t } = useTranslation();
-    const { history, loadHistory, restoreReminder, deleteForever, theme, language } = useStore();
-    const [filter, setFilter] = useState<'completed' | 'deleted'>('completed');
-    const [selectedItems, setSelectedItems] = useState<string[]>([]);
-
+    const { theme, language } = useStore();
+    const { deletedNotes, loadDeletedNotes, restoreNote, deleteForever } = useNotesStore();
     const isDark = theme === 'dark';
+
+    const [selectedItems, setSelectedItems] = useState<string[]>([]);
     const isSelectionMode = selectedItems.length > 0;
-    const { accent } = useAccentColor();
 
     const colors = {
         bg: isDark ? '#0a0a0a' : '#F8FAFC',
@@ -28,28 +27,16 @@ export default function HistoryScreen() {
         textPrimary: isDark ? '#EDEDED' : '#0c0a09',
         textSecondary: isDark ? '#A1A1A1' : '#64748B',
         border: isDark ? '#262626' : '#E2E8F0',
-        brand: accent,
         completed: isDark ? '#22c55e' : '#10B981',
         deleted: isDark ? '#ef4444' : '#E11D48',
+        purple: isDark ? '#a855f7' : '#7C3AED',
     };
 
     useFocusEffect(
         useCallback(() => {
-            loadHistory();
+            loadDeletedNotes();
         }, [])
     );
-
-    const filteredHistory = history.filter(item => {
-        if (filter === 'completed') return item.status === 'completed' && item.deleted === 0;
-        if (filter === 'deleted') return item.deleted === 1;
-        return false;
-    });
-
-    const handleFilterChange = (newFilter: 'completed' | 'deleted') => {
-        LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-        setFilter(newFilter);
-        setSelectedItems([]);
-    };
 
     const toggleSelection = (id: string) => {
         setSelectedItems(prev =>
@@ -57,13 +44,13 @@ export default function HistoryScreen() {
         );
     };
 
-    const handlePress = (item: Reminder) => {
+    const handlePress = (item: Note) => {
         if (isSelectionMode) {
             toggleSelection(item.id);
         }
     };
 
-    const handleLongPress = (item: Reminder) => {
+    const handleLongPress = (item: Note) => {
         if (!isSelectionMode) {
             LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
             setSelectedItems([item.id]);
@@ -72,17 +59,28 @@ export default function HistoryScreen() {
         }
     };
 
+    const handleRestore = async (id: string) => {
+        await restoreNote(id);
+        await loadDeletedNotes();
+    };
+
+    const handleDeleteForever = async (id: string) => {
+        await deleteForever(id);
+        await loadDeletedNotes();
+    };
+
     const handleBulkDelete = async () => {
         for (const id of selectedItems) {
             await deleteForever(id);
         }
         setSelectedItems([]);
-        await loadHistory();
+        await loadDeletedNotes();
     };
 
-    const renderItem = ({ item }: { item: Reminder }) => {
-        const isDeleted = filter === 'deleted';
-        const date = item.last_modified_ms || item.due_date_ms;
+    const renderItem = ({ item }: { item: Note }) => {
+        const date = item.updated_at_ms || item.created_at_ms;
+        const plainText = item.content?.replace(/<[^>]+>/g, '') || '';
+        const previewText = plainText.length > 120 ? plainText.substring(0, 120) + '...' : plainText;
         const isSelected = selectedItems.includes(item.id);
 
         return (
@@ -120,6 +118,7 @@ export default function HistoryScreen() {
                                         {isSelected && <Check size={14} color="white" strokeWidth={3} />}
                                     </View>
                                 )}
+                                <FileText size={16} color={colors.purple} />
                                 <Text
                                     fontSize="$4"
                                     fontWeight="700"
@@ -127,55 +126,44 @@ export default function HistoryScreen() {
                                     numberOfLines={1}
                                     flex={1}
                                 >
-                                    {item.title}
+                                    {item.title || t('notes.no_title')}
                                 </Text>
+                                {item.is_pinned === 1 && (
+                                    <Pin size={12} color="#F59E0B" style={{ transform: [{ rotate: '45deg' }] }} />
+                                )}
                             </XStack>
 
-                            <XStack alignItems="center" gap="$1.5">
-                                <Clock size={12} color={colors.textSecondary} />
-                                <Text fontSize="$2" color={colors.textSecondary} fontWeight="500">
-                                    {format(date, language === 'es' ? "d 'de' MMMM, HH:mm" : "MMMM d, HH:mm", { locale: language === 'es' ? es : enUS })}
-                                </Text>
-                            </XStack>
-
-                            {item.description && (
+                            {previewText.length > 0 && (
                                 <Text
                                     fontSize="$2"
                                     color={colors.textSecondary}
                                     opacity={0.8}
-                                    numberOfLines={1}
+                                    numberOfLines={2}
                                     mt="$1"
                                 >
-                                    {item.description.replace(/<[^>]+>/g, '')}
+                                    {previewText}
                                 </Text>
                             )}
+
+                            <Text fontSize="$2" color={colors.textSecondary} fontWeight="500" mt="$1">
+                                {format(date, language === 'es' ? "d 'de' MMMM, HH:mm" : "MMMM d, HH:mm", { locale: language === 'es' ? es : enUS })}
+                            </Text>
                         </YStack>
 
                         {!isSelectionMode && (
                             <XStack gap="$2">
-                                {isDeleted ? (
-                                    <>
-                                        <TouchableOpacity
-                                            onPress={() => restoreReminder(item.id)}
-                                            style={styles.actionButton}
-                                        >
-                                            <RefreshCw size={18} color={colors.completed} />
-                                        </TouchableOpacity>
-                                        <TouchableOpacity
-                                            onPress={() => deleteForever(item.id)}
-                                            style={[styles.actionButton, { backgroundColor: isDark ? 'rgba(239, 68, 68, 0.1)' : 'rgba(225, 29, 72, 0.05)' }]}
-                                        >
-                                            <Trash2 size={18} color={colors.deleted} />
-                                        </TouchableOpacity>
-                                    </>
-                                ) : (
-                                    <TouchableOpacity
-                                        onPress={() => useStore.getState().deleteReminder(item.id).then(loadHistory)}
-                                        style={styles.actionButton}
-                                    >
-                                        <Trash size={18} color={colors.textSecondary} />
-                                    </TouchableOpacity>
-                                )}
+                                <TouchableOpacity
+                                    onPress={() => handleRestore(item.id)}
+                                    style={styles.actionButton}
+                                >
+                                    <RefreshCw size={18} color={colors.completed} />
+                                </TouchableOpacity>
+                                <TouchableOpacity
+                                    onPress={() => handleDeleteForever(item.id)}
+                                    style={[styles.actionButton, { backgroundColor: isDark ? 'rgba(239, 68, 68, 0.1)' : 'rgba(225, 29, 72, 0.05)' }]}
+                                >
+                                    <Trash2 size={18} color={colors.deleted} />
+                                </TouchableOpacity>
                             </XStack>
                         )}
                     </XStack>
@@ -221,62 +209,15 @@ export default function HistoryScreen() {
                                 <ChevronLeft size={28} color={colors.textPrimary} />
                             </TouchableOpacity>
                             <H2 fontSize="$7" fontWeight="900" color={colors.textPrimary} letterSpacing={-0.5}>
-                                {t('history.title')}
+                                {t('notes_history.title')}
                             </H2>
                         </XStack>
                     </XStack>
                 )}
 
-                {/* Segmented Control Minimalista */}
-                <XStack
-                    backgroundColor={isDark ? '#171717' : '#F1F5F9'}
-                    padding="$1.5"
-                    borderRadius="$10"
-                    mb="$6"
-                    borderWidth={1}
-                    borderColor={colors.border}
-                >
-                    <TouchableOpacity
-                        style={[
-                            styles.tab,
-                            filter === 'completed' && (isDark ? styles.tabActiveDark : styles.tabActiveLight)
-                        ]}
-                        onPress={() => handleFilterChange('completed')}
-                    >
-                        <XStack alignItems="center" gap="$2">
-                            <CheckCircle2 size={16} color={filter === 'completed' ? (isDark ? 'white' : 'black') : colors.textSecondary} />
-                            <Text
-                                fontWeight={filter === 'completed' ? "800" : "600"}
-                                color={filter === 'completed' ? (isDark ? 'white' : 'black') : colors.textSecondary}
-                                fontSize="$3"
-                            >
-                                {t('history.completed_tab')}
-                            </Text>
-                        </XStack>
-                    </TouchableOpacity>
-
-                    <TouchableOpacity
-                        style={[
-                            styles.tab,
-                            filter === 'deleted' && (isDark ? styles.tabActiveDark : styles.tabActiveLight)
-                        ]}
-                        onPress={() => handleFilterChange('deleted')}
-                    >
-                        <XStack alignItems="center" gap="$2">
-                            <Trash size={16} color={filter === 'deleted' ? (isDark ? 'white' : 'black') : colors.textSecondary} />
-                            <Text
-                                fontWeight={filter === 'deleted' ? "800" : "600"}
-                                color={filter === 'deleted' ? (isDark ? 'white' : 'black') : colors.textSecondary}
-                                fontSize="$3"
-                            >
-                                {t('history.trash_tab')}
-                            </Text>
-                        </XStack>
-                    </TouchableOpacity>
-                </XStack>
 
                 <FlatList
-                    data={filteredHistory}
+                    data={deletedNotes}
                     renderItem={renderItem}
                     keyExtractor={item => item.id}
                     contentContainerStyle={{ paddingBottom: 100 }}
@@ -288,20 +229,14 @@ export default function HistoryScreen() {
                                 padding="$5"
                                 borderRadius={50}
                             >
-                                {filter === 'completed' ? (
-                                    <Clock size={40} color={colors.textSecondary} />
-                                ) : (
-                                    <AlertCircle size={40} color={colors.textSecondary} />
-                                )}
+                                <FileText size={40} color={colors.textSecondary} />
                             </View>
                             <YStack alignItems="center" gap="$1">
                                 <Text fontSize="$5" fontWeight="800" color={colors.textPrimary}>
-                                    {filter === 'completed' ? t('history.empty_completed_title') : t('history.empty_trash_title')}
+                                    {t('notes_history.empty_trash_title')}
                                 </Text>
                                 <Text fontSize="$3" color={colors.textSecondary} textAlign="center" px="$8">
-                                    {filter === 'completed'
-                                        ? t('history.empty_completed_desc')
-                                        : t('history.empty_trash_desc')}
+                                    {t('notes_history.empty_trash_desc')}
                                 </Text>
                             </YStack>
                         </YStack>

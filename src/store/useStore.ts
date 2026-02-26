@@ -5,6 +5,7 @@ import { ReminderService } from '../services/reminderService';
 import { NotificationService } from '../services/notificationService';
 import { ComplianceService } from '../services/complianceService';
 import { Reminder, ControlLevel, ReminderStatus } from '../types/db';
+import { AccentTheme } from '../theme/accentColors';
 
 interface AppState {
     reminders: Reminder[];
@@ -17,10 +18,12 @@ interface AppState {
     markAsCompleted: (id: string) => Promise<void>;
     updateReminder: (id: string, updates: Partial<Reminder>) => Promise<void>;
     deleteReminder: (id: string) => Promise<void>;
+    deleteReminders: (ids: string[]) => Promise<void>;
     restoreReminder: (id: string) => Promise<void>;
     deleteForever: (id: string) => Promise<void>;
     snoozeReminder: (id: string, minutes: number, isMassSnooze?: boolean) => Promise<void>;
     toggleTheme: () => void;
+    setTheme: (theme: 'light' | 'dark') => void;
     onboardingCompleted: boolean;
     userProfile: 'student' | 'work' | 'personal' | 'custom' | null;
     userName: string | null;
@@ -30,8 +33,6 @@ interface AppState {
     setUserName: (name: string) => void;
     setUserEmail: (email: string) => void;
     defaultControlLevel: ControlLevel;
-    onboardingStep: number;
-    setOnboardingStep: (step: number) => void;
     isHydrated: boolean;
     session: any | null;
     setSession: (session: any | null) => void;
@@ -47,6 +48,16 @@ interface AppState {
     setSoundSetting: (level: 'normal' | 'strict' | 'critical', sound: string) => void;
     isPremium: boolean;
     setPremium: (status: boolean) => void;
+    language: string;
+    setLanguage: (lang: string) => void;
+    cloudSyncEnabled: boolean;
+    setCloudSyncEnabled: (enabled: boolean) => void;
+    isSyncing: boolean;
+    lastSyncTime: number | null;
+    syncError: string | null;
+    triggerSync: () => Promise<void>;
+    accentTheme: AccentTheme;
+    setAccentTheme: (theme: AccentTheme) => void;
 }
 
 export const useStore = create<AppState>()(
@@ -107,12 +118,44 @@ export const useStore = create<AppState>()(
 
             markAsCompleted: async (id) => {
                 try {
-                    const reminder = get().reminders.find(r => r.id === id);
-                    const storedIds = reminder?.notification_ids ? JSON.parse(reminder.notification_ids) : [];
+                    let reminder = get().reminders.find(r => r.id === id);
+                    if (!reminder) {
+                        reminder = await ReminderService.getReminderById(id) || undefined;
+                    }
+                    if (!reminder) return;
+
+                    const storedIds = reminder.notification_ids ? JSON.parse(reminder.notification_ids) : [];
                     await NotificationService.cancelNotificationsForReminder(id, storedIds);
 
                     await ReminderService.markAsCompleted(id);
                     await ComplianceService.logEvent(id, 'completed');
+
+                    // Handle recurrence: create next occurrence
+                    if (reminder.repeat_rule) {
+                        const { parseRepeatRule, getNextRecurrenceDate } = await import('../utils/recurrence');
+                        const rule = parseRepeatRule(reminder.repeat_rule);
+                        if (rule) {
+                            const nextDate = getNextRecurrenceDate(reminder.due_date_ms, rule);
+                            if (nextDate) {
+                                const userId = get().session?.user?.id || 'local_user';
+                                const nextReminder = await ReminderService.createReminder(
+                                    reminder.title,
+                                    nextDate,
+                                    reminder.control_level,
+                                    userId,
+                                    reminder.description,
+                                    reminder.repeat_rule,
+                                    reminder.attachments,
+                                    reminder.links
+                                );
+                                const notifIds = await NotificationService.scheduleReminderNotification(nextReminder);
+                                if (notifIds.length > 0) {
+                                    await ReminderService.updateReminder(nextReminder.id, { notification_ids: JSON.stringify(notifIds) });
+                                }
+                            }
+                        }
+                    }
+
                     await get().loadReminders();
                 } catch (error) {
                     console.error('Failed to complete reminder', error);
@@ -158,6 +201,21 @@ export const useStore = create<AppState>()(
                 }
             },
 
+            deleteReminders: async (ids) => {
+                try {
+                    for (const id of ids) {
+                        const reminder = get().reminders.find(r => r.id === id);
+                        const storedIds = reminder?.notification_ids ? JSON.parse(reminder.notification_ids) : [];
+                        await NotificationService.cancelNotificationsForReminder(id, storedIds);
+                        await ReminderService.deleteReminder(id);
+                        await ComplianceService.logEvent(id, 'failed');
+                    }
+                    await get().loadReminders();
+                } catch (error) {
+                    console.error('Failed to delete reminders', error);
+                }
+            },
+
             restoreReminder: async (id) => {
                 try {
                     await ReminderService.restoreReminder(id);
@@ -179,7 +237,10 @@ export const useStore = create<AppState>()(
 
             snoozeReminder: async (id: string, minutes: number, isMassSnooze: boolean = false) => {
                 try {
-                    const reminder = get().reminders.find(r => r.id === id);
+                    let reminder = get().reminders.find(r => r.id === id);
+                    if (!reminder) {
+                        reminder = await ReminderService.getReminderById(id) || undefined;
+                    }
                     if (!reminder) return;
 
                     const newTime = Date.now() + (minutes * 60 * 1000);
@@ -206,6 +267,8 @@ export const useStore = create<AppState>()(
                 set((state) => ({ theme: state.theme === 'light' ? 'dark' : 'light' }));
             },
 
+            setTheme: (theme) => set({ theme }),
+
             onboardingCompleted: false,
             userProfile: null,
             userName: null,
@@ -216,8 +279,6 @@ export const useStore = create<AppState>()(
             setUserEmail: (email) => set({ userEmail: email }),
             defaultControlLevel: 'normal',
             setDefaultControlLevel: (level: ControlLevel) => set({ defaultControlLevel: level }),
-            onboardingStep: 0,
-            setOnboardingStep: (step) => set({ onboardingStep: step }),
             isHydrated: false,
             session: null,
             setSession: (session) => set({ session }),
@@ -241,6 +302,35 @@ export const useStore = create<AppState>()(
             })),
             isPremium: false,
             setPremium: (status: boolean) => set({ isPremium: status }),
+            language: 'es',
+            setLanguage: (lang: string) => set({ language: lang }),
+            accentTheme: 'purple' as AccentTheme,
+            setAccentTheme: (accentTheme: AccentTheme) => set({ accentTheme }),
+            cloudSyncEnabled: false,
+            setCloudSyncEnabled: (enabled: boolean) => set({ cloudSyncEnabled: enabled }),
+            isSyncing: false,
+            lastSyncTime: null,
+            syncError: null,
+            triggerSync: async () => {
+                const state = get();
+                if (!state.session?.user?.id || state.isSyncing) return;
+                set({ isSyncing: true, syncError: null });
+                try {
+                    const { SyncService } = await import('../services/syncService');
+                    const result = await SyncService.syncAll(state.session.user.id);
+                    if (result.success) {
+                        set({ lastSyncTime: Date.now(), isSyncing: false });
+                        // Recargar datos locales después del sync
+                        await get().loadReminders();
+                        await get().loadHistory();
+                    } else {
+                        set({ syncError: result.errors.join(', '), isSyncing: false });
+                    }
+                } catch (e: any) {
+                    console.error('Sync failed:', e);
+                    set({ syncError: e.message, isSyncing: false });
+                }
+            },
         }),
         {
             name: 'app-storage',
@@ -249,13 +339,16 @@ export const useStore = create<AppState>()(
             partialize: (state) => ({
                 theme: state.theme,
                 onboardingCompleted: state.onboardingCompleted,
-                onboardingStep: state.onboardingStep,
                 userProfile: state.userProfile,
                 userName: state.userName,
                 userEmail: state.userEmail,
                 defaultControlLevel: state.defaultControlLevel,
                 soundSettings: state.soundSettings,
                 isPremium: state.isPremium,
+                language: state.language,
+                accentTheme: state.accentTheme,
+                cloudSyncEnabled: state.cloudSyncEnabled,
+                lastSyncTime: state.lastSyncTime,
             }),
             onRehydrateStorage: () => (state) => {
                 useStore.setState({ isHydrated: true });

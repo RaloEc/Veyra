@@ -3,6 +3,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { YStack, XStack, Text, Button, ScrollView, View } from 'tamagui';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { ChevronLeft, Trash2, Pin, Check } from '@tamagui/lucide-icons';
+import { useTranslation } from 'react-i18next';
 import { useCreateNote } from '../../src/hooks/useCreateNote';
 import { TitleInput } from '../../src/components/create/TitleInput';
 import { RichTextEditorSection } from '../../src/components/create/RichTextEditorSection';
@@ -13,6 +14,7 @@ import { PremiumAlert } from '../../src/components/ui/PremiumAlert';
 import { useState, useRef } from 'react';
 
 export default function CreateNoteScreen() {
+    const { t } = useTranslation();
     const router = useRouter();
     const { id } = useLocalSearchParams<{ id: string }>();
     const [isNotesFocused, setIsNotesFocused] = useState(false);
@@ -92,7 +94,7 @@ export default function CreateNoteScreen() {
                             }}
                         >
                             <Text color={isDark ? '#000' : '#fff'} fontWeight="800" fontSize="$4">
-                                Listo
+                                {t('notes.done')}
                             </Text>
                         </TouchableOpacity>
                     </XStack>

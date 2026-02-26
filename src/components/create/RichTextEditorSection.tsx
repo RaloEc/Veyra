@@ -2,6 +2,7 @@ import { useRef } from 'react';
 import { TouchableWithoutFeedback, Alert } from 'react-native';
 import { YStack, XStack, Label } from 'tamagui';
 import { FileText, Bold, List, AlignCenter } from '@tamagui/lucide-icons';
+import { useTranslation } from 'react-i18next';
 import { RichEditor, RichToolbar, actions } from 'react-native-pell-rich-editor';
 
 interface RichTextEditorSectionProps {
@@ -23,6 +24,7 @@ export function RichTextEditorSection({
     onBlur,
     flat
 }: RichTextEditorSectionProps) {
+    const { t } = useTranslation();
 
     return (
         <YStack gap="$3">
@@ -30,7 +32,7 @@ export function RichTextEditorSection({
                 <XStack style={{ alignItems: 'center', justifyContent: 'space-between' }} gap="$2">
                     <XStack style={{ alignItems: 'center' }} gap="$2">
                         <FileText size={18} color="$purple10" />
-                        <Label fontWeight="600" fontSize="$3" color={isDark ? '$gray9' : '$gray10'}>Notas</Label>
+                        <Label fontWeight="600" fontSize="$3" color={isDark ? '$gray9' : '$gray10'}>{t('create.sections.notes')}</Label>
                     </XStack>
                 </XStack>
             )}
@@ -50,7 +52,7 @@ export function RichTextEditorSection({
                     onChange={setDescription}
                     onFocus={onFocus}
                     onBlur={onBlur}
-                    placeholder="Empieza a escribir..."
+                    placeholder={t('create.placeholder_notes')}
                     scrollEnabled={false}
                     initialHeight={flat ? 300 : 120}
                     autoCapitalize="sentences"

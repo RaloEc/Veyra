@@ -1,17 +1,19 @@
-import { View, Text, YStack, XStack, Button, H2, H4, Paragraph, Separator, Card, Theme, Spinner, AnimatePresence, Portal } from 'tamagui';
+import { View, Text, YStack, XStack, Button, H2, H4, Paragraph, Separator, Card, Theme, Spinner, AnimatePresence, Portal, Circle } from 'tamagui';
 import { useRouter } from 'expo-router';
 import { useStore } from '../src/store/useStore';
 import { useEffect, useMemo, useState, useRef } from 'react';
-import { ScrollView, TouchableOpacity, useWindowDimensions, StyleSheet, Image, FlatList, Animated, Alert } from 'react-native';
+import { useTranslation } from 'react-i18next';
+import { ScrollView, TouchableOpacity, useWindowDimensions, StyleSheet, Image, FlatList, Animated, Alert, BackHandler } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { format, isToday, isPast, formatDistanceToNow, differenceInMinutes } from 'date-fns';
 import { es } from 'date-fns/locale';
-import { Clock, AlertCircle, Zap, TrendingUp, Plus, ChevronRight, ChevronLeft, Activity, History, Check, Edit3, FileText, Image as ImageIcon, Link as LinkIcon, X, Trash2 } from '@tamagui/lucide-icons';
+import { Clock, AlertCircle, Zap, TrendingUp, Plus, ChevronRight, ChevronLeft, Activity, History, Check, Edit3, FileText, Image as ImageIcon, Link as LinkIcon, X, Trash2, Repeat } from '@tamagui/lucide-icons';
 import { Reminder } from '../src/types/db';
 import RenderHTML from 'react-native-render-html';
 import { BlurView } from 'expo-blur';
 import { FlashList } from '@shopify/flash-list';
 import ImageViewing from "react-native-image-viewing";
+import { useAccentColor } from '../src/theme/accentColors';
 import * as Sharing from 'expo-sharing';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as IntentLauncher from 'expo-intent-launcher';
@@ -20,7 +22,8 @@ import { Platform } from 'react-native';
 
 export default function HomeScreen() {
     const router = useRouter();
-    const { reminders, loadReminders, markAsCompleted, snoozeReminder, deleteReminder, theme, history, loadHistory, onboardingCompleted, isHydrated, detailReminder, setDetailReminder } = useStore();
+    const { t } = useTranslation();
+    const { reminders, loadReminders, markAsCompleted, snoozeReminder, deleteReminder, deleteReminders, theme, history, loadHistory, onboardingCompleted, isHydrated, detailReminder, setDetailReminder, language } = useStore();
     const insets = useSafeAreaInsets();
     const { width: windowWidth, height: windowHeight } = useWindowDimensions();
     const [now, setNow] = useState(Date.now());
@@ -30,6 +33,9 @@ export default function HomeScreen() {
     const [showLeftArrow, setShowLeftArrow] = useState(false);
     const [showRightArrow, setShowRightArrow] = useState(false);
     const [isDeleteConfirmVisible, setIsDeleteConfirmVisible] = useState(false);
+    const [selectedReminders, setSelectedReminders] = useState<string[]>([]);
+    const isSelectionMode = selectedReminders.length > 0;
+    const [isBulkDeleteConfirmVisible, setIsBulkDeleteConfirmVisible] = useState(false);
 
     // --- LÓGICA DE ANIMACIÓN NATIVA (Guía del Usuario) ---
     const [activeReminder, setActiveReminder] = useState<Reminder | null>(null);
@@ -57,6 +63,7 @@ export default function HomeScreen() {
     }, [detailReminder]);
 
     // --- PALETA SEMÁNTICA (Focus & Alarm) ---
+    const { accent } = useAccentColor();
     const colors = {
         bg: theme === 'dark' ? '#0a0a0a' : '#F8FAFC',
         surface: theme === 'dark' ? '#171717' : '#FFFFFF',
@@ -64,7 +71,7 @@ export default function HomeScreen() {
         textSecondary: theme === 'dark' ? '#A1A1A1' : '#64748B',
         textMuted: theme === 'dark' ? '#525252' : '#94A3B8',
         border: theme === 'dark' ? '#262626' : '#E2E8F0',
-        brand: theme === 'dark' ? '#A1A1A1' : '#64748B',
+        brand: accent,
         normal: theme === 'dark' ? '#22c55e' : '#10B981',
         strict: theme === 'dark' ? '#eab308' : '#F59E0B',
         critical: theme === 'dark' ? '#ef4444' : '#E11D48',
@@ -105,17 +112,17 @@ export default function HomeScreen() {
         const upcoming = remainingReminders.filter(r => !isToday(r.due_date_ms) && !isPast(r.due_date_ms));
 
         if (overdue.length > 0) {
-            data.push({ type: 'header', title: 'URGENTE', color: colors.critical });
+            data.push({ type: 'header', title: t('home.urgent'), color: colors.critical });
             overdue.forEach(r => data.push({ type: 'reminder', item: r }));
         }
 
         if (today.length > 0) {
-            data.push({ type: 'header', title: 'HOY', color: colors.brand });
+            data.push({ type: 'header', title: t('home.today'), color: colors.brand });
             today.forEach(r => data.push({ type: 'reminder', item: r }));
         }
 
         if (upcoming.length > 0) {
-            data.push({ type: 'header', title: 'PRÓXIMOS', color: colors.textMuted });
+            data.push({ type: 'header', title: t('home.upcoming'), color: colors.textMuted });
             upcoming.forEach(r => data.push({ type: 'reminder', item: r }));
         }
 
@@ -128,7 +135,52 @@ export default function HomeScreen() {
 
     const hasCriticalActive = useMemo(() => reminders.some(r => r.control_level === 'critical' && r.status === 'pending'), [reminders]);
 
-    // Eliminamos stats memoizado anterior ya que ahora está integrado en listData
+    // --- LÓGICA DE SELECCIÓN ---
+    const toggleSelection = (id: string) => {
+        if (selectedReminders.includes(id)) {
+            setSelectedReminders(prev => prev.filter(rId => rId !== id));
+        } else {
+            setSelectedReminders(prev => [...prev, id]);
+        }
+    };
+
+    const handlePress = (id: string) => {
+        if (isSelectionMode) {
+            toggleSelection(id);
+        } else {
+            const reminder = reminders.find(r => r.id === id);
+            if (reminder) setDetailReminder(reminder);
+        }
+    };
+
+    const handleLongPress = (id: string) => {
+        if (!isSelectionMode) {
+            setSelectedReminders([id]);
+        } else {
+            toggleSelection(id);
+        }
+    };
+
+    const handleDeleteSelected = () => {
+        setIsBulkDeleteConfirmVisible(true);
+    };
+
+    const selectAll = () => {
+        const pendingIds = reminders.filter(r => r.status === 'pending').map(r => r.id);
+        setSelectedReminders(pendingIds);
+    };
+
+    useEffect(() => {
+        const backAction = () => {
+            if (isSelectionMode) {
+                setSelectedReminders([]);
+                return true;
+            }
+            return false;
+        };
+        const backHandler = BackHandler.addEventListener('hardwareBackPress', backAction);
+        return () => backHandler.remove();
+    }, [isSelectionMode]);
 
     const getRiskInfo = (dueDate: number) => {
         const diff = differenceInMinutes(dueDate, now);
@@ -150,7 +202,7 @@ export default function HomeScreen() {
         if (diff < 0) return {
             text: shortText,
             color: colors.critical,
-            full: `Vencido hace ${shortText}`,
+            full: t('home.overdue_ago', { time: shortText }),
             isOverdue: true
         };
 
@@ -158,7 +210,7 @@ export default function HomeScreen() {
         return {
             text: shortText,
             color: color,
-            full: `En ${shortText}`,
+            full: t('home.in_time', { time: shortText }),
             isOverdue: false
         };
     };
@@ -166,152 +218,373 @@ export default function HomeScreen() {
     const ReminderCard = ({ item }: { item: Reminder }) => {
         const risk = getRiskInfo(item.due_date_ms);
         const level = item.control_level;
-
-        // Estilo basado en nivel de presión
+        const isSelected = selectedReminders.includes(item.id);
         const isCritical = level === 'critical';
         const isStrict = level === 'strict';
 
-        const cardBg = isCritical ? colors.critical : colors.surface;
-        const textColor = isCritical ? '#FFFFFF' : colors.textPrimary;
-        const subTextColor = isCritical ? 'rgba(255,255,255,0.8)' : colors.textSecondary;
-        const borderColor = isCritical ? colors.critical : (isStrict ? colors.strict : colors.border);
-        const borderWidth = isStrict ? 2 : 1;
+        const accentColor = isCritical ? colors.critical : (isStrict ? colors.strict : colors.brand);
+        const cardBg = isSelected
+            ? (theme === 'dark' ? '#1E293B' : '#EFF6FF')
+            : (theme === 'dark' ? '#111111' : '#FFFFFF');
+
+        // El usuario quiere que solo los críticos tengan borde
+        const borderCol = isSelected
+            ? (theme === 'dark' ? '#3B82F6' : '#93C5FD')
+            : (isCritical ? accentColor : 'transparent');
+
+        // --- ANIMACIÓN 3: TIC-TAC (MÁS SUTIL Y LENTA) ---
+        const tickAnim = useRef(new Animated.Value(1)).current;
+        useEffect(() => {
+            if (isCritical && !isSelected) {
+                const tick = Animated.loop(
+                    Animated.sequence([
+                        Animated.timing(tickAnim, { toValue: 1.08, duration: 1200, useNativeDriver: true }),
+                        Animated.timing(tickAnim, { toValue: 1, duration: 1200, useNativeDriver: true })
+                    ])
+                );
+                tick.start();
+                return () => tick.stop();
+            } else {
+                tickAnim.setValue(1);
+            }
+        }, [isCritical, isSelected]);
+
+        // --- ANIMACIÓN 4: SHIMMER DE BORDE (PULSO DE BRILLO) ---
+        const borderGlowAnim = useRef(new Animated.Value(0.4)).current;
+        useEffect(() => {
+            if (isCritical && !isSelected) {
+                const glow = Animated.loop(
+                    Animated.sequence([
+                        Animated.timing(borderGlowAnim, { toValue: 1, duration: 2000, useNativeDriver: true }),
+                        Animated.timing(borderGlowAnim, { toValue: 0.4, duration: 2000, useNativeDriver: true })
+                    ])
+                );
+                glow.start();
+                return () => glow.stop();
+            }
+        }, [isCritical, isSelected]);
 
         return (
-            <TouchableOpacity
-                activeOpacity={0.8}
-                onPress={() => router.push({ pathname: '/create', params: { id: item.id } })}
+            <Animated.View
+                style={{
+                    transform: [{ scale: isSelected ? 0.98 : 1 }],
+                    marginBottom: 12, // Un poco más de margen para la sombra
+                }}
             >
-                <XStack
-                    backgroundColor={cardBg}
-                    borderColor={borderColor}
-                    borderWidth={borderWidth}
-                    borderRadius="$4"
-                    padding="$3"
-                    mb="$2"
-                    alignItems="center"
-                    elevation={isCritical ? 4 : 0}
+                <TouchableOpacity
+                    activeOpacity={0.75}
+                    onPress={() => handlePress(item.id)}
+                    onLongPress={() => handleLongPress(item.id)}
                 >
-                    <YStack width={55} justifyContent="center" alignItems="center" mr="$3" borderRightWidth={1} borderRightColor={isCritical ? 'rgba(255,255,255,0.2)' : colors.border}>
-                        <Text color={isCritical ? '#FFFFFF' : risk.color} fontSize="$4" fontWeight="900" fontFamily="$mono">
-                            {risk.text}
-                        </Text>
-                    </YStack>
+                    {/* Contenedor de SOMBRA (Sin overflow:hidden) */}
+                    <YStack
+                        borderRadius={20}
+                        elevation={theme === 'dark' ? 0 : (isCritical ? 8 : 4)}
+                        shadowColor={isCritical ? colors.critical : "rgba(0,0,0,0.1)"}
+                        shadowRadius={isCritical ? 20 : 12}
+                        shadowOffset={{ width: 0, height: 6 }}
+                        shadowOpacity={isCritical ? 0.15 : 0.06}
+                        backgroundColor="transparent"
+                    >
+                        {/* Contenedor de CONTENIDO (Con overflow:hidden) */}
+                        <XStack
+                            backgroundColor={cardBg}
+                            borderColor={borderCol}
+                            borderWidth={(isCritical && !isSelected) ? 0 : 1}
+                            borderRadius={20}
+                            paddingVertical="$3"
+                            paddingHorizontal="$4"
+                            alignItems="center"
+                            gap="$3"
+                            opacity={isSelectionMode && !isSelected ? 0.5 : 1}
+                            overflow="hidden"
+                        >
+                            {/* Shimmer de Borde (Glow Overlay) - Único borde para críticos */}
+                            {isCritical && !isSelected && (
+                                <Animated.View
+                                    style={{
+                                        ...StyleSheet.absoluteFillObject,
+                                        borderRadius: 20,
+                                        borderWidth: 2,
+                                        borderColor: colors.critical,
+                                        opacity: borderGlowAnim,
+                                        zIndex: 1,
+                                    }}
+                                />
+                            )}
 
-                    <YStack flex={1} gap="$1">
-                        <Text color={textColor} fontSize="$4" fontWeight="700" numberOfLines={1}>
-                            {item.title}
-                        </Text>
-                        <Text color={subTextColor} fontSize="$1" fontWeight="600" textTransform="uppercase">
-                            {level} • {risk.full}
-                        </Text>
+                            {isSelectionMode ? (
+                                <Circle size={22} bw={2}
+                                    bc={isSelected ? '#3B82F6' : (theme === 'dark' ? '#444' : '#CBD5E1')}
+                                    bg={isSelected ? '#3B82F6' : 'transparent'}
+                                    jc="center" ai="center"
+                                >
+                                    {isSelected && <Check size={13} color="white" strokeWidth={4} />}
+                                </Circle>
+                            ) : (
+                                <View style={{
+                                    width: 8, height: 8, borderRadius: 4,
+                                    backgroundColor: accentColor,
+                                    opacity: isCritical ? 1 : 0.7
+                                }} />
+                            )}
+
+                            <YStack flex={1} gap="$0.5">
+                                <Text color={colors.textPrimary} fontSize="$4" fontWeight="700" numberOfLines={1}>
+                                    {item.title}
+                                </Text>
+                                <XStack alignItems="center" gap="$1.5">
+                                    {item.repeat_rule && (() => {
+                                        try {
+                                            const rule = JSON.parse(item.repeat_rule!);
+                                            return rule.type && rule.type !== 'none' ? (
+                                                <Repeat size={10} color={colors.textMuted} />
+                                            ) : null;
+                                        } catch { return null; }
+                                    })()}
+                                </XStack>
+                            </YStack>
+
+                            <XStack alignItems="center" gap="$2">
+                                <Animated.View style={{ transform: [{ scale: tickAnim }] }}>
+                                    <Text
+                                        color={isCritical ? colors.critical : (isStrict ? colors.strict : colors.brand)}
+                                        fontSize="$3"
+                                        fontWeight="800"
+                                        fontFamily="$mono"
+                                    >
+                                        {risk.text}
+                                    </Text>
+                                </Animated.View>
+
+                                {!isSelectionMode && (
+                                    <TouchableOpacity
+                                        onPress={() => router.push({ pathname: '/create', params: { id: item.id } })}
+                                        style={{ padding: 6 }}
+                                    >
+                                        <Edit3 size={15} color={colors.textMuted} />
+                                    </TouchableOpacity>
+                                )}
+                            </XStack>
+                        </XStack>
                     </YStack>
-                </XStack>
-            </TouchableOpacity>
+                </TouchableOpacity>
+            </Animated.View>
         );
     };
 
+
     const HeroCard = ({ item }: { item: Reminder }) => {
         const risk = getRiskInfo(item.due_date_ms);
+        const isSelected = selectedReminders.includes(item.id);
         const isCritical = item.control_level === 'critical';
         const isStrict = item.control_level === 'strict';
 
-        // Definir color de fondo del header basado en nivel
-        const headerBg = isCritical ? colors.critical : (isStrict ? colors.strict : colors.brand);
-        const headerTextColor = (isCritical || isStrict || theme === 'dark') ? 'white' : 'white'; // Forzar blanco en headers de color para contraste
+        const accentColor = isCritical ? colors.critical : (isStrict ? colors.strict : colors.brand);
+        const cardBg = theme === 'dark' ? '#0F0F0F' : '#FFFFFF';
+
+        // --- ANIMACIÓN 3: TIC-TAC (MÁS SUTIL) ---
+        const tickAnim = useRef(new Animated.Value(1)).current;
+        useEffect(() => {
+            if (!isSelectionMode) {
+                const tick = Animated.loop(
+                    Animated.sequence([
+                        Animated.timing(tickAnim, { toValue: 1.06, duration: 1500, useNativeDriver: true }),
+                        Animated.timing(tickAnim, { toValue: 1, duration: 1500, useNativeDriver: true })
+                    ])
+                );
+                tick.start();
+                return () => tick.stop();
+            }
+        }, [isSelectionMode]);
 
         return (
-            <TouchableOpacity activeOpacity={0.9} onPress={() => setDetailReminder(item)}>
-                <YStack
-                    mb="$6"
-                    mt="$2"
-                    backgroundColor={colors.surface}
-                    borderRadius="$6"
-                    borderWidth={2}
-                    borderColor={headerBg}
-                    elevation={8}
-                    overflow="hidden"
+            <Animated.View
+                style={{
+                    marginBottom: 32, // Más espacio para la sombra profunda
+                    marginTop: 4,
+                }}
+            >
+                <TouchableOpacity
+                    activeOpacity={0.88}
+                    onPress={() => handlePress(item.id)}
+                    onLongPress={() => handleLongPress(item.id)}
                 >
-                    {/* Header de la Tarjeta con el Color del Tipo */}
-                    <XStack
-                        paddingHorizontal="$4"
-                        paddingVertical="$2"
-                        backgroundColor={headerBg}
-                        justifyContent="space-between"
-                        alignItems="center"
+                    {/* Contenedor de SOMBRA */}
+                    <YStack
+                        borderRadius={20}
+                        elevation={theme === 'dark' ? 0 : 15}
+                        shadowColor={accentColor}
+                        shadowRadius={40}
+                        shadowOffset={{ width: 0, height: 12 }}
+                        shadowOpacity={theme === 'dark' ? 0.35 : 0.1}
+                        backgroundColor="transparent"
                     >
-                        <XStack alignItems="center" gap="$2">
-                            <Text
-                                fontSize="$1"
-                                fontWeight="900"
-                                color="white"
-                                textTransform="uppercase"
-                                letterSpacing={1}
-                            >
-                                {item.control_level}
-                            </Text>
-                        </XStack>
-
-                        <XStack alignItems="center" gap="$1.5">
-                            <Clock size={12} color="white" />
-                            <Text
-                                fontSize="$1"
-                                fontWeight="800"
-                                color="white"
-                                fontFamily="$mono"
-                            >
-                                {risk.isOverdue ? 'VENCIDO ' : 'FALTAN '}
-                                {risk.text}
-                            </Text>
-                        </XStack>
-                    </XStack>
-
-                    {/* Contenido Principal (Blanco o Negro según tema) */}
-                    <YStack padding="$4" pt="$3">
-                        <Text
-                            fontSize="$2"
-                            fontWeight="900"
-                            color={headerBg}
-                            textTransform="uppercase"
-                            letterSpacing={2}
-                            mb="$1"
+                        {/* Contenedor de CONTENIDO */}
+                        <YStack
+                            backgroundColor={isSelected ? (theme === 'dark' ? '#1E293B' : '#EFF6FF') : cardBg}
+                            borderRadius={20}
+                            borderWidth={1}
+                            borderColor={isSelected ? '#3B82F6' : (theme === 'dark' ? '#1A1A1A' : '#F1F5F9')}
+                            overflow="hidden"
+                            opacity={isSelectionMode && !isSelected ? 0.6 : 1}
+                            position="relative"
                         >
-                            PRÓXIMO OBJETIVO
-                        </Text>
-                        <H2
-                            color={colors.textPrimary}
-                            fontWeight="900"
-                            fontSize="$7"
-                            lineHeight="$8"
-                        >
-                            {item.title}
-                        </H2>
+                            <View style={{ height: 4, backgroundColor: accentColor, width: '100%' }} />
+
+                            <YStack padding="$5" gap="$3">
+                                <XStack justifyContent="space-between" alignItems="center">
+                                    <XStack alignItems="center" gap="$2">
+                                        {isSelectionMode && (
+                                            <Circle size={18} bw={2} bc={isSelected ? '#3B82F6' : (theme === 'dark' ? '#444' : '#CBD5E1')} bg={isSelected ? '#3B82F6' : 'transparent'} jc="center" ai="center">
+                                                {isSelected && <Check size={10} color="white" strokeWidth={4} />}
+                                            </Circle>
+                                        )}
+                                        <View style={{ backgroundColor: accentColor + '20', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6, borderWidth: 1, borderColor: accentColor + '40' }}>
+                                            <Text color={accentColor} fontSize={10} fontWeight="800" textTransform="uppercase" letterSpacing={1.2}>
+                                                {t('home.next_objective')}
+                                            </Text>
+                                        </View>
+                                        {item.repeat_rule && (() => {
+                                            try {
+                                                const rule = JSON.parse(item.repeat_rule!);
+                                                return rule.type && rule.type !== 'none' ? (
+                                                    <Repeat size={12} color={accentColor} opacity={0.7} />
+                                                ) : null;
+                                            } catch { return null; }
+                                        })()}
+                                    </XStack>
+
+                                    <XStack alignItems="center" gap="$1">
+                                        <Animated.View style={{ transform: [{ scale: tickAnim }], flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                                            <Clock size={11} color={accentColor} />
+                                            <Text color={accentColor} fontSize={12} fontWeight="800" fontFamily="$mono">
+                                                {risk.text}
+                                            </Text>
+                                        </Animated.View>
+                                    </XStack>
+                                </XStack>
+
+                                <H2 color={colors.textPrimary} fontWeight="900" fontSize="$7" lineHeight={36} numberOfLines={2}>
+                                    {item.title}
+                                </H2>
+
+                                {item.description ? (
+                                    <Text
+                                        color={colors.textSecondary}
+                                        fontSize="$3"
+                                        lineHeight={20}
+                                        numberOfLines={3}
+                                        opacity={0.8}
+                                        marginTop="$-2"
+                                    >
+                                        {item.description.replace(/<[^>]*>/g, '')} {/* Strip HTML tags if any */}
+                                    </Text>
+                                ) : null}
+
+                                {/* Miniaturas de Imágenes */}
+                                {(() => {
+                                    if (!item.attachments) return null;
+                                    try {
+                                        const atts = JSON.parse(item.attachments);
+                                        if (!Array.isArray(atts) || atts.length === 0) return null;
+
+                                        const images = atts.filter((att: any) => {
+                                            const uri = typeof att === 'string' ? att : att.uri;
+                                            return uri && (uri.toLowerCase().match(/\.(jpg|jpeg|png|gif|webp|heic)$/i) || uri.startsWith('data:image') || uri.startsWith('file://'));
+                                        });
+
+                                        if (images.length === 0) return null;
+
+                                        return (
+                                            <XStack gap="$2" marginTop="$2" flexWrap="wrap">
+                                                {images.slice(0, 4).map((att: any, idx: number) => {
+                                                    const uri = typeof att === 'string' ? att : att.uri;
+                                                    return (
+                                                        <Image
+                                                            key={idx}
+                                                            source={{ uri }}
+                                                            style={{
+                                                                width: 50,
+                                                                height: 50,
+                                                                borderRadius: 8,
+                                                                backgroundColor: theme === 'dark' ? '#222' : '#eee',
+                                                                borderWidth: 1,
+                                                                borderColor: theme === 'dark' ? '#333' : '#ddd'
+                                                            }}
+                                                        />
+                                                    );
+                                                })}
+                                                {images.length > 4 && (
+                                                    <YStack
+                                                        width={50}
+                                                        height={50}
+                                                        borderRadius={8}
+                                                        backgroundColor={theme === 'dark' ? '#222' : '#eee'}
+                                                        justifyContent="center"
+                                                        alignItems="center"
+                                                        borderWidth={1}
+                                                        borderColor={theme === 'dark' ? '#333' : '#ddd'}
+                                                    >
+                                                        <Text fontSize="$1" fontWeight="800" color={colors.textSecondary}>
+                                                            +{images.length - 4}
+                                                        </Text>
+                                                    </YStack>
+                                                )}
+                                            </XStack>
+                                        );
+                                    } catch { return null; }
+                                })()}
+                            </YStack>
+                        </YStack>
                     </YStack>
-                </YStack>
-            </TouchableOpacity>
+                </TouchableOpacity>
+            </Animated.View>
         );
     };
 
     const ListHeader = () => (
         <YStack>
-            <XStack justifyContent="space-between" alignItems="flex-end" mb="$5">
-                <XStack gap="$4">
-                    <Text fontSize="$2" color={colors.textSecondary} fontWeight="600">{listData.stats.completedToday} completados</Text>
-                    {listData.stats.overdueCount > 0 && <Text fontSize="$2" color={colors.critical} fontWeight="800">{listData.stats.overdueCount} vencidos</Text>}
+            {isSelectionMode ? (
+                <XStack justifyContent="space-between" alignItems="center" mb="$5" backgroundColor="$blue2" p="$2" borderRadius="$4">
+                    <XStack ai="center" gap="$3">
+                        <TouchableOpacity onPress={() => setSelectedReminders([])}>
+                            <X size={20} color="$blue9" />
+                        </TouchableOpacity>
+                        <Text fontWeight="800" color="$blue9">{selectedReminders.length} {t('home.selected')}</Text>
+                    </XStack>
+                    <XStack gap="$2">
+                        <Button size="$2" chromeless onPress={selectAll}>
+                            <Text color="$blue9" fontWeight="700">{t('home.all')}</Text>
+                        </Button>
+                        <TouchableOpacity onPress={handleDeleteSelected}>
+                            <YStack bg="$red3" p="$2" borderRadius="$3">
+                                <Trash2 size={20} color="$red9" />
+                            </YStack>
+                        </TouchableOpacity>
+                    </XStack>
                 </XStack>
-                <TouchableOpacity onPress={() => router.push('/history')}>
-                    <History size={20} color={colors.textSecondary} />
-                </TouchableOpacity>
-            </XStack>
-
-            {nextNow ? <HeroCard item={nextNow} /> : (
-                <YStack mb="$6" padding="$6" backgroundColor={colors.surface} borderRadius="$6" borderStyle="dashed" borderWidth={2} borderColor={colors.border} alignItems="center">
-                    <Activity size={32} color={colors.textMuted} mb="$2" />
-                    <Text fontSize="$3" fontWeight="800" color={colors.textSecondary} textTransform="uppercase" letterSpacing={1}>
-                        EN CALMA
-                    </Text>
-                </YStack>
+            ) : (
+                <XStack justifyContent="space-between" alignItems="flex-end" mb="$5">
+                    <XStack gap="$4">
+                        <Text fontSize="$2" color={colors.textSecondary} fontWeight="600">{listData.stats.completedToday} {t('home.completed')}</Text>
+                        {listData.stats.overdueCount > 0 && <Text fontSize="$2" color={colors.critical} fontWeight="800">{listData.stats.overdueCount} {t('home.overdue')}</Text>}
+                    </XStack>
+                    <TouchableOpacity onPress={() => router.push('/history')}>
+                        <History size={20} color={colors.brand} />
+                    </TouchableOpacity>
+                </XStack>
             )}
+
+            {nextNow ? <HeroCard item={nextNow} /> :
+                !nextNow ? (
+                    <YStack mb="$6" padding="$6" backgroundColor={colors.surface} borderRadius="$6" borderStyle="dashed" borderWidth={2} borderColor={colors.border} alignItems="center">
+                        <Activity size={32} color={colors.textMuted} mb="$2" />
+                        <Text fontSize="$3" fontWeight="800" color={colors.textSecondary} textTransform="uppercase" letterSpacing={1}>
+                            {t('home.in_calm')}
+                        </Text>
+                    </YStack>
+                ) : null}
         </YStack>
     );
 
@@ -331,17 +604,13 @@ export default function HomeScreen() {
 
     const ListEmptyComponent = () => (
         <YStack flex={1} justifyContent="center" alignItems="center" py="$10" opacity={0.6}>
-            <Paragraph color={colors.textSecondary} textAlign="center">No hay nada que requiera tu atención inmediata.</Paragraph>
+            <Paragraph color={colors.textSecondary} textAlign="center">{t('home.no_attention')}</Paragraph>
         </YStack>
     );
 
     return (
         <View style={{ flex: 1, backgroundColor: colors.bg }}>
-            {hasCriticalActive && (
-                <View height={3} backgroundColor={colors.critical} width="100%" />
-            )}
-
-            <View style={{ flex: 1, paddingHorizontal: 20 }}>
+            <View style={{ flex: 1 }}>
                 <FlashList
                     data={listData.data}
                     renderItem={renderItem}
@@ -349,7 +618,7 @@ export default function HomeScreen() {
                     ListHeaderComponent={ListHeader}
                     ListEmptyComponent={listData.data.length === 0 && !nextNow ? ListEmptyComponent : null}
                     showsVerticalScrollIndicator={false}
-                    contentContainerStyle={{ paddingBottom: 100, paddingTop: 10 }}
+                    contentContainerStyle={{ paddingBottom: 100, paddingTop: 10, paddingHorizontal: 20 }}
                 />
             </View>
 
@@ -363,23 +632,130 @@ export default function HomeScreen() {
                 >
                     <Button
                         size="$2"
-                        backgroundColor={theme === 'dark' ? 'rgba(239, 68, 68, 0.15)' : 'rgba(225, 29, 72, 0.08)'}
-                        borderColor={colors.critical}
+                        backgroundColor={theme === 'dark' ? 'rgba(255, 255, 255, 0.05)' : 'white'}
+                        borderColor={colors.border}
                         borderWidth={1}
                         borderRadius="$10"
                         onPress={async () => {
                             const overdue = reminders.filter(r => isPast(r.due_date_ms) && r.status === 'pending');
                             for (const r of overdue) await snoozeReminder(r.id, 10, true);
                         }}
-                        icon={<Zap size={14} color={colors.critical} />}
+                        icon={<Zap size={14} color={colors.brand} />}
                         pressStyle={{ scale: 0.95, opacity: 0.8 }}
+                        elevation={theme === 'dark' ? 0 : 2}
+                        shadowColor={colors.brand}
+                        shadowOpacity={0.15}
+                        shadowRadius={8}
                     >
-                        <Text color={colors.critical} fontWeight="700" fontSize="$1" letterSpacing={0.5}>
-                            POSPONER VENCIDOS (10m)
+                        <Text color={colors.brand} fontWeight="700" fontSize="$1" letterSpacing={0.5}>
+                            {t('home.snooze_overdue')}
                         </Text>
                     </Button>
                 </XStack>
             )}
+
+            {/* Modal de confirmación de eliminación masiva */}
+            <AnimatePresence>
+                {isBulkDeleteConfirmVisible && (
+                    <Portal key="bulk-delete-portal">
+                        <YStack
+                            {...StyleSheet.absoluteFillObject}
+                            zIndex={20000}
+                            justifyContent="center"
+                            alignItems="center"
+                            px="$6"
+                            // @ts-ignore
+                            enterStyle={{ opacity: 0 }}
+                            exitStyle={{ opacity: 0 }}
+                            animation="quick"
+                        >
+                            {/* Blur Background */}
+                            <BlurView
+                                tint={theme === 'dark' ? 'dark' : 'light'}
+                                intensity={20}
+                                experimentalBlurMethod="dimezisBlurView"
+                                style={StyleSheet.absoluteFill}
+                            />
+
+                            {/* Fondo oscurecido */}
+                            <YStack
+                                {...StyleSheet.absoluteFillObject}
+                                backgroundColor={theme === 'dark' ? 'rgba(0,0,0,0.6)' : 'rgba(0,0,0,0.2)'}
+                                onPress={() => setIsBulkDeleteConfirmVisible(false)}
+                            />
+
+                            {/* Tarjeta del modal */}
+                            <YStack
+                                backgroundColor={colors.surface}
+                                borderRadius="$6"
+                                p="$6"
+                                w="100%"
+                                maxWidth={340}
+                                gap="$5"
+                                elevation={20}
+                                borderWidth={1}
+                                borderColor={colors.border}
+                                // @ts-ignore
+                                enterStyle={{ opacity: 0, scale: 0.9, y: 20 }}
+                                exitStyle={{ opacity: 0, scale: 0.9, y: 20 }}
+                                animation="quick"
+                            >
+
+                                {/* Texto */}
+                                <YStack gap="$2" ai="center">
+                                    <Text
+                                        fontSize="$7"
+                                        fontWeight="900"
+                                        color={colors.textPrimary}
+                                        ta="center"
+                                        letterSpacing={-0.5}
+                                    >
+                                        {selectedReminders.length === 1
+                                            ? t('home.delete_confirm', { count: 1 })
+                                            : t('home.delete_confirm_plural', { count: selectedReminders.length })}
+                                    </Text>
+                                    <Text
+                                        fontSize="$4"
+                                        color={colors.textSecondary}
+                                        ta="center"
+                                        lineHeight={20}
+                                    >
+                                        {t('home.delete_desc')}
+                                    </Text>
+                                </YStack>
+
+                                {/* Botones */}
+                                <XStack gap="$3">
+                                    <Button
+                                        flex={1}
+                                        height={50}
+                                        backgroundColor={theme === 'dark' ? colors.border : '#f1f5f9'}
+                                        borderRadius="$10"
+                                        onPress={() => setIsBulkDeleteConfirmVisible(false)}
+                                        pressStyle={{ scale: 0.97, opacity: 0.8 }}
+                                    >
+                                        <Text color={colors.textPrimary} fontWeight="700" fontSize="$4">{t('home.cancel')}</Text>
+                                    </Button>
+                                    <Button
+                                        flex={1}
+                                        height={50}
+                                        backgroundColor={colors.critical}
+                                        borderRadius="$10"
+                                        pressStyle={{ scale: 0.97, opacity: 0.9 }}
+                                        onPress={async () => {
+                                            setIsBulkDeleteConfirmVisible(false);
+                                            await deleteReminders(selectedReminders);
+                                            setSelectedReminders([]);
+                                        }}
+                                    >
+                                        <Text color="white" fontWeight="900" fontSize="$4">{t('home.delete')}</Text>
+                                    </Button>
+                                </XStack>
+                            </YStack>
+                        </YStack>
+                    </Portal>
+                )}
+            </AnimatePresence>
 
             {/* Modal de Detalle con Animación Nativa Directa (Siguiendo tu Guía) */}
             <AnimatePresence>
@@ -668,7 +1044,7 @@ export default function HomeScreen() {
                                                     letterSpacing={0.5}
                                                     textTransform="uppercase"
                                                 >
-                                                    Listo
+                                                    {t('common.done')}
                                                 </Text>
                                             </Button>
 
@@ -717,10 +1093,10 @@ export default function HomeScreen() {
 
                                                         <YStack alignItems="center" gap="$2">
                                                             <Text fontSize="$6" fontWeight="900" color={colors.textPrimary} textAlign="center">
-                                                                ¿Eliminar recordatorio?
+                                                                {t('home.delete_reminder_q')}
                                                             </Text>
                                                             <Text fontSize="$3" color={colors.textSecondary} textAlign="center">
-                                                                Esta acción no se puede deshacer.
+                                                                {t('home.action_irreversible')}
                                                             </Text>
                                                         </YStack>
 
@@ -734,7 +1110,7 @@ export default function HomeScreen() {
                                                                 borderRadius="$10"
                                                                 onPress={() => setIsDeleteConfirmVisible(false)}
                                                             >
-                                                                <Text color={colors.textSecondary} fontWeight="700">Cancelar</Text>
+                                                                <Text color={colors.textSecondary} fontWeight="700">{t('home.cancel')}</Text>
                                                             </Button>
                                                             <Button
                                                                 flex={1}
@@ -747,7 +1123,7 @@ export default function HomeScreen() {
                                                                     setDetailReminder(null);
                                                                 }}
                                                             >
-                                                                <Text color="white" fontWeight="900">ELIMINAR</Text>
+                                                                <Text color="white" fontWeight="900">{t('home.delete')}</Text>
                                                             </Button>
                                                         </XStack>
                                                     </YStack>

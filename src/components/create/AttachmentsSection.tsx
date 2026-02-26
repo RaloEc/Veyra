@@ -1,6 +1,7 @@
 import { ScrollView, TouchableOpacity, StyleSheet } from 'react-native';
 import { YStack, XStack, Label, Text } from 'tamagui';
 import { Image as ImageIcon, Camera, FilePlus2, FileText, Trash } from '@tamagui/lucide-icons';
+import { useTranslation } from 'react-i18next';
 
 interface AttachmentsSectionProps {
     attachments: { uri: string; name: string }[];
@@ -21,13 +22,14 @@ export function AttachmentsSection({
     removeAttachment,
     isDark
 }: AttachmentsSectionProps) {
+    const { t } = useTranslation();
 
     return (
         <YStack gap="$3">
             <XStack justifyContent="space-between" alignItems="center">
                 <XStack alignItems="center" gap="$2">
                     <ImageIcon size={18} color="$green10" />
-                    <Label fontWeight="600" fontSize="$3" color={isDark ? '$gray9' : '$gray10'}>Multimedia</Label>
+                    <Label fontWeight="600" fontSize="$3" color={isDark ? '$gray9' : '$gray10'}>{t('create.sections.multimedia')}</Label>
                 </XStack>
                 <Text fontSize="$2" fontWeight="600" color={attachments.length >= MAX_ATTACHMENTS ? '$red10' : '$gray10'}>
                     {attachments.length} / {MAX_ATTACHMENTS}
@@ -37,15 +39,15 @@ export function AttachmentsSection({
             <XStack gap="$3" flexWrap="wrap">
                 <TouchableOpacity onPress={() => pickImage(true)} disabled={attachments.length >= MAX_ATTACHMENTS} style={[styles.attachBtn, isDark && styles.attachBtnDark]}>
                     <Camera size={20} color={isDark ? '#aaa' : '#666'} />
-                    <Text fontSize="$1" fontWeight="600" mt="$1" color={isDark ? '#aaa' : '#666'}>Cámara</Text>
+                    <Text fontSize="$1" fontWeight="600" mt="$1" color={isDark ? '#aaa' : '#666'}>{t('create.multimedia.camera')}</Text>
                 </TouchableOpacity>
                 <TouchableOpacity onPress={() => pickImage(false)} disabled={attachments.length >= MAX_ATTACHMENTS} style={[styles.attachBtn, isDark && styles.attachBtnDark]}>
                     <ImageIcon size={20} color={isDark ? '#aaa' : '#666'} />
-                    <Text fontSize="$1" fontWeight="600" mt="$1" color={isDark ? '#aaa' : '#666'}>Galería</Text>
+                    <Text fontSize="$1" fontWeight="600" mt="$1" color={isDark ? '#aaa' : '#666'}>{t('create.multimedia.gallery')}</Text>
                 </TouchableOpacity>
                 <TouchableOpacity onPress={() => pickDocument()} disabled={attachments.length >= MAX_ATTACHMENTS} style={[styles.attachBtn, isDark && styles.attachBtnDark]}>
                     <FilePlus2 size={20} color={isDark ? '#aaa' : '#666'} />
-                    <Text fontSize="$1" fontWeight="600" mt="$1" color={isDark ? '#aaa' : '#666'}>Archivo</Text>
+                    <Text fontSize="$1" fontWeight="600" mt="$1" color={isDark ? '#aaa' : '#666'}>{t('create.multimedia.file')}</Text>
                 </TouchableOpacity>
             </XStack>
 

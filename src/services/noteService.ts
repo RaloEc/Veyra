@@ -8,7 +8,8 @@ export const NoteService = {
         content?: string,
         attachments?: string, // JSON
         links?: string, // JSON
-        isPinned: boolean = false
+        isPinned: boolean = false,
+        userId?: string
     ): Promise<Note> {
         const db = await getDB();
         const id = Crypto.randomUUID();
@@ -27,9 +28,9 @@ export const NoteService = {
         };
 
         await db.runAsync(
-            `INSERT INTO notes (id, title, content, created_at_ms, updated_at_ms, is_pinned, attachments, links, deleted)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [id, title || null, content || null, now, now, isPinned ? 1 : 0, attachments || null, links || null, 0]
+            `INSERT INTO notes (id, user_id, title, content, created_at_ms, updated_at_ms, is_pinned, attachments, links, deleted, last_modified_ms)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [id, userId || null, title || null, content || null, now, now, isPinned ? 1 : 0, attachments || null, links || null, 0, now]
         );
 
         return newNote;
@@ -46,6 +47,13 @@ export const NoteService = {
                 `SELECT * FROM notes WHERE deleted = 0 ORDER BY is_pinned DESC, updated_at_ms DESC`
             );
         }
+    },
+
+    async getDeletedNotes(): Promise<Note[]> {
+        const db = await getDB();
+        return await db.getAllAsync<Note>(
+            `SELECT * FROM notes WHERE deleted = 1 ORDER BY updated_at_ms DESC`
+        );
     },
 
     async getNoteById(id: string): Promise<Note | null> {
@@ -78,6 +86,8 @@ export const NoteService = {
 
         sets.push(`updated_at_ms = ?`);
         params.push(now);
+        sets.push(`last_modified_ms = ?`);
+        params.push(now);
         params.push(id);
 
         await db.runAsync(
@@ -90,8 +100,8 @@ export const NoteService = {
         const db = await getDB();
         const now = Date.now();
         await db.runAsync(
-            `UPDATE notes SET deleted = 1, updated_at_ms = ? WHERE id = ?`,
-            [now, id]
+            `UPDATE notes SET deleted = 1, updated_at_ms = ?, last_modified_ms = ? WHERE id = ?`,
+            [now, now, id]
         );
     },
 
@@ -99,8 +109,8 @@ export const NoteService = {
         const db = await getDB();
         const now = Date.now();
         await db.runAsync(
-            `UPDATE notes SET deleted = 0, updated_at_ms = ? WHERE id = ?`,
-            [now, id]
+            `UPDATE notes SET deleted = 0, updated_at_ms = ?, last_modified_ms = ? WHERE id = ?`,
+            [now, now, id]
         );
     },
 

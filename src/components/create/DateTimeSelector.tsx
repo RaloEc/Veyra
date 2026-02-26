@@ -2,6 +2,7 @@ import { useRef, useEffect } from 'react';
 import { View, TouchableOpacity, Animated } from 'react-native';
 import { YStack, XStack, Label, Text } from 'tamagui';
 import { Calendar, ChevronDown } from '@tamagui/lucide-icons';
+import { useTranslation } from 'react-i18next';
 import { TimeWheel } from '../../components/TimeWheel';
 import { InlineDatePicker } from '../../components/InlineDatePicker';
 
@@ -22,12 +23,13 @@ export function DateTimeSelector({
     animationHeight,
     isDark
 }: DateTimeSelectorProps) {
+    const { t, i18n } = useTranslation();
 
     return (
         <YStack gap="$0">
             <XStack alignItems="center" gap="$2">
                 <Calendar size={18} color="$blue10" />
-                <Label fontWeight="600" fontSize="$3" color={isDark ? '$gray9' : '$gray10'}>Fecha y Hora</Label>
+                <Label fontWeight="600" fontSize="$3" color={isDark ? '$gray9' : '$gray10'}>{t('create.sections.date_time')}</Label>
             </XStack>
 
             {/* Unified Date and Time Card */}
@@ -54,7 +56,7 @@ export function DateTimeSelector({
                         <YStack flex={1} justifyContent="center">
                             <XStack alignItems="center" gap="$2">
                                 <Text fontSize="$6" fontWeight="900" color={isDark ? 'white' : 'black'} textTransform="capitalize">
-                                    {date.toLocaleDateString('es-ES', {
+                                    {date.toLocaleDateString(i18n.language === 'es' ? 'es-ES' : 'en-US', {
                                         weekday: 'short',
                                         day: 'numeric',
                                         month: 'short'

@@ -4,11 +4,13 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useStore } from '../src/store/useStore';
 import { Volume2, Play, Check, AlertOctagon, Zap, Bell, ArrowLeft, StopCircle, Music } from '@tamagui/lucide-icons';
 import { Audio } from 'expo-av';
+import { useTranslation } from 'react-i18next';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { TouchableOpacity, Animated, Easing } from 'react-native';
 import { AVAILABLE_SOUNDS } from '../src/constants/sounds';
 
 export default function SoundSelectorScreen() {
+    const { t } = useTranslation();
     const router = useRouter();
     const params = useLocalSearchParams();
     const level = (params.level as 'normal' | 'strict' | 'critical') || 'normal';
@@ -84,9 +86,9 @@ export default function SoundSelectorScreen() {
 
     const getLevelConfig = () => {
         switch (level) {
-            case 'critical': return { icon: AlertOctagon, color: '$red10', label: 'Crítico', desc: 'Sonidos persistentes e intensos' };
-            case 'strict': return { icon: Zap, color: '$orange10', label: 'Estricto', desc: 'Alertas notables que requieren atención' };
-            default: return { icon: Bell, color: '$blue10', label: 'Normal', desc: 'Notificaciones estándar y sutiles' };
+            case 'critical': return { icon: AlertOctagon, color: '$red10', label: t('sounds.levels.critical.label'), desc: t('sounds.levels.critical.desc') };
+            case 'strict': return { icon: Zap, color: '$orange10', label: t('sounds.levels.strict.label'), desc: t('sounds.levels.strict.desc') };
+            default: return { icon: Bell, color: '$blue10', label: t('sounds.levels.normal.label'), desc: t('sounds.levels.normal.desc') };
         }
     };
 
@@ -101,7 +103,7 @@ export default function SoundSelectorScreen() {
                 <TouchableOpacity onPress={() => router.back()} style={{ padding: 5 }}>
                     <ArrowLeft size={28} color={isDark ? 'white' : 'black'} />
                 </TouchableOpacity>
-                <Text fontSize="$5" fontWeight="700" color={isDark ? 'white' : 'black'}>Elegir Tono</Text>
+                <Text fontSize="$5" fontWeight="700" color={isDark ? 'white' : 'black'}>{t('sounds.title')}</Text>
                 <View style={{ width: 28 }} />
             </XStack>
 
@@ -110,7 +112,7 @@ export default function SoundSelectorScreen() {
                 <XStack style={{ alignItems: 'center', marginBottom: 8 }} gap="$3">
                     <View bg={config.color as any} p="$2" style={{ borderRadius: 10, opacity: 0.2, position: 'absolute', width: 40, height: 40 }} />
                     <LevelIcon color={config.color as any} size={28} style={{ zIndex: 1 }} />
-                    <H2 fontSize="$8" fontWeight="900" color={isDark ? 'white' : 'black'}>Nivel {config.label}</H2>
+                    <H2 fontSize="$8" fontWeight="900" color={isDark ? 'white' : 'black'}>{t('sounds.level_title', { label: config.label })}</H2>
                 </XStack>
                 <Text fontSize="$4" color="$gray10" style={{ lineHeight: 22 }}>{config.desc}</Text>
             </YStack>

@@ -2,17 +2,20 @@ import { View, YStack, XStack, Text, H2, Button, ScrollView, Switch } from 'tama
 import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useStore } from '../src/store/useStore';
-import { Bell, Moon, Sun, Globe, Volume2, Zap, Clock, Battery, AlertOctagon, ChevronRight } from '@tamagui/lucide-icons';
+import { Bell, Moon, Sun, Globe, Volume2, Zap, Clock, Battery, AlertOctagon, ChevronRight, Cloud, RefreshCw, Palette, Check } from '@tamagui/lucide-icons';
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Platform, Linking, TouchableOpacity } from 'react-native';
 import * as IntentLauncher from 'expo-intent-launcher';
 import * as Application from 'expo-application';
 import { getSoundName } from '../src/constants/sounds';
 import Constants from 'expo-constants';
+import { ACCENT_OPTIONS, AccentTheme } from '../src/theme/accentColors';
 
 export default function SettingsScreen() {
     const router = useRouter();
-    const { theme, toggleTheme, defaultControlLevel, setDefaultControlLevel, soundSettings } = useStore();
+    const { t } = useTranslation();
+    const { theme, toggleTheme, defaultControlLevel, setDefaultControlLevel, soundSettings, language, setLanguage, cloudSyncEnabled, setCloudSyncEnabled, isSyncing, lastSyncTime, syncError, triggerSync, session, accentTheme, setAccentTheme } = useStore();
     const [notificationsEnabled, setNotificationsEnabled] = useState(true);
     const [soundEnabled, setSoundEnabled] = useState(true);
 
@@ -29,9 +32,9 @@ export default function SettingsScreen() {
     };
 
     const controlLevels = [
-        { value: 'normal', label: 'Normal', color: isDark ? '#22c55e' : '#10B981' },
-        { value: 'strict', label: 'Estricto', color: isDark ? '#eab308' : '#F59E0B' },
-        { value: 'critical', label: 'Crítico', color: isDark ? '#ef4444' : '#E11D48' },
+        { value: 'normal', label: t('settings.normal'), color: isDark ? '#22c55e' : '#10B981' },
+        { value: 'strict', label: t('settings.strict'), color: isDark ? '#eab308' : '#F59E0B' },
+        { value: 'critical', label: t('settings.critical'), color: isDark ? '#ef4444' : '#E11D48' },
     ];
 
     const openAppSettings = async () => {
@@ -63,7 +66,7 @@ export default function SettingsScreen() {
                         color={colors.textPrimary}
                         letterSpacing={-0.5}
                     >
-                        Ajustes
+                        {t('settings.title')}
                     </H2>
 
                     {/* Advertencia de Batería Android */}
@@ -86,14 +89,14 @@ export default function SettingsScreen() {
                                         fontSize="$4"
                                         mb="$1"
                                     >
-                                        Optimización de Batería
+                                        {t('settings.battery_optimization')}
                                     </Text>
                                     <Text
                                         color={isDark ? '#d4d4d4' : '#64748B'}
                                         fontSize="$3"
                                         lineHeight={18}
                                     >
-                                        Desactiva las restricciones para garantizar que las alarmas suenen.
+                                        {t('settings.battery_desc')}
                                     </Text>
                                 </YStack>
                                 <ChevronRight size={18} color={isDark ? '#a1a1a1' : '#94A3B8'} />
@@ -111,12 +114,12 @@ export default function SettingsScreen() {
                             letterSpacing={1.2}
                             mb="$1"
                         >
-                            GENERAL
+                            {t('settings.general')}
                         </Text>
 
                         <SettingsItem
                             icon={theme === 'dark' ? Moon : Sun}
-                            label="Modo Oscuro"
+                            label={t('settings.dark_mode')}
                             iconColor={theme === 'dark' ? '#a78bfa' : '#eab308'}
                             rightElement={
                                 <Switch
@@ -134,21 +137,80 @@ export default function SettingsScreen() {
 
                         <SettingsItem
                             icon={Globe}
-                            label="Idioma"
-                            value="Español"
+                            label={t('settings.language')}
+                            value={language === 'es' ? t('settings.spanish') : t('settings.english')}
                             iconColor="#10b981"
+                            onPress={() => setLanguage(language === 'es' ? 'en' : 'es')}
                             isDark={isDark}
                             colors={colors}
                         />
 
                         <SettingsItem
                             icon={Clock}
-                            label="Formato de Hora"
-                            value="24 horas"
+                            label={t('settings.time_format_label')}
+                            value={t('settings.hours_format')}
                             iconColor="#3b82f6"
                             isDark={isDark}
                             colors={colors}
                         />
+                    </YStack>
+
+                    {/* Sección: Tema de Color */}
+                    <YStack gap="$3">
+                        <Text
+                            fontSize="$2"
+                            color={colors.textMuted}
+                            textTransform="uppercase"
+                            fontWeight="800"
+                            letterSpacing={1.2}
+                            mb="$1"
+                        >
+                            {t('settings.accent_theme')}
+                        </Text>
+
+                        <YStack
+                            backgroundColor={colors.surface}
+                            borderRadius="$5"
+                            borderWidth={1}
+                            borderColor={colors.border}
+                            padding="$4"
+                        >
+                            <XStack justifyContent="space-between" alignItems="center">
+                                {ACCENT_OPTIONS.map((option) => {
+                                    const isActive = accentTheme === option.key;
+                                    const displayColor = isDark ? option.darkColor : option.lightColor;
+                                    return (
+                                        <TouchableOpacity
+                                            key={option.key}
+                                            onPress={() => setAccentTheme(option.key)}
+                                            activeOpacity={0.7}
+                                            style={{ alignItems: 'center', gap: 6 }}
+                                        >
+                                            <View
+                                                width={isActive ? 42 : 36}
+                                                height={isActive ? 42 : 36}
+                                                borderRadius={isActive ? 21 : 18}
+                                                backgroundColor={displayColor}
+                                                borderWidth={isActive ? 3 : 0}
+                                                borderColor={isDark ? 'white' : '#0c0a09'}
+                                                justifyContent="center"
+                                                alignItems="center"
+                                                style={{ opacity: isActive ? 1 : 0.7 }}
+                                            >
+                                                {isActive && <Check size={18} color="white" strokeWidth={3} />}
+                                            </View>
+                                            <Text
+                                                fontSize={10}
+                                                fontWeight={isActive ? "800" : "500"}
+                                                color={isActive ? displayColor : colors.textMuted}
+                                            >
+                                                {t(`settings.accent_${option.key}`)}
+                                            </Text>
+                                        </TouchableOpacity>
+                                    );
+                                })}
+                            </XStack>
+                        </YStack>
                     </YStack>
 
                     {/* Sección: Notificaciones */}
@@ -161,12 +223,12 @@ export default function SettingsScreen() {
                             letterSpacing={1.2}
                             mb="$1"
                         >
-                            NOTIFICACIONES
+                            {t('settings.notifications')}
                         </Text>
 
                         <SettingsItem
                             icon={Bell}
-                            label="Notificaciones"
+                            label={t('settings.notifications_label')}
                             iconColor="#3b82f6"
                             rightElement={
                                 <Switch
@@ -185,7 +247,7 @@ export default function SettingsScreen() {
                         {notificationsEnabled && (
                             <SettingsItem
                                 icon={Volume2}
-                                label="Sonido"
+                                label={t('settings.sound')}
                                 iconColor="#a78bfa"
                                 rightElement={
                                     <Switch
@@ -203,6 +265,72 @@ export default function SettingsScreen() {
                         )}
                     </YStack>
 
+                    {/* Sección: Sincronización en la Nube */}
+                    {session && (
+                        <YStack gap="$3">
+                            <Text
+                                fontSize="$2"
+                                color={colors.textMuted}
+                                textTransform="uppercase"
+                                fontWeight="800"
+                                letterSpacing={1.2}
+                                mb="$1"
+                            >
+                                {t('settings.cloud_sync')}
+                            </Text>
+
+                            <SettingsItem
+                                icon={Cloud}
+                                label={t('settings.cloud_sync_toggle')}
+                                iconColor="#0ea5e9"
+                                rightElement={
+                                    <Switch
+                                        checked={cloudSyncEnabled}
+                                        onCheckedChange={setCloudSyncEnabled}
+                                        size="$3"
+                                        backgroundColor={cloudSyncEnabled ? '$blue8' : '$gray5'}
+                                    >
+                                        <Switch.Thumb animation="quicker" />
+                                    </Switch>
+                                }
+                                isDark={isDark}
+                                colors={colors}
+                            />
+
+                            {cloudSyncEnabled && (
+                                <>
+                                    <SettingsItem
+                                        icon={RefreshCw}
+                                        label={t('settings.sync_now')}
+                                        value={isSyncing ? t('settings.syncing') : (lastSyncTime ? new Date(lastSyncTime).toLocaleTimeString() : t('settings.never'))}
+                                        iconColor={isSyncing ? '#a1a1a1' : '#22c55e'}
+                                        onPress={isSyncing ? undefined : triggerSync}
+                                        isDark={isDark}
+                                        colors={colors}
+                                    />
+
+                                    {syncError && (
+                                        <XStack
+                                            backgroundColor={isDark ? 'rgba(239, 68, 68, 0.08)' : 'rgba(239, 68, 68, 0.05)'}
+                                            padding="$3"
+                                            borderRadius="$4"
+                                            borderWidth={1}
+                                            borderColor={isDark ? 'rgba(239, 68, 68, 0.3)' : 'rgba(239, 68, 68, 0.2)'}
+                                        >
+                                            <Text
+                                                color="#ef4444"
+                                                fontSize="$2"
+                                                fontWeight="600"
+                                            >
+                                                {syncError}
+                                            </Text>
+                                        </XStack>
+                                    )}
+                                </>
+                            )}
+                        </YStack>
+                    )}
+
                     {/* Sección: Tonos de Recordatorio */}
                     {notificationsEnabled && soundEnabled && (
                         <YStack gap="$3">
@@ -214,12 +342,12 @@ export default function SettingsScreen() {
                                 letterSpacing={1.2}
                                 mb="$1"
                             >
-                                TONOS
+                                {t('settings.tones')}
                             </Text>
 
                             <SettingsItem
                                 icon={Bell}
-                                label="Normal"
+                                label={t('settings.normal')}
                                 value={getSoundName(soundSettings.normal)}
                                 iconColor="#22c55e"
                                 onPress={() => router.push({ pathname: '/sounds', params: { level: 'normal' } })}
@@ -230,7 +358,7 @@ export default function SettingsScreen() {
 
                             <SettingsItem
                                 icon={Zap}
-                                label="Estricto"
+                                label={t('settings.strict')}
                                 value={getSoundName(soundSettings.strict)}
                                 iconColor="#f59e0b"
                                 onPress={() => router.push({ pathname: '/sounds', params: { level: 'strict' } })}
@@ -241,7 +369,7 @@ export default function SettingsScreen() {
 
                             <SettingsItem
                                 icon={AlertOctagon}
-                                label="Crítico"
+                                label={t('settings.critical')}
                                 value={getSoundName(soundSettings.critical)}
                                 iconColor="#ef4444"
                                 onPress={() => router.push({ pathname: '/sounds', params: { level: 'critical' } })}
@@ -262,7 +390,7 @@ export default function SettingsScreen() {
                             letterSpacing={1.2}
                             mb="$1"
                         >
-                            NIVEL DE CONTROL
+                            {t('settings.control_level')}
                         </Text>
 
                         <YStack
@@ -341,7 +469,7 @@ export default function SettingsScreen() {
                         opacity={0.5}
                         mt="$4"
                     >
-                        Versión {Constants.expoConfig?.version || '1.0.0'} ({Platform.OS})
+                        {t('settings.version')} {Constants.expoConfig?.version || '1.0.0'} ({Platform.OS})
                     </Text>
                 </YStack>
             </ScrollView>

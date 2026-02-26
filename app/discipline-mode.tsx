@@ -5,15 +5,19 @@ import { Shield, Zap, AlertTriangle, Lock, Clock, ChevronLeft } from '@tamagui/l
 import { useState } from 'react';
 import { TouchableOpacity, OpaqueColorValue } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useTranslation } from 'react-i18next';
+import { useAccentColor } from '../src/theme/accentColors';
 
 export default function DisciplineModeScreen() {
     const router = useRouter();
     const insets = useSafeAreaInsets();
+    const { t } = useTranslation();
     const { theme } = useStore();
     const [strictModeActive, setStrictModeActive] = useState(false);
     const [blockSnooze, setBlockSnooze] = useState(false);
     const [maxSnoozes, setMaxSnoozes] = useState(3);
-    const [duration, setDuration] = useState('1 hora');
+    const [duration, setDuration] = useState('1_hour');
+    const { accent } = useAccentColor();
 
     const colors = {
         bg: theme === 'dark' ? '#0a0a0a' : '#F8FAFC',
@@ -21,7 +25,7 @@ export default function DisciplineModeScreen() {
         textPrimary: theme === 'dark' ? '#EDEDED' : '#0c0a09',
         textSecondary: theme === 'dark' ? '#A1A1A1' : '#64748B',
         border: theme === 'dark' ? '#262626' : '#E2E8F0',
-        brand: theme === 'dark' ? '#A1A1A1' : '#64748B',
+        brand: accent,
         strict: (theme === 'dark' ? '#eab308' : '#F59E0B') as any,
         critical: (theme === 'dark' ? '#ef4444' : '#E11D48') as any,
     };
@@ -48,7 +52,7 @@ export default function DisciplineModeScreen() {
                         <ChevronLeft size={20} color={colors.textPrimary as any} />
                     </XStack>
                 </TouchableOpacity>
-                <H2 fow="900" col={colors.textPrimary as any} fos="$6">Modo Estricto</H2>
+                <H2 fow="900" col={colors.textPrimary as any} fos="$6">{t('discipline.title')}</H2>
             </XStack>
 
             <ScrollView
@@ -63,10 +67,10 @@ export default function DisciplineModeScreen() {
                     {/* Intro */}
                     <YStack gap="$1">
                         <Text fos="$3" fow="600" col={colors.textSecondary as any}>
-                            REGLAS ANTI-PROCRASTINACIÓN
+                            {t('discipline.rules_title')}
                         </Text>
                         <Text fos="$4" col={colors.textSecondary as any} o={0.8}>
-                            Configura límites estrictos para asegurar que tus tareas se cumplan sin excusas.
+                            {t('discipline.intro')}
                         </Text>
                     </YStack>
 
@@ -84,11 +88,11 @@ export default function DisciplineModeScreen() {
                                 <XStack gap="$2" ai="center">
                                     <Zap size={18} color={strictModeActive ? colors.strict : colors.textSecondary} />
                                     <Text fos="$5" fow="800" col={colors.textPrimary as any}>
-                                        Estatus del Modo
+                                        {t('discipline.status_card_title')}
                                     </Text>
                                 </XStack>
                                 <Text fos="$2" col={colors.textSecondary as any}>
-                                    {strictModeActive ? 'Presión alta activada' : 'Modo estándar'}
+                                    {strictModeActive ? t('discipline.status_strict') : t('discipline.status_standard')}
                                 </Text>
                             </YStack>
                             <Switch
@@ -110,11 +114,11 @@ export default function DisciplineModeScreen() {
                                 <XStack gap="$2" ai="center">
                                     <AlertTriangle size={14} color={colors.strict} />
                                     <Text fos="$2" fow="800" col={colors.strict}>
-                                        SISTEMA REFORZADO
+                                        {t('discipline.reinforced_system')}
                                     </Text>
                                 </XStack>
                                 <Text fos="$2" col={colors.textSecondary as any} fow="600">
-                                    Seguimientos automáticos cada 15 min y sonidos de alta frecuencia activados.
+                                    {t('discipline.reinforced_desc')}
                                 </Text>
                             </YStack>
                         )}
@@ -127,7 +131,7 @@ export default function DisciplineModeScreen() {
                         <XStack gap="$2" ai="center">
                             <Lock size={18} color={colors.critical} />
                             <Text fos="$4" fow="900" col={colors.textPrimary as any} ttransform="uppercase" lsp={1}>
-                                Restricciones
+                                {t('discipline.restrictions_title')}
                             </Text>
                         </XStack>
 
@@ -142,10 +146,10 @@ export default function DisciplineModeScreen() {
                             <XStack jc="space-between" ai="center">
                                 <YStack f={1}>
                                     <Text fow="700" col={colors.textPrimary as any}>
-                                        Bloqueo total de "Snooze"
+                                        {t('discipline.block_snooze_title')}
                                     </Text>
                                     <Text fos="$2" col={colors.textSecondary as any}>
-                                        Elimina el botón para posponer
+                                        {t('discipline.block_snooze_desc')}
                                     </Text>
                                 </YStack>
                                 <Switch
@@ -162,7 +166,7 @@ export default function DisciplineModeScreen() {
                                     <Separator bc={colors.border as any} />
                                     <YStack gap="$3">
                                         <Text fow="700" col={colors.textPrimary as any}>
-                                            Límite diario de intentos
+                                            {t('discipline.daily_limit_title')}
                                         </Text>
                                         <XStack gap="$2">
                                             {[1, 3, 5].map((num) => (
@@ -202,33 +206,38 @@ export default function DisciplineModeScreen() {
                         <XStack gap="$2" ai="center">
                             <Clock size={18} color="#8B5CF6" />
                             <Text fos="$4" fow="900" col={colors.textPrimary as any} ttransform="uppercase" lsp={1}>
-                                Vigencia del Modo
+                                {t('discipline.mode_validity_title')}
                             </Text>
                         </XStack>
 
                         <XStack gap="$2" fw="wrap">
-                            {['1 hora', '24 horas', '1 semana', 'Indefinido'].map((time) => (
+                            {[
+                                { key: '1_hour', label: t('discipline.durations.1_hour') },
+                                { key: '24_hours', label: t('discipline.durations.24_hours') },
+                                { key: '1_week', label: t('discipline.durations.1_week') },
+                                { key: 'indefinite', label: t('discipline.durations.indefinite') }
+                            ].map((item) => (
                                 <TouchableOpacity
-                                    key={time}
-                                    onPress={() => setDuration(time)}
+                                    key={item.key}
+                                    onPress={() => setDuration(item.key)}
                                     style={{ flex: 1, minWidth: '45%' }}
                                 >
                                     <View
                                         style={{
-                                            backgroundColor: duration === time ? 'rgba(139, 92, 246, 0.1)' : colors.surface,
+                                            backgroundColor: duration === item.key ? 'rgba(139, 92, 246, 0.1)' : colors.surface,
                                             padding: 12,
                                             borderRadius: 8,
                                             alignItems: 'center',
                                             borderWidth: 2,
-                                            borderColor: duration === time ? '#8B5CF6' : colors.border
+                                            borderColor: duration === item.key ? '#8B5CF6' : colors.border
                                         }}
                                     >
                                         <Text
                                             fow="700"
                                             fos="$2"
-                                            col={(duration === time ? '#8B5CF6' : colors.textSecondary) as any}
+                                            col={(duration === item.key ? '#8B5CF6' : colors.textSecondary) as any}
                                         >
-                                            {time}
+                                            {item.label}
                                         </Text>
                                     </View>
                                 </TouchableOpacity>
@@ -245,12 +254,12 @@ export default function DisciplineModeScreen() {
                         onPress={() => router.back()}
                     >
                         <Text col={colors.surface as any} fow="900" lsp={1}>
-                            APLICAR CONFIGURACIÓN
+                            {t('discipline.apply_button')}
                         </Text>
                     </Button>
 
                     <Text fos="$2" col={colors.textSecondary as any} ta="center" o={0.6}>
-                        El Modo Estricto anulará cualquier configuración individual de recordatorios para priorizar el cumplimiento.
+                        {t('discipline.footer_note')}
                     </Text>
                 </YStack>
             </ScrollView>

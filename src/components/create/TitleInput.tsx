@@ -1,5 +1,6 @@
 import { useRef, useEffect } from 'react';
 import { Input, Separator, YStack } from 'tamagui';
+import { useTranslation } from 'react-i18next';
 
 interface TitleInputProps {
     title: string;
@@ -11,6 +12,7 @@ interface TitleInputProps {
 }
 
 export function TitleInput({ title, setTitle, isEditing, isDark, flat, onSubmit }: TitleInputProps) {
+    const { t } = useTranslation();
     const titleInputRef = useRef<any>(null);
 
     useEffect(() => {
@@ -27,7 +29,7 @@ export function TitleInput({ title, setTitle, isEditing, isDark, flat, onSubmit 
                 ref={titleInputRef}
                 value={title}
                 onChangeText={setTitle}
-                placeholder="Título de la nota"
+                placeholder={t('create.placeholder_title')}
                 borderWidth={0}
                 backgroundColor="transparent"
                 fontSize={flat ? 32 : 28}

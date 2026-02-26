@@ -1,24 +1,29 @@
 import { XStack, YStack, Text, Avatar, Button, Separator, AnimatePresence } from 'tamagui';
-import { User, Settings, BarChart3, History, HelpCircle, Crown, Zap, LogOut, Flame, Home, Notebook, Bell } from '@tamagui/lucide-icons';
+import { User, Settings, BarChart3, History, HelpCircle, Crown, Zap, LogOut, Flame, Home, Notebook, Bell, Rocket, Sun, Moon } from '@tamagui/lucide-icons';
 import { useRouter, usePathname } from 'expo-router';
 import { useStore } from '../store/useStore';
 import { useState, useRef, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import { TouchableWithoutFeedback, View, Animated, Dimensions } from 'react-native';
 import { format } from 'date-fns';
-import { es } from 'date-fns/locale';
+import { es, enUS } from 'date-fns/locale';
 import { ComplianceService } from '../services/complianceService';
 import { BlurView } from 'expo-blur';
+import { useAccentColor } from '../theme/accentColors';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
 export function TopBar({ title }: { title?: string }) {
     const router = useRouter();
     const pathname = usePathname();
+    const { t } = useTranslation();
     const theme = useStore(state => state.theme);
+    const toggleTheme = useStore(state => state.toggleTheme);
     const userProfile = useStore(state => state.userProfile);
     const userName = useStore(state => state.userName);
     const signOut = useStore(state => state.signOut);
     const session = useStore(state => state.session);
+    const language = useStore(state => state.language);
     const [isOpen, setIsOpen] = useState(false);
     const [showMenu, setShowMenu] = useState(false);
     const [streak, setStreak] = useState(0);
@@ -61,61 +66,63 @@ export function TopBar({ title }: { title?: string }) {
     }, [isOpen]);
 
     // --- PALETA SEMÁNTICA (Focus & Alarm) ---
+    const { accent } = useAccentColor();
     const colors = {
         surface: theme === 'dark' ? '#171717' : '#FFFFFF',
         textPrimary: theme === 'dark' ? '#EDEDED' : '#0c0a09',
         textSecondary: theme === 'dark' ? '#A1A1A1' : '#64748B',
         border: theme === 'dark' ? '#262626' : '#E2E8F0',
-        brand: theme === 'dark' ? '#A1A1A1' : '#64748B',
+        brand: accent,
     };
 
     const menuItems = [
         {
             icon: Home,
-            label: 'Inicio',
+            label: t('menu.start'),
             route: '/',
             color: colors.brand,
         },
         {
             icon: User,
-            label: 'Mi Perfil',
+            label: t('menu.profile'),
             route: '/profile',
             color: colors.brand,
         },
         {
             icon: Settings,
-            label: 'Ajustes',
+            label: t('menu.settings'),
             route: '/settings',
             color: colors.textSecondary,
         },
         {
             icon: Zap,
-            label: 'Modo Estricto',
+            label: t('menu.strict_mode'),
             route: '/discipline-mode',
             color: '#F59E0B',
         },
         {
             icon: BarChart3,
-            label: 'Estadísticas',
+            label: t('menu.stats'),
             route: '/stats',
             color: '#8B5CF6',
         },
         {
             icon: History,
-            label: 'Historial',
+            label: t('menu.history'),
             route: '/history',
-            color: '#10B981',
+            color: colors.brand,
         },
+
         'separator',
         {
             icon: HelpCircle,
-            label: 'Ayuda',
+            label: t('menu.help'),
             route: '/help',
             color: colors.textSecondary,
         },
         {
             icon: Crown,
-            label: 'Mejorar a Pro',
+            label: t('menu.upgrade'),
             route: '/upgrade',
             color: '#F59E0B',
             badge: 'PRO',
@@ -125,6 +132,7 @@ export function TopBar({ title }: { title?: string }) {
     const handleMenuItemClick = (route: string) => {
         setIsOpen(false);
         if (pathname === route) return;
+
 
         // ESTRATEGIA DE NAVEGACIÓN LIMPIA:
         // Si estamos en el home (/), hacemos push para poder volver.
@@ -142,7 +150,7 @@ export function TopBar({ title }: { title?: string }) {
     };
 
     // Determinar el nombre a mostrar
-    const displayName = userName || (session ? (session.user?.email?.split('@')[0] || 'Usuario') : 'Invitado');
+    const displayName = userName || (session ? (session.user?.email?.split('@')[0] || t('menu.profiles.default')) : t('menu.profiles.default'));
 
     return (
         <XStack
@@ -162,10 +170,10 @@ export function TopBar({ title }: { title?: string }) {
             }}>
                 <YStack>
                     <Text fontSize="$3" fontWeight="900" color={colors.textPrimary} textTransform="capitalize">
-                        Hola, {displayName}
+                        {t('home.hello')}, {displayName}
                     </Text>
                     <Text fontSize="$1" fontWeight="600" color={colors.textSecondary} textTransform="uppercase" letterSpacing={1}>
-                        {format(new Date(), 'EEEE, d MMMM', { locale: es })}
+                        {format(new Date(), language === 'es' ? "EEEE, d 'de' MMMM" : "EEEE, MMMM d", { locale: language === 'es' ? es : enUS })}
                     </Text>
                 </YStack>
             </TouchableWithoutFeedback>
@@ -177,19 +185,33 @@ export function TopBar({ title }: { title?: string }) {
                 size="$3"
                 chromeless
                 onPress={() => isNotesPath ? router.replace('/') : router.replace('/notes')}
-                marginRight="$2"
+                marginRight="$1"
             >
                 {isNotesPath ? (
-                    <Bell size={24} color={colors.textPrimary} />
+                    <Bell size={24} color={colors.brand as any} />
                 ) : (
-                    <Notebook size={24} color={colors.textPrimary} />
+                    <Notebook size={24} color={colors.brand as any} />
+                )}
+            </Button>
+
+            <Button
+                circular
+                size="$3"
+                chromeless
+                onPress={toggleTheme}
+                marginRight="$2"
+            >
+                {theme === 'dark' ? (
+                    <Sun size={24} color="#F59E0B" />
+                ) : (
+                    <Moon size={24} color="#64748B" />
                 )}
             </Button>
 
             {streak > 0 && (
-                <XStack style={{ alignItems: 'center', marginRight: 12 }} gap="$1" bg={theme === 'dark' ? '$gray2' : 'white'} px="$2" py="$1" borderRadius="$10" borderWidth={1} borderColor="$purple5">
-                    <Flame size={16} color="$purple10" />
-                    <Text fontWeight="900" fontSize="$2" color="$purple10">
+                <XStack style={{ alignItems: 'center', marginRight: 12 }} gap="$1" bg={theme === 'dark' ? '$gray2' : 'white'} px="$2" py="$1" borderRadius="$10" borderWidth={1} borderColor={accent as any}>
+                    <Flame size={16} color={accent as any} />
+                    <Text fontWeight="900" fontSize="$2" color={accent as any}>
                         {streak}
                     </Text>
                 </XStack>
@@ -206,7 +228,7 @@ export function TopBar({ title }: { title?: string }) {
                         {session?.user?.user_metadata?.avatar_url && (
                             <Avatar.Image src={session.user.user_metadata.avatar_url} />
                         )}
-                        <Avatar.Fallback backgroundColor={session ? colors.brand : colors.textSecondary} alignItems="center" justifyContent="center">
+                        <Avatar.Fallback backgroundColor={colors.brand} alignItems="center" justifyContent="center">
                             {userName ? (
                                 <Text fontSize="$4" fontWeight="800" color="white" textTransform="uppercase">
                                     {userName.charAt(0)}
@@ -274,11 +296,11 @@ export function TopBar({ title }: { title?: string }) {
                                                 <XStack backgroundColor={colors.brand} alignSelf="flex-start" px="$2" py="$0.5" borderRadius="$2" mb="$1">
                                                     <Text fontSize="$1" fontWeight="800" color="white">
                                                         {userProfile ? ({
-                                                            student: 'ESTUDIANTE',
-                                                            work: 'TRABAJO',
-                                                            personal: 'PERSONAL',
-                                                            custom: 'PERSONALIZADO'
-                                                        } as any)[userProfile] : 'PERFIL'}
+                                                            student: t('menu.profiles.student'),
+                                                            work: t('menu.profiles.work'),
+                                                            personal: t('menu.profiles.personal'),
+                                                            custom: t('menu.profiles.custom')
+                                                        } as any)[userProfile] : t('menu.profiles.default')}
                                                     </Text>
                                                 </XStack>
                                                 <Text fontSize="$1" color={colors.textSecondary} numberOfLines={1}>
@@ -287,7 +309,7 @@ export function TopBar({ title }: { title?: string }) {
                                             </>
                                         ) : (
                                             <Text fontSize="$2" color={colors.textSecondary}>
-                                                Inicia sesión para sincronizar
+                                                {t('menu.sync')}
                                             </Text>
                                         )}
                                     </YStack>
@@ -350,7 +372,7 @@ export function TopBar({ title }: { title?: string }) {
                                         >
                                             <XStack gap="$3" alignItems="center">
                                                 <LogOut size={18} color="#E11D48" />
-                                                <Text fontSize="$3" color="#E11D48" fontWeight="600">Cerrar Sesión</Text>
+                                                <Text fontSize="$3" color="#E11D48" fontWeight="600">{t('menu.logout')}</Text>
                                             </XStack>
                                         </Button>
                                     ) : (
@@ -363,7 +385,7 @@ export function TopBar({ title }: { title?: string }) {
                                         >
                                             <XStack gap="$3" alignItems="center">
                                                 <User size={18} color={colors.brand} />
-                                                <Text fontSize="$3" color={colors.brand} fontWeight="700">Iniciar Sesión</Text>
+                                                <Text fontSize="$3" color={colors.brand} fontWeight="700">{t('menu.login')}</Text>
                                             </XStack>
                                         </Button>
                                     )}

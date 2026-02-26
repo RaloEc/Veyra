@@ -2,30 +2,32 @@ import { View, YStack, XStack, Text, H2, H4, Card, Button, ScrollView, Accordion
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useStore } from '../src/store/useStore';
 import { HelpCircle, Mail, MessageCircle, Book, ChevronDown } from '@tamagui/lucide-icons';
+import { useTranslation } from 'react-i18next';
 
 export default function HelpScreen() {
+    const { t } = useTranslation();
     const { theme } = useStore();
 
     const faqs = [
         {
-            question: '¿Cómo funcionan los niveles de control?',
-            answer: 'Los niveles de control determinan qué tan insistente es la aplicación con tus recordatorios:\n\n• Normal: Una notificación única.\n• Estricto: Notificación + 2 recordatorios cada 15 minutos.\n• Crítico: Notificación + 5 recordatorios cada 5 minutos con sonido y vibración intensos.',
+            question: t('help.faqs.q1'),
+            answer: t('help.faqs.a1'),
         },
         {
-            question: '¿Puedo desactivar las notificaciones repetidas?',
-            answer: 'Sí, puedes cambiar el nivel de control de cualquier recordatorio a "Normal" editándolo. También puedes ajustar las configuraciones globales en Ajustes.',
+            question: t('help.faqs.q2'),
+            answer: t('help.faqs.a2'),
         },
         {
-            question: '¿Qué pasa si elimino un recordatorio?',
-            answer: 'Al eliminar un recordatorio, se cancela automáticamente y se marca como "fallido" en tu historial. Esto afecta tu tasa de cumplimiento.',
+            question: t('help.faqs.q3'),
+            answer: t('help.faqs.a3'),
         },
         {
-            question: '¿Cómo funciona el Modo Estricto?',
-            answer: 'El Modo Estricto convierte TODOS tus recordatorios en nivel "Estricto" temporalmente y puede bloquear las posposiciones según tu configuración.',
+            question: t('help.faqs.q4'),
+            answer: t('help.faqs.a4'),
         },
         {
-            question: '¿Puedo exportar mis datos?',
-            answer: 'Actualmente puedes ver tu historial completo en la sección de Historial. La función de exportación a CSV estará disponible pronto.',
+            question: t('help.faqs.q5'),
+            answer: t('help.faqs.a5'),
         },
     ];
 
@@ -37,17 +39,17 @@ export default function HelpScreen() {
                     <YStack gap="$2">
                         <XStack gap="$2" alignItems="center">
                             <HelpCircle size={28} color="$blue10" />
-                            <H2 color={theme === 'dark' ? 'white' : 'black'}>Ayuda y Soporte</H2>
+                            <H2 color={theme === 'dark' ? 'white' : 'black'}>{t('help.title')}</H2>
                         </XStack>
                         <Text fontSize="$3" color="$gray10">
-                            Encuentra respuestas a tus preguntas
+                            {t('help.description')}
                         </Text>
                     </YStack>
 
                     {/* Preguntas Frecuentes */}
                     <YStack gap="$3">
                         <H4 color={theme === 'dark' ? 'white' : 'black'}>
-                            Preguntas Frecuentes
+                            {t('help.faqs_title')}
                         </H4>
 
                         <Accordion type="multiple" gap="$2">
@@ -104,12 +106,12 @@ export default function HelpScreen() {
                             <XStack gap="$2" alignItems="center">
                                 <MessageCircle size={20} color="$green10" />
                                 <H4 color={theme === 'dark' ? 'white' : 'black'}>
-                                    Contactar Soporte
+                                    {t('help.contact_support')}
                                 </H4>
                             </XStack>
 
                             <Text fontSize="$3" color="$gray10">
-                                ¿No encontraste lo que buscabas? Estamos aquí para ayudarte.
+                                {t('help.contact_desc')}
                             </Text>
 
                             <Button
@@ -117,7 +119,7 @@ export default function HelpScreen() {
                                 backgroundColor="$green10"
                                 icon={Mail}
                             >
-                                <Text color="white" fontWeight="700">Enviar Email</Text>
+                                <Text color="white" fontWeight="700">{t('help.send_email')}</Text>
                             </Button>
                         </YStack>
                     </Card>
@@ -128,12 +130,12 @@ export default function HelpScreen() {
                             <XStack gap="$2" alignItems="center">
                                 <Book size={20} color="$red10" />
                                 <H4 color={theme === 'dark' ? 'white' : 'black'}>
-                                    Reportar un Problema
+                                    {t('help.report_problem')}
                                 </H4>
                             </XStack>
 
                             <Text fontSize="$3" color="$gray10">
-                                Ayúdanos a mejorar reportando bugs o sugerencias.
+                                {t('help.report_desc')}
                             </Text>
 
                             <Button
@@ -141,7 +143,7 @@ export default function HelpScreen() {
                                 variant="outlined"
                                 borderColor="$red10"
                             >
-                                <Text color="$red10" fontWeight="700">Reportar Bug</Text>
+                                <Text color="$red10" fontWeight="700">{t('help.report_bug')}</Text>
                             </Button>
                         </YStack>
                     </Card>
@@ -149,7 +151,7 @@ export default function HelpScreen() {
                     {/* Versión */}
                     <Card padding="$4" backgroundColor={theme === 'dark' ? '$gray2' : 'white'}>
                         <XStack justifyContent="space-between" alignItems="center">
-                            <Text color="$gray10">Versión de la App</Text>
+                            <Text color="$gray10">{t('help.app_version')}</Text>
                             <Text fontWeight="700" color={theme === 'dark' ? 'white' : 'black'}>
                                 1.0.0
                             </Text>

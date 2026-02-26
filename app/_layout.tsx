@@ -3,19 +3,21 @@ import 'react-native-get-random-values';
 import { TamaguiProvider, Theme, PortalProvider, PortalHost } from 'tamagui';
 import tamaguiConfig from '../tamagui.config';
 import { useFonts } from 'expo-font';
-import { Stack, useRouter, useSegments } from 'expo-router';
+import { Stack, useRouter, useSegments, usePathname } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { initDatabase } from '../src/db';
 import { StatusBar } from 'expo-status-bar';
 import { NotificationService } from '../src/services/notificationService';
 import * as Notifications from 'expo-notifications';
 import { useStore } from '../src/store/useStore';
-import { View, Platform } from 'react-native';
+import { View, Platform, BackHandler } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { supabase } from '../src/lib/supabase';
 import * as BackgroundFetch from 'expo-background-fetch';
 import * as TaskManager from 'expo-task-manager';
 import { ReminderService } from '../src/services/reminderService';
+import '../src/lib/i18n';
+import i18n from 'i18next';
 
 const BACKGROUND_FETCH_TASK = 'background-reminder-check';
 
@@ -58,11 +60,15 @@ export default function RootLayout() {
     const [dbReady, setDbReady] = useState(false);
     const [isAuthChecking, setIsAuthChecking] = useState(true);
     const router = useRouter();
+    const pathname = usePathname();
     const theme = useStore(state => state.theme);
     const setSession = useStore(state => state.setSession);
     const session = useStore(state => state.session);
     const onboardingCompleted = useStore(state => state.onboardingCompleted);
     const isHydrated = useStore(state => state.isHydrated);
+    const language = useStore(state => state.language);
+    const cloudSyncEnabled = useStore(state => state.cloudSyncEnabled);
+    const triggerSync = useStore(state => state.triggerSync);
 
     // Listener de sesión de Supabase
     useEffect(() => {
@@ -89,6 +95,21 @@ export default function RootLayout() {
         };
     }, []);
 
+    // Auto-sync cuando el usuario tiene sesión y sync habilitado
+    useEffect(() => {
+        if (!isHydrated || !dbReady || !session?.user?.id || !cloudSyncEnabled) return;
+
+        // Sync inicial al entrar
+        triggerSync();
+
+        // Sync periódico cada 5 minutos
+        const syncInterval = setInterval(() => {
+            triggerSync();
+        }, 5 * 60 * 1000);
+
+        return () => clearInterval(syncInterval);
+    }, [session?.user?.id, cloudSyncEnabled, isHydrated, dbReady]);
+
     const segments = useSegments();
 
     // Lógica de redirección basada en auth y onboarding
@@ -104,13 +125,27 @@ export default function RootLayout() {
                 router.replace('/onboarding');
             }
         } else {
-            // Onboarding hecho: si está en onboarding, lo mandamos al home
-            if (inOnboarding) {
-                router.replace('/');
-            }
+            // Onboarding hecho: El usuario puede navegar libremente.
             // No obligamos a login. El usuario puede elegir loguearse desde settings o TopBar.
         }
     }, [session, isHydrated, onboardingCompleted, segments, dbReady, isAuthChecking]);
+
+    // Manejo del botón físico de Atrás (Android)
+    useEffect(() => {
+        const backAction = () => {
+            const inAuthGroup = segments[0] === 'login' || segments[0] === 'register' || segments[0] === 'onboarding';
+
+            // Si no estamos en el Home, no estamos en auth, y el stack no tiene a donde volver nativamente
+            if (pathname !== '/' && !inAuthGroup && !router.canGoBack()) {
+                router.replace('/');
+                return true; // Previene salir de la app
+            }
+            return false;
+        };
+
+        const backHandler = BackHandler.addEventListener('hardwareBackPress', backAction);
+        return () => backHandler.remove();
+    }, [pathname, segments, router]);
 
     useEffect(() => {
         async function prepare() {
@@ -153,6 +188,17 @@ export default function RootLayout() {
 
         return () => subscription.remove();
     }, []);
+
+    // Sincronizar idioma de i18n con el store
+    useEffect(() => {
+        if (isHydrated && i18n.language !== language) {
+            i18n.changeLanguage(language);
+            // Actualizar categorías de notificación con el nuevo idioma
+            if (dbReady) {
+                NotificationService.registerCategories();
+            }
+        }
+    }, [language, isHydrated, dbReady]);
 
     if (!loaded || !dbReady || !isHydrated || isAuthChecking) {
         return (
