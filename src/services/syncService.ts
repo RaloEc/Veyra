@@ -135,8 +135,9 @@ export const SyncService = {
         const localMap = new Map<string, Reminder>();
         [...localModified, ...localNew].forEach(r => localMap.set(r.id, r));
 
-        // 3. Resolver conflictos y subir locales al servidor
+        // 3. Resolver conflictos y preparar actualizaciones
         const toUpsertRemote: any[] = [];
+        const toUpsertLocal: any[] = [];
         const processedIds = new Set<string>();
 
         for (const [id, local] of localMap) {
@@ -148,7 +149,7 @@ export const SyncService = {
                 toUpsertRemote.push(this.localReminderToRemote(local, userId));
             } else if (remote.last_modified_ms > local.last_modified_ms) {
                 // Remoto gana - actualizar local
-                await this.upsertLocalReminder(db, remote, userId);
+                toUpsertLocal.push(remote);
             }
             // Si son iguales, no hacemos nada
         }
@@ -156,8 +157,23 @@ export const SyncService = {
         // 4. Registros remotos que no existen localmente
         for (const [id, remote] of remoteMap) {
             if (!processedIds.has(id)) {
-                await this.upsertLocalReminder(db, remote, userId);
+                toUpsertLocal.push(remote);
             }
+        }
+
+        // Aplicar actualizaciones locales dentro de una sola transacción
+        if (toUpsertLocal.length > 0 || localNew.length > 0) {
+            await db.withTransactionAsync(async () => {
+                for (const remote of toUpsertLocal) {
+                    await this.upsertLocalReminder(db, remote, userId);
+                }
+                if (localNew.length > 0) {
+                    await db.runAsync(
+                        `UPDATE reminders SET user_id = ? WHERE user_id = 'local_user'`,
+                        [userId]
+                    );
+                }
+            });
         }
 
         // 5. Subir cambios locales al servidor
@@ -166,14 +182,6 @@ export const SyncService = {
                 .from('reminders')
                 .upsert(toUpsertRemote, { onConflict: 'id' });
             if (upsertError) throw upsertError;
-        }
-
-        // 6. Marcar los locales "local_user" como del usuario real
-        if (localNew.length > 0) {
-            await db.runAsync(
-                `UPDATE reminders SET user_id = ? WHERE user_id = 'local_user'`,
-                [userId]
-            );
         }
 
         await this.setLastSyncTime('reminders_sync', Date.now());
@@ -204,9 +212,9 @@ export const SyncService = {
     },
 
     async upsertLocalReminder(db: any, remote: any, userId: string): Promise<void> {
-        const existing = await db.getFirstAsync<Reminder>(
+        const existing = (await db.getFirstAsync(
             `SELECT id FROM reminders WHERE id = ?`, [remote.id]
-        );
+        )) as Reminder | null;
 
         const params = [
             remote.id,
@@ -272,6 +280,7 @@ export const SyncService = {
 
         // 3. Resolver conflictos
         const toUpsertRemote: any[] = [];
+        const toUpsertLocal: any[] = [];
         const processedIds = new Set<string>();
 
         for (const [id, local] of localMap) {
@@ -282,15 +291,24 @@ export const SyncService = {
             if (!remote || localModMs > remote.last_modified_ms) {
                 toUpsertRemote.push(this.localNoteToRemote(local, userId));
             } else if (remote.last_modified_ms > localModMs) {
-                await this.upsertLocalNote(db, remote, userId);
+                toUpsertLocal.push(remote);
             }
         }
 
         // 4. Notas remotas nuevas
         for (const [id, remote] of remoteMap) {
             if (!processedIds.has(id)) {
-                await this.upsertLocalNote(db, remote, userId);
+                toUpsertLocal.push(remote);
             }
+        }
+
+        // Aplicar actualizaciones locales dentro de una sola transacción
+        if (toUpsertLocal.length > 0) {
+            await db.withTransactionAsync(async () => {
+                for (const remote of toUpsertLocal) {
+                    await this.upsertLocalNote(db, remote, userId);
+                }
+            });
         }
 
         // 5. Subir
@@ -327,9 +345,9 @@ export const SyncService = {
     },
 
     async upsertLocalNote(db: any, remote: any, userId: string): Promise<void> {
-        const existing = await db.getFirstAsync<Note>(
+        const existing = (await db.getFirstAsync(
             `SELECT id FROM notes WHERE id = ?`, [remote.id]
-        );
+        )) as Note | null;
 
         const params = [
             remote.id,
@@ -407,18 +425,20 @@ export const SyncService = {
         if (error) throw error;
         if (!remoteEvents || remoteEvents.length === 0) return;
 
-        for (const event of remoteEvents) {
-            const existing = await db.getFirstAsync<{ id: string }>(
-                `SELECT id FROM compliance_events WHERE id = ?`, [event.id]
-            );
-
-            if (!existing) {
-                await db.runAsync(
-                    `INSERT INTO compliance_events (id, reminder_id, event_type, timestamp_ms, synced) VALUES (?, ?, ?, ?, 1)`,
-                    [event.id, event.reminder_id, event.event_type, event.timestamp_ms]
+        await db.withTransactionAsync(async () => {
+            for (const event of remoteEvents) {
+                const existing = await db.getFirstAsync<{ id: string }>(
+                    `SELECT id FROM compliance_events WHERE id = ?`, [event.id]
                 );
+
+                if (!existing) {
+                    await db.runAsync(
+                        `INSERT INTO compliance_events (id, reminder_id, event_type, timestamp_ms, synced) VALUES (?, ?, ?, ?, 1)`,
+                        [event.id, event.reminder_id, event.event_type, event.timestamp_ms]
+                    );
+                }
             }
-        }
+        });
 
         await this.setLastSyncTime('compliance_sync', Date.now());
     },

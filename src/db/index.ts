@@ -1,12 +1,28 @@
 import * as SQLite from 'expo-sqlite';
 
 let dbInstance: SQLite.SQLiteDatabase | null = null;
+let dbPromise: Promise<SQLite.SQLiteDatabase> | null = null;
 
-export const getDB = async () => {
-  if (!dbInstance) {
-    dbInstance = await SQLite.openDatabaseAsync('reminders.db');
+export const getDB = async (): Promise<SQLite.SQLiteDatabase> => {
+  if (dbInstance) return dbInstance;
+  if (!dbPromise) {
+    dbPromise = (async () => {
+      try {
+        const db = await SQLite.openDatabaseAsync('reminders.db');
+        // Enable WAL (Write-Ahead Logging) mode and busy timeout to allow concurrent read/write and prevent database locked errors
+        await db.execAsync(`
+          PRAGMA journal_mode = WAL;
+          PRAGMA busy_timeout = 5000;
+        `);
+        dbInstance = db;
+        return db;
+      } catch (err) {
+        dbPromise = null;
+        throw err;
+      }
+    })();
   }
-  return dbInstance;
+  return dbPromise;
 };
 
 export const initDatabase = async () => {
@@ -51,7 +67,8 @@ export const initDatabase = async () => {
       deleted_at_ms INTEGER,
       notification_ids TEXT,
       attachments TEXT,
-      links TEXT
+      links TEXT,
+      subtasks TEXT
     );
   `);
   console.log('Reminders table checked');
@@ -72,6 +89,9 @@ export const initDatabase = async () => {
   } catch (e) { }
   try {
     await db.execAsync('ALTER TABLE reminders ADD COLUMN links TEXT;');
+  } catch (e) { }
+  try {
+    await db.execAsync('ALTER TABLE reminders ADD COLUMN subtasks TEXT;');
   } catch (e) { }
 
   // Compliance Events & Notification Attempts
@@ -94,11 +114,34 @@ export const initDatabase = async () => {
   `);
   console.log('Compliance tables checked');
 
+  // Folders Table
+  await db.execAsync(`
+    CREATE TABLE IF NOT EXISTS folders (
+      id TEXT PRIMARY KEY,
+      user_id TEXT,
+      name TEXT NOT NULL,
+      icon TEXT,
+      color TEXT,
+      is_pinned INTEGER DEFAULT 0,
+      created_at_ms INTEGER NOT NULL,
+      updated_at_ms INTEGER NOT NULL,
+      last_modified_ms INTEGER,
+      deleted INTEGER DEFAULT 0
+    );
+  `);
+  console.log('Folders table checked');
+
+  // Migrations for folders
+  try {
+    await db.execAsync('ALTER TABLE folders ADD COLUMN is_pinned INTEGER DEFAULT 0;');
+  } catch (e) { }
+
   // Notes Table
   await db.execAsync(`
     CREATE TABLE IF NOT EXISTS notes (
       id TEXT PRIMARY KEY,
       user_id TEXT,
+      folder_id TEXT,
       title TEXT,
       content TEXT,
       created_at_ms INTEGER NOT NULL,
@@ -119,11 +162,46 @@ export const initDatabase = async () => {
   try {
     await db.execAsync('ALTER TABLE notes ADD COLUMN last_modified_ms INTEGER;');
   } catch (e) { }
+  try {
+    await db.execAsync('ALTER TABLE notes ADD COLUMN folder_id TEXT;');
+  } catch (e) { }
+  try {
+    await db.execAsync('ALTER TABLE notes ADD COLUMN event_id TEXT;');
+  } catch (e) { }
 
   // Set last_modified_ms for existing notes that don't have it
   await db.runAsync(
     `UPDATE notes SET last_modified_ms = updated_at_ms WHERE last_modified_ms IS NULL`
   );
+
+  // Events Table
+  await db.execAsync(`
+    CREATE TABLE IF NOT EXISTS events (
+      id TEXT PRIMARY KEY,
+      user_id TEXT,
+      title TEXT NOT NULL,
+      description TEXT,
+      start_time_ms INTEGER NOT NULL,
+      end_time_ms INTEGER NOT NULL,
+      repeat_rule TEXT,
+      location TEXT,
+      color TEXT,
+      notification_offset_min INTEGER DEFAULT 15,
+      notification_offsets TEXT,
+      notification_ids TEXT,
+      note_id TEXT,
+      created_at_ms INTEGER NOT NULL,
+      updated_at_ms INTEGER NOT NULL,
+      last_modified_ms INTEGER,
+      deleted INTEGER DEFAULT 0
+    );
+  `);
+  console.log('Events table checked');
+
+  // Migrations for events
+  try {
+    await db.execAsync('ALTER TABLE events ADD COLUMN notification_offsets TEXT;');
+  } catch (e) { }
 
   // Sync metadata table to track last sync timestamps
   await db.execAsync(`
@@ -134,12 +212,23 @@ export const initDatabase = async () => {
   `);
   console.log('Sync metadata table checked');
 
-  // Indices for Notes
-  await db.execAsync(`
-    CREATE INDEX IF NOT EXISTS idx_notes_updated_at ON notes (updated_at_ms);
-    CREATE INDEX IF NOT EXISTS idx_notes_last_modified ON notes (last_modified_ms);
-  `);
-  console.log('Notes indices created');
+  // Indices for Folders, Notes & Events
+  try {
+    await db.execAsync(`
+      CREATE INDEX IF NOT EXISTS idx_folders_updated_at ON folders (updated_at_ms);
+      CREATE INDEX IF NOT EXISTS idx_folders_last_modified ON folders (last_modified_ms);
+      CREATE INDEX IF NOT EXISTS idx_notes_updated_at ON notes (updated_at_ms);
+      CREATE INDEX IF NOT EXISTS idx_notes_last_modified ON notes (last_modified_ms);
+      CREATE INDEX IF NOT EXISTS idx_notes_folder_id ON notes (folder_id);
+      CREATE INDEX IF NOT EXISTS idx_notes_event_id ON notes (event_id);
+      CREATE INDEX IF NOT EXISTS idx_events_start_time ON events (start_time_ms);
+      CREATE INDEX IF NOT EXISTS idx_events_deleted ON events (deleted);
+      CREATE INDEX IF NOT EXISTS idx_events_note_id ON events (note_id);
+    `);
+    console.log('Folders, Notes & Events indices created');
+  } catch (err) {
+    console.warn('[DB] Non-critical index creation warning:', err);
+  }
 
   console.log('Database initialized successfully');
 };

@@ -1,3 +1,4 @@
+import 'react-native-gesture-handler';
 import 'react-native-url-polyfill/auto';
 import 'react-native-get-random-values';
 import { TamaguiProvider, Theme, PortalProvider, PortalHost } from 'tamagui';
@@ -7,49 +8,89 @@ import { Stack, useRouter, useSegments, usePathname } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { initDatabase } from '../src/db';
 import { StatusBar } from 'expo-status-bar';
+import * as NavigationBar from 'expo-navigation-bar';
 import { NotificationService } from '../src/services/notificationService';
 import * as Notifications from 'expo-notifications';
 import { useStore } from '../src/store/useStore';
 import { View, Platform, BackHandler } from 'react-native';
-import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { supabase } from '../src/lib/supabase';
 import * as BackgroundFetch from 'expo-background-fetch';
 import * as TaskManager from 'expo-task-manager';
+import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { ReminderService } from '../src/services/reminderService';
 import '../src/lib/i18n';
 import i18n from 'i18next';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { VEYRA_TOKENS } from '../src/theme/tokens';
+import { ErrorBoundary } from '../src/components/ErrorBoundary';
 
 const BACKGROUND_FETCH_TASK = 'background-reminder-check';
 
+// Tarea de seguridad no-op: si un APK anterior dejó el Job registrado en el sistema operativo,
+// responde instantáneamente en 0ms y se desregistra para evitar cualquier congelamiento (ANR).
 TaskManager.defineTask(BACKGROUND_FETCH_TASK, async () => {
     try {
-        // Obtenemos recordatorios que deberían haber sonado y siguen pendientes
-        const overdue = await ReminderService.getOverdueReminders();
-
-        if (overdue.length > 0) {
-            for (const reminder of overdue) {
-                if (reminder.retry_count < (reminder.max_retries || 3)) {
-                    // Notificación inmediata si se perdió la original
-                    await NotificationService.scheduleImmediateNotification(reminder);
-                    await ReminderService.incrementRetryCount(reminder.id);
-                } else {
-                    // Si ya intentamos suficientes veces, marcar como fallido
-                    await ReminderService.markAsFailed(reminder.id);
-                }
-            }
-            return BackgroundFetch.BackgroundFetchResult.NewData;
-        }
-
-        return BackgroundFetch.BackgroundFetchResult.NoData;
-    } catch (error) {
-        console.error('Background fetch failed:', error);
-        return BackgroundFetch.BackgroundFetchResult.Failed;
-    }
+        await BackgroundFetch.unregisterTaskAsync(BACKGROUND_FETCH_TASK);
+    } catch {}
+    return BackgroundFetch.BackgroundFetchResult.NoData;
 });
 
-import { FloatingCreateButton } from '../src/components/FloatingCreateButton';
-import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import { TopBar } from '../src/components/TopBar';
+function AppShell({ theme }: { theme: 'dark' | 'light' }) {
+    const insets = useSafeAreaInsets();
+
+    // Sincronizar barra de navegación nativa de Android con el tema y la barra inferior
+    const navBarStyle = theme === 'dark' ? 'light' : 'dark';
+
+    useEffect(() => {
+        if (Platform.OS === 'android') {
+            try {
+                if (typeof NavigationBar.setStyle === 'function') {
+                    NavigationBar.setStyle(navBarStyle);
+                }
+            } catch (err) {
+                console.warn('[NavigationBar] Failed to set navigation bar style:', err);
+            }
+        }
+    }, [navBarStyle]);
+
+    const mainBg = theme === 'dark' ? VEYRA_TOKENS.colors.dark.bg : VEYRA_TOKENS.colors.light.bg;
+
+    return (
+        <View style={{ flex: 1, backgroundColor: mainBg }}>
+            <Stack screenOptions={{
+                headerShown: false,
+                contentStyle: { backgroundColor: mainBg },
+                animation: 'none',
+            }}>
+                <Stack.Screen name="index" options={{ title: 'Recordatorios', presentation: 'card', animation: 'none', contentStyle: { backgroundColor: mainBg } }} />
+                <Stack.Screen name="onboarding" options={{ headerShown: false, animation: 'fade' }} />
+                <Stack.Screen name="login" options={{ headerShown: false, animation: 'fade' }} />
+                <Stack.Screen name="register" options={{ headerShown: false, animation: 'fade' }} />
+                <Stack.Screen name="forgot-password" options={{ headerShown: false, animation: 'slide_from_right' }} />
+                <Stack.Screen name="create" options={{ presentation: 'transparentModal', animation: 'none', contentStyle: { backgroundColor: 'transparent' } }} />
+                <Stack.Screen name="events/create" options={{ presentation: 'transparentModal', animation: 'none', contentStyle: { backgroundColor: 'transparent' } }} />
+                <Stack.Screen name="reminder/[id]" options={{ presentation: 'card', animation: 'fade', animationDuration: 240, contentStyle: { backgroundColor: mainBg } }} />
+                <Stack.Screen name="history" options={{ presentation: 'card', animation: 'fade_from_bottom', animationDuration: 180, title: 'Historial' }} />
+                <Stack.Screen name="notes/index" options={{ title: 'Notas', presentation: 'card', animation: 'none', contentStyle: { backgroundColor: mainBg } }} />
+                <Stack.Screen name="notes/create" options={{ presentation: 'card', animation: 'fade', animationDuration: 240, contentStyle: { backgroundColor: mainBg } }} />
+                <Stack.Screen name="notes/[id]" options={{ presentation: 'card', animation: 'fade', animationDuration: 240, contentStyle: { backgroundColor: mainBg } }} />
+                <Stack.Screen name="notes-history" options={{ presentation: 'card', animation: 'fade_from_bottom', animationDuration: 180, title: 'Papelera de Notas' }} />
+                <Stack.Screen name="settings" options={{
+                    presentation: 'card',
+                    animation: 'slide_from_right',
+                }} />
+                <Stack.Screen name="sounds" options={{
+                    presentation: 'card',
+                    animation: 'slide_from_right',
+                }} />
+
+                <Stack.Screen name="confirm/[id]" options={{ presentation: 'fullScreenModal', headerShown: false }} />
+            </Stack>
+            <StatusBar style={theme === 'dark' ? 'light' : 'dark'} />
+        </View>
+    );
+}
 
 export default function RootLayout() {
     const [loaded] = useFonts({
@@ -70,27 +111,43 @@ export default function RootLayout() {
     const cloudSyncEnabled = useStore(state => state.cloudSyncEnabled);
     const triggerSync = useStore(state => state.triggerSync);
 
-    // Listener de sesión de Supabase
+    // Listener de sesión de Supabase con timeout de seguridad para evitar ANR
     useEffect(() => {
+        let isMounted = true;
+        const safetyTimer = setTimeout(() => {
+            if (isMounted) setIsAuthChecking(false);
+        }, 5000);
+
         const checkSession = async () => {
             try {
-                const { data: { session } } = await supabase.auth.getSession();
-                setSession(session);
+                const sessionPromise = supabase.auth.getSession();
+                const timeoutPromise = new Promise((_, reject) =>
+                    setTimeout(() => reject(new Error('Session check timeout')), 4000)
+                );
+                const { data: { session } } = (await Promise.race([sessionPromise, timeoutPromise])) as any;
+                if (isMounted) setSession(session);
             } catch (e) {
-                console.error('Error checking session:', e);
+                console.warn('[Auth] Session check timed out or failed:', e);
             } finally {
-                setIsAuthChecking(false);
+                if (isMounted) {
+                    clearTimeout(safetyTimer);
+                    setIsAuthChecking(false);
+                }
             }
         };
 
         checkSession();
 
         const { data: authListener } = supabase.auth.onAuthStateChange((_event, session) => {
-            setSession(session);
-            setIsAuthChecking(false);
+            if (isMounted) {
+                setSession(session);
+                setIsAuthChecking(false);
+            }
         });
 
         return () => {
+            isMounted = false;
+            clearTimeout(safetyTimer);
             authListener.subscription.unsubscribe();
         };
     }, []);
@@ -152,15 +209,23 @@ export default function RootLayout() {
             try {
                 await initDatabase();
                 await NotificationService.setup();
-                await NotificationService.requestPermissions();
+                const initialSounds = useStore.getState().soundSettings;
+                await NotificationService.requestPermissions(initialSounds);
                 await NotificationService.registerCategories();
+                await NotificationService.getDiagnosticInfo();
 
-                // Registrar tarea de background
-                await BackgroundFetch.registerTaskAsync(BACKGROUND_FETCH_TASK, {
-                    minimumInterval: 15 * 60, // 15 minutos
-                    stopOnTerminate: false,
-                    startOnBoot: true,
-                });
+                // Asegurar que no quede ninguna tarea de fondo periódica activa (previene ANR cuando la app está cerrada)
+                const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient || Constants.appOwnership === 'expo';
+                if (!isExpoGo) {
+                    try {
+                        const isRegistered = await TaskManager.isTaskRegisteredAsync(BACKGROUND_FETCH_TASK);
+                        if (isRegistered) {
+                            await BackgroundFetch.unregisterTaskAsync(BACKGROUND_FETCH_TASK);
+                        }
+                    } catch (bfErr) {
+                        // Silenciar error no crítico
+                    }
+                }
 
                 setDbReady(true);
             } catch (err) {
@@ -172,8 +237,9 @@ export default function RootLayout() {
 
         const subscription = Notifications.addNotificationResponseReceivedListener(response => {
             const data = response.notification.request.content.data;
-            const reminderId = data.reminderId as string;
+            const reminderId = data?.reminderId as string;
             const actionId = response.actionIdentifier;
+            console.log(`[NotificationResponse] Accion recibida: "${actionId}" para reminder: "${reminderId}"`);
 
             if (reminderId) {
                 if (actionId === Notifications.DEFAULT_ACTION_IDENTIFIER) {
@@ -184,6 +250,27 @@ export default function RootLayout() {
                     useStore.getState().snoozeReminder(reminderId, 10);
                 }
             }
+        });
+
+        // Manejo de apertura en frío (Cold Start) cuando la alarma despierta la app
+        Notifications.getLastNotificationResponseAsync().then(response => {
+            if (response) {
+                const data = response.notification.request.content.data;
+                const reminderId = data?.reminderId as string;
+                const actionId = response.actionIdentifier;
+                console.log(`[NotificationResponse] Cold start respuesta: "${actionId}" para reminder: "${reminderId}"`);
+                if (reminderId) {
+                    if (actionId === Notifications.DEFAULT_ACTION_IDENTIFIER) {
+                        router.push(`/confirm/${reminderId}`);
+                    } else if (actionId === 'DONE') {
+                        useStore.getState().markAsCompleted(reminderId);
+                    } else if (actionId === 'SNOOZE') {
+                        useStore.getState().snoozeReminder(reminderId, 10);
+                    }
+                }
+            }
+        }).catch(err => {
+            console.warn('[Notifications] Error getting last response:', err);
         });
 
         return () => subscription.remove();
@@ -202,7 +289,7 @@ export default function RootLayout() {
 
     if (!loaded || !dbReady || !isHydrated || isAuthChecking) {
         return (
-            <View style={{ flex: 1, backgroundColor: theme === 'dark' ? '#0a0a0a' : '#F8FAFC', justifyContent: 'center', alignItems: 'center' }}>
+            <View style={{ flex: 1, backgroundColor: theme === 'dark' ? VEYRA_TOKENS.colors.dark.bg : VEYRA_TOKENS.colors.light.bg, justifyContent: 'center', alignItems: 'center' }}>
                 <StatusBar style={theme === 'dark' ? 'light' : 'dark'} />
             </View>
         );
@@ -210,51 +297,17 @@ export default function RootLayout() {
 
     return (
         <GestureHandlerRootView style={{ flex: 1 }}>
-            <TamaguiProvider config={tamaguiConfig} defaultTheme={theme}>
-                <PortalProvider shouldAddRootHost>
-                    <SafeAreaProvider>
-                        <Theme name={theme}>
-                            <View style={{ flex: 1, backgroundColor: theme === 'dark' ? '#0a0a0a' : '#F8FAFC' }}>
-                                {/* Solo mostramos el TopBar en las rutas principales */}
-                                {/* Se oculta el TopBar en onboarding, auth y pantallas de creación/edición */}
-                                {segments[0] !== 'onboarding' &&
-                                    segments[0] !== 'login' &&
-                                    segments[0] !== 'register' &&
-                                    segments[0] !== 'confirm' &&
-                                    segments[0] !== 'create' &&
-                                    !(segments[0] === 'notes' && segments.length > 1) && (
-                                        <SafeAreaView edges={['top']} style={{ backgroundColor: theme === 'dark' ? '#0a0a0a' : '#F8FAFC', zIndex: 9999 }}>
-                                            <TopBar />
-                                        </SafeAreaView>
-                                    )}
-                                <Stack screenOptions={{
-                                    headerShown: false,
-                                    contentStyle: { backgroundColor: theme === 'dark' ? '#0a0a0a' : '#F8FAFC' },
-                                    freezeOnBlur: true
-                                }}>
-                                    <Stack.Screen name="index" options={{ title: 'Recordatorios' }} />
-                                    <Stack.Screen name="onboarding" options={{ headerShown: false, animation: 'fade' }} />
-                                    <Stack.Screen name="login" options={{ headerShown: false, animation: 'fade' }} />
-                                    <Stack.Screen name="register" options={{ headerShown: false, animation: 'fade' }} />
-                                    <Stack.Screen name="create" options={{ presentation: 'modal', title: 'Nuevo' }} />
-                                    <Stack.Screen name="settings" options={{
-                                        presentation: 'card',
-                                        animation: 'default',
-                                    }} />
-                                    <Stack.Screen name="sounds" options={{
-                                        presentation: 'card',
-                                        animation: 'default',
-                                    }} />
-                                    <Stack.Screen name="confirm/[id]" options={{ presentation: 'fullScreenModal', headerShown: false }} />
-                                </Stack>
-                                <FloatingCreateButton />
-                                <StatusBar style={theme === 'dark' ? 'light' : 'dark'} />
-                            </View>
-                        </Theme>
-                    </SafeAreaProvider>
-                </PortalProvider>
-            </TamaguiProvider>
+            <ErrorBoundary>
+                <TamaguiProvider config={tamaguiConfig} defaultTheme={theme}>
+                    <PortalProvider shouldAddRootHost>
+                        <SafeAreaProvider>
+                            <Theme name={theme}>
+                                <AppShell theme={theme} />
+                            </Theme>
+                        </SafeAreaProvider>
+                    </PortalProvider>
+                </TamaguiProvider>
+            </ErrorBoundary>
         </GestureHandlerRootView>
     );
 }
-

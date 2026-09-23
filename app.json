@@ -5,12 +5,7 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "light",
-    "splash": {
-      "image": "./assets/splash.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
-    },
+    "userInterfaceStyle": "automatic",
     "assetBundlePatterns": [
       "**/*"
     ],
@@ -23,13 +18,16 @@
     },
     "android": {
       "package": "com.ralo.veyra",
+      "usesCleartextTraffic": true,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
       "permissions": [
         "RECEIVE_BOOT_COMPLETED",
-        "SCHEDULE_EXACT_ALARM",
+        "android.permission.SCHEDULE_EXACT_ALARM",
+        "android.permission.USE_EXACT_ALARM",
+        "android.permission.USE_FULL_SCREEN_INTENT",
         "VIBRATE",
         "WAKE_LOCK",
         "POST_NOTIFICATIONS"
@@ -61,13 +59,47 @@
         "expo-notifications",
         {
           "sounds": [
+            "./assets/sounds/ping_brillante.wav",
+            "./assets/sounds/campana_electro.mp3",
+            "./assets/sounds/clicks_tech.wav",
+            "./assets/sounds/buzzer_fabrica.wav",
+            "./assets/sounds/alarma_fuego.mp3",
+            "./assets/sounds/bucle_alarma.wav",
+            "./assets/sounds/alarma_incendio.mp3",
             "./assets/sounds/alarm_normal.wav",
             "./assets/sounds/alarm_strict.wav",
             "./assets/sounds/alarm_critical.wav"
           ]
         }
       ],
-      "expo-localization"
+      "expo-localization",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "enableProguardInReleaseBuilds": true
+          },
+          "ios": {
+            "useFrameworks": "static"
+          }
+        }
+      ],
+      "@react-native-community/datetimepicker",
+      "expo-image",
+      "expo-sharing",
+      "expo-sqlite",
+      "expo-status-bar",
+      "expo-navigation-bar",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash.png",
+          "resizeMode": "contain",
+          "backgroundColor": "#ffffff"
+        }
+      ],
+      "expo-audio",
+      "expo-asset"
     ],
     "scheme": "veyra",
     "extra": {

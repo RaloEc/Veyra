@@ -1,6 +1,12 @@
 export type ControlLevel = 'normal' | 'strict' | 'critical';
 export type ReminderStatus = 'pending' | 'completed' | 'failed' | 'snoozed';
 
+export interface Subtask {
+    id: string;
+    title: string;
+    completed: boolean;
+}
+
 export interface User {
     id: string; // UUID
     email?: string;
@@ -38,6 +44,7 @@ export interface Reminder {
     notification_ids?: string; // JSON array of strings
     attachments?: string; // JSON array of strings (local paths or URIs)
     links?: string; // JSON array of links
+    subtasks?: string; // JSON array of Subtask
 }
 
 export interface ComplianceEvent {
@@ -55,8 +62,24 @@ export interface NotificationAttempt {
     status: 'sent' | 'failed';
 }
 
+export interface Folder {
+    id: string; // UUID
+    user_id?: string;
+    name: string;
+    icon?: string; // Nombre del icono de Lucide (ej: 'folder', 'briefcase', 'lightbulb')
+    color?: string; // Color HEX o clave de acento
+    is_pinned?: number; // 0 | 1 (Acceso rápido)
+    created_at_ms: number;
+    updated_at_ms: number;
+    last_modified_ms?: number;
+    deleted?: number; // 0 | 1
+}
+
 export interface Note {
     id: string; // UUID
+    user_id?: string;
+    folder_id?: string | null; // UUID de la carpeta a la que pertenece
+    event_id?: string | null; // UUID del evento al que está vinculada la nota
     title?: string;
     content?: string; // HTML/RichText
     created_at_ms: number;
@@ -65,4 +88,25 @@ export interface Note {
     attachments?: string; // JSON array of strings
     links?: string; // JSON array of strings
     deleted?: number; // 0 | 1
+    last_modified_ms?: number;
+}
+
+export interface CalendarEvent {
+    id: string; // UUID
+    user_id?: string;
+    title: string;
+    description?: string;
+    start_time_ms: number;
+    end_time_ms: number;
+    repeat_rule?: string; // JSON: { type: 'none' | 'weekly', days?: number[] }
+    location?: string;
+    color?: string; // Color HEX
+    notification_offset_min?: number; // Minutos antes de iniciar (ej. 0, 5, 10, 15, 30, 60, o null)
+    notification_offsets?: string; // JSON array of numbers, e.g. "[5, 15, 1440]"
+    notification_ids?: string; // JSON array of string notification IDs
+    note_id?: string | null; // UUID de la nota vinculada
+    created_at_ms: number;
+    updated_at_ms: number;
+    last_modified_ms?: number;
+    deleted: number; // 0 | 1
 }

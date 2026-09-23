@@ -1,143 +1,331 @@
-import { TouchableOpacity, StyleSheet } from 'react-native';
-import { YStack, XStack, Label, Text } from 'tamagui';
-import { Repeat, ChevronDown, Check } from '@tamagui/lucide-icons';
+import React, { useState } from 'react';
+import {
+    View,
+    Text,
+    TouchableOpacity,
+    StyleSheet,
+    Modal,
+    Pressable,
+    Platform,
+} from 'react-native';
+import { ChevronDown, Check, Repeat, X } from '@tamagui/lucide-icons';
 import { useTranslation } from 'react-i18next';
-import { useState } from 'react';
+import { useVeyraTheme } from '../../theme/useVeyraTheme';
+import { VeyraSurface } from '../ui/VeyraSurface';
 
 export type RecurrenceType = 'none' | 'daily' | 'weekly' | 'monthly' | 'yearly';
 
 interface RecurrenceSelectorProps {
     value: RecurrenceType;
     onChange: (value: RecurrenceType) => void;
-    isDark: boolean;
+    isDark?: boolean;
+    flat?: boolean;
 }
 
 const RECURRENCE_OPTIONS: RecurrenceType[] = ['none', 'daily', 'weekly', 'monthly', 'yearly'];
 
-export function RecurrenceSelector({ value, onChange, isDark }: RecurrenceSelectorProps) {
+/**
+ * RecurrenceSelector — Selector modal de repetición (sin desplazar el formulario)
+ */
+export function RecurrenceSelector({ value, onChange, flat }: RecurrenceSelectorProps) {
     const { t } = useTranslation();
-    const [expanded, setExpanded] = useState(false);
+    const { colors, typography, accent, isDark } = useVeyraTheme();
+    const [isModalOpen, setIsModalOpen] = useState(false);
 
     const getLabel = (type: RecurrenceType) => t(`create.recurrence.${type}`);
 
     return (
-        <YStack gap="$0">
-            <XStack alignItems="center" gap="$2">
-                <Repeat size={18} color="$purple10" />
-                <Label fontWeight="600" fontSize="$3" color={isDark ? '$gray9' : '$gray10'}>
-                    {t('create.sections.recurrence')}
-                </Label>
-            </XStack>
-
-            <YStack
-                backgroundColor={isDark ? '#111' : 'white'}
-                borderRadius="$5"
-                overflow="hidden"
-                borderWidth={1}
-                borderColor={isDark ? '#222' : '#eee'}
-                elevation={2}
-                shadowColor="#000"
-                shadowOffset={{ width: 0, height: 2 }}
-                shadowOpacity={0.05}
-                shadowRadius={10}
-            >
-                {/* Current Selection / Toggle */}
+        <View style={flat ? styles.flatContainer : styles.container}>
+            {flat ? (
                 <TouchableOpacity
-                    onPress={() => setExpanded(!expanded)}
-                    style={{ paddingVertical: 14, paddingHorizontal: 16 }}
+                    onPress={() => setIsModalOpen(true)}
+                    style={[
+                        styles.flatPill,
+                        {
+                            backgroundColor: value !== 'none'
+                                ? (isDark ? 'rgba(139, 92, 246, 0.18)' : 'rgba(139, 92, 246, 0.10)')
+                                : colors.surfaceElevated,
+                            borderColor: value !== 'none' ? accent.primary : colors.borderSubtle,
+                        },
+                    ]}
                     activeOpacity={0.7}
                 >
-                    <XStack alignItems="center" justifyContent="space-between">
-                        <XStack alignItems="center">
-                            <Text
-                                fontSize="$5"
-                                fontWeight="700"
-                                color={value === 'none' ? (isDark ? '$gray8' : '$gray9') : (isDark ? 'white' : 'black')}
-                            >
-                                {getLabel(value)}
-                            </Text>
-                        </XStack>
-                        <ChevronDown
-                            size={20}
-                            color="$purple10"
-                            style={{
-                                transform: [{ rotate: expanded ? '180deg' : '0deg' }],
-                            }}
-                        />
-                    </XStack>
-                </TouchableOpacity>
-
-                {/* Options List */}
-                {expanded && (
-                    <YStack
-                        borderTopWidth={1}
-                        borderTopColor={isDark ? '#222' : '#f0f0f0'}
+                    <Repeat size={14} color={value !== 'none' ? accent.primary : colors.textMuted} strokeWidth={2.2} />
+                    <Text
+                        style={[
+                            styles.flatPillText,
+                            {
+                                color: value !== 'none' ? accent.primary : colors.textSecondary,
+                                fontWeight: value !== 'none' ? '700' : '500',
+                            },
+                        ]}
                     >
-                        {RECURRENCE_OPTIONS.map((option) => {
-                            const isSelected = value === option;
-                            return (
-                                <TouchableOpacity
-                                    key={option}
-                                    onPress={() => {
-                                        onChange(option);
-                                        setExpanded(false);
-                                    }}
+                        {value === 'none' ? t('create.recurrence.none_label', { defaultValue: 'Repetir' }) : getLabel(value)}
+                    </Text>
+                    <ChevronDown size={12} color={value !== 'none' ? accent.primary : colors.textMuted} />
+                </TouchableOpacity>
+            ) : (
+                <>
+                    <Text style={[styles.sectionTitle, { color: colors.textSecondary, fontSize: typography.caption.fontSize }]}>
+                        {t('create.sections.recurrence').toUpperCase()}
+                    </Text>
+
+                    <VeyraSurface
+                        level={1}
+                        radius="md"
+                        style={styles.card}
+                    >
+                        {/* Current Selection Row */}
+                        <TouchableOpacity
+                            onPress={() => setIsModalOpen(true)}
+                            style={styles.toggleRow}
+                            activeOpacity={0.7}
+                        >
+                            <View style={styles.selectedRow}>
+                                <Repeat size={16} color={value === 'none' ? colors.textMuted : accent.primary} />
+                                <Text
                                     style={[
-                                        styles.optionRow,
-                                        isSelected && {
-                                            backgroundColor: isDark ? '#1a1a2e' : '#f0edff',
+                                        styles.currentText,
+                                        {
+                                            color: value === 'none' ? colors.textMuted : colors.textPrimary,
+                                            fontSize: typography.bodyMedium.fontSize,
                                         },
                                     ]}
-                                    activeOpacity={0.7}
                                 >
-                                    <XStack alignItems="center" flex={1}>
-                                        <YStack flex={1}>
-                                            <Text
-                                                fontSize="$4"
-                                                fontWeight={isSelected ? '700' : '500'}
-                                                color={isSelected
-                                                    ? '$purple10'
-                                                    : (isDark ? '$gray11' : '$gray11')
-                                                }
-                                            >
-                                                {getLabel(option)}
-                                            </Text>
-                                            {option !== 'none' && (
+                                    {getLabel(value)}
+                                </Text>
+                            </View>
+                            <ChevronDown
+                                size={18}
+                                color={colors.textSecondary}
+                            />
+                        </TouchableOpacity>
+                    </VeyraSurface>
+                </>
+            )}
+
+            {/* Modal de Opciones de Repetición */}
+            <Modal
+                visible={isModalOpen}
+                transparent={true}
+                animationType="fade"
+                onRequestClose={() => setIsModalOpen(false)}
+            >
+                <Pressable
+                    style={styles.modalBackdrop}
+                    onPress={() => setIsModalOpen(false)}
+                >
+                    <Pressable
+                        style={[
+                            styles.modalCard,
+                            {
+                                backgroundColor: colors.surface,
+                                borderColor: colors.borderSubtle,
+                            },
+                        ]}
+                        onPress={e => e.stopPropagation()}
+                    >
+                        {/* Header del Modal */}
+                        <View style={styles.modalHeader}>
+                            <View style={styles.modalTitleRow}>
+                                <Repeat size={18} color={accent.primary} />
+                                <Text style={[styles.modalTitle, { color: colors.textPrimary }]}>
+                                    {t('create.sections.recurrence', { defaultValue: 'Repetir Recordatorio' })}
+                                </Text>
+                            </View>
+                            <TouchableOpacity
+                                style={styles.modalCloseBtn}
+                                onPress={() => setIsModalOpen(false)}
+                            >
+                                <X size={18} color={colors.textSecondary} />
+                            </TouchableOpacity>
+                        </View>
+
+                        {/* Lista de Opciones */}
+                        <View style={styles.optionsList}>
+                            {RECURRENCE_OPTIONS.map((option, index) => {
+                                const isSelected = value === option;
+                                const isLast = index === RECURRENCE_OPTIONS.length - 1;
+
+                                return (
+                                    <TouchableOpacity
+                                        key={option}
+                                        onPress={() => {
+                                            onChange(option);
+                                            setIsModalOpen(false);
+                                        }}
+                                        style={[
+                                            styles.optionRow,
+                                            {
+                                                borderBottomColor: colors.borderSubtle,
+                                                borderBottomWidth: isLast ? 0 : 1,
+                                                backgroundColor: isSelected
+                                                    ? isDark ? 'rgba(255, 255, 255, 0.06)' : 'rgba(0, 0, 0, 0.03)'
+                                                    : 'transparent',
+                                            },
+                                        ]}
+                                        activeOpacity={0.7}
+                                    >
+                                        <View style={styles.optionContent}>
+                                            <View style={{ flex: 1, paddingRight: 10 }}>
                                                 <Text
-                                                    fontSize="$2"
-                                                    color={isDark ? '$gray8' : '$gray9'}
-                                                    mt="$0.5"
+                                                    style={[
+                                                        styles.optionLabel,
+                                                        {
+                                                            color: isSelected ? accent.primary : colors.textPrimary,
+                                                            fontWeight: isSelected ? '700' : '500',
+                                                            fontSize: typography.body.fontSize,
+                                                        },
+                                                    ]}
                                                 >
-                                                    {t(`create.recurrence.${option}_desc`)}
+                                                    {getLabel(option)}
                                                 </Text>
+                                                {option !== 'none' && (
+                                                    <Text
+                                                        style={[
+                                                            styles.optionDesc,
+                                                            { color: colors.textSecondary, fontSize: typography.caption.fontSize },
+                                                        ]}
+                                                    >
+                                                        {t(`create.recurrence.${option}_desc`)}
+                                                    </Text>
+                                                )}
+                                            </View>
+
+                                            {isSelected && (
+                                                <View
+                                                    style={[
+                                                        styles.checkBadge,
+                                                        { backgroundColor: accent.primary },
+                                                    ]}
+                                                >
+                                                    <Check color={isDark ? '#1B1B1B' : '#FFFFFF'} size={13} strokeWidth={3} />
+                                                </View>
                                             )}
-                                        </YStack>
-                                        {isSelected && (
-                                            <XStack
-                                                width={22}
-                                                height={22}
-                                                borderRadius={11}
-                                                backgroundColor="$purple10"
-                                                alignItems="center"
-                                                justifyContent="center"
-                                            >
-                                                <Check color="white" size={14} strokeWidth={4} />
-                                            </XStack>
-                                        )}
-                                    </XStack>
-                                </TouchableOpacity>
-                            );
-                        })}
-                    </YStack>
-                )}
-            </YStack>
-        </YStack>
+                                        </View>
+                                    </TouchableOpacity>
+                                );
+                            })}
+                        </View>
+                    </Pressable>
+                </Pressable>
+            </Modal>
+        </View>
     );
 }
 
 const styles = StyleSheet.create({
+    container: {
+        width: '100%',
+        gap: 8,
+    },
+    sectionTitle: {
+        fontWeight: '700',
+        letterSpacing: 0.8,
+        marginBottom: 2,
+    },
+    card: {
+        width: '100%',
+    },
+    toggleRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        paddingVertical: 12,
+        paddingHorizontal: 14,
+    },
+    selectedRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+    },
+    currentText: {
+        fontWeight: '600',
+    },
+    modalBackdrop: {
+        flex: 1,
+        backgroundColor: 'rgba(0, 0, 0, 0.55)',
+        justifyContent: 'center',
+        alignItems: 'center',
+        padding: 20,
+    },
+    modalCard: {
+        width: '100%',
+        maxWidth: 360,
+        borderRadius: 20,
+        borderWidth: 1,
+        padding: 18,
+        gap: 12,
+        ...Platform.select({
+            ios: {
+                shadowColor: '#000',
+                shadowOffset: { width: 0, height: 10 },
+                shadowOpacity: 0.3,
+                shadowRadius: 18,
+            },
+            android: {
+                elevation: 10,
+            },
+        }),
+    },
+    modalHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        paddingBottom: 8,
+    },
+    modalTitleRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+    },
+    modalTitle: {
+        fontSize: 16,
+        fontWeight: '700',
+    },
+    modalCloseBtn: {
+        padding: 4,
+    },
+    optionsList: {
+        borderRadius: 12,
+        overflow: 'hidden',
+    },
     optionRow: {
         paddingVertical: 12,
-        paddingHorizontal: 16,
+        paddingHorizontal: 8,
+    },
+    optionContent: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+    },
+    optionLabel: {
+        letterSpacing: 0.1,
+    },
+    optionDesc: {
+        marginTop: 2,
+    },
+    checkBadge: {
+        width: 22,
+        height: 22,
+        borderRadius: 11,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    flatContainer: {
+        marginBottom: 0,
+    },
+    flatPill: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+        paddingHorizontal: 12,
+        paddingVertical: 7,
+        borderRadius: 20,
+        borderWidth: 1,
+    },
+    flatPillText: {
+        fontSize: 13,
+        fontWeight: '600',
     },
 });

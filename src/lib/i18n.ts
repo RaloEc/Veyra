@@ -9,11 +9,14 @@ const resources = {
     en: { translation: en },
 };
 
+const systemLanguage = Localization.getLocales()?.[0]?.languageCode;
+export const defaultLanguage = (systemLanguage && ['es', 'en'].includes(systemLanguage)) ? systemLanguage : 'es';
+
 i18n
     .use(initReactI18next)
     .init({
         resources,
-        lng: Localization.getLocales()[0].languageCode ?? 'es', // Lenguaje del sistema por defecto
+        lng: defaultLanguage,
         fallbackLng: 'es',
         interpolation: {
             escapeValue: false,

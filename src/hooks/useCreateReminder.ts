@@ -1,6 +1,6 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { useStore } from '../store/useStore';
-import { ControlLevel } from '../types/db';
+import { ControlLevel, Subtask } from '../types/db';
 import { RecurrenceType } from '../components/create/RecurrenceSelector';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
@@ -12,20 +12,80 @@ import { useRouter } from 'expo-router';
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 import { useTranslation } from 'react-i18next';
 
-export const useCreateReminder = (id?: string) => {
+export const useCreateReminder = (id?: string, initialDateMs?: number | string) => {
     const { t } = useTranslation();
     const router = useRouter();
     const { addReminder, updateReminder, deleteReminder, markAsCompleted, reminders, theme, isPremium, defaultControlLevel } = useStore();
 
-    const [title, setTitle] = useState('');
-    const [description, setDescription] = useState('');
-    const [attachments, setAttachments] = useState<{ uri: string, name: string }[]>([]);
-    const [links, setLinks] = useState<string[]>([]);
-    const [status, setStatus] = useState<string>('pending');
-    const [date, setDate] = useState(new Date());
-    const [controlLevel, setControlLevel] = useState<ControlLevel>(defaultControlLevel);
+    const isEditing = !!id;
+    const isDark = theme === 'dark';
+    const MAX_ATTACHMENTS = isPremium ? 10 : 3;
+
+    // Obtener recordatorio de la caché en memoria inmediatamente (0ms)
+    const cachedReminder = useMemo(() => {
+        if (!id) return null;
+        return useStore.getState().reminders.find(r => r.id === id) || null;
+    }, [id]);
+
+    const [title, setTitle] = useState(() => cachedReminder?.title || '');
+    const [description, setDescription] = useState(() => cachedReminder?.description || '');
+    const [attachments, setAttachments] = useState<{ uri: string, name: string }[]>(() => {
+        if (!cachedReminder?.attachments) return [];
+        try {
+            const raw = JSON.parse(cachedReminder.attachments);
+            return Array.isArray(raw)
+                ? raw.map((att: any) => (typeof att === 'string' ? { uri: att, name: att.split('/').pop() || 'Archivo' } : att))
+                : [];
+        } catch {
+            return [];
+        }
+    });
+    const [links, setLinks] = useState<string[]>(() => {
+        if (!cachedReminder?.links) return [];
+        try {
+            const parsed = JSON.parse(cachedReminder.links);
+            return Array.isArray(parsed) ? parsed : [];
+        } catch {
+            return [];
+        }
+    });
+    const [subtasks, setSubtasks] = useState<Subtask[]>(() => {
+        if (!cachedReminder?.subtasks) return [];
+        try {
+            const parsed = JSON.parse(cachedReminder.subtasks);
+            return Array.isArray(parsed) ? parsed : [];
+        } catch {
+            return [];
+        }
+    });
+    const [status, setStatus] = useState<string>(() => cachedReminder?.status || 'pending');
+    const [date, setDate] = useState(() => {
+        if (cachedReminder) return new Date(cachedReminder.due_date_ms);
+        if (initialDateMs) {
+            const parsedMs = typeof initialDateMs === 'string' ? parseInt(initialDateMs, 10) : initialDateMs;
+            if (!isNaN(parsedMs)) {
+                const targetDate = new Date(parsedMs);
+                const now = new Date();
+                // Si la fecha inicial es de un día futuro pero las horas están a medianoche, mantener hora actual o próxima
+                if (targetDate.getHours() === 0 && targetDate.getMinutes() === 0) {
+                    targetDate.setHours(now.getHours(), now.getMinutes());
+                }
+                return targetDate;
+            }
+        }
+        return new Date();
+    });
+    const [controlLevel, setControlLevel] = useState<ControlLevel>(() => cachedReminder?.control_level || defaultControlLevel);
     const [showPicker, setShowPicker] = useState(false);
-    const [recurrenceType, setRecurrenceType] = useState<RecurrenceType>('none');
+    const [recurrenceType, setRecurrenceType] = useState<RecurrenceType>(() => {
+        if (!cachedReminder?.repeat_rule) return 'none';
+        try {
+            const parsed = JSON.parse(cachedReminder.repeat_rule);
+            return parsed.type || 'none';
+        } catch {
+            return 'none';
+        }
+    });
 
     // Cropper state
     const [cropperUri, setCropperUri] = useState<string | null>(null);
@@ -38,22 +98,19 @@ export const useCreateReminder = (id?: string) => {
     // Animation for picker
     const animationHeight = useRef(new Animated.Value(0)).current;
 
-    const isEditing = !!id;
-    const isDark = theme === 'dark';
-    const MAX_ATTACHMENTS = isPremium ? 10 : 3;
-
     useEffect(() => {
         Animated.timing(animationHeight, {
             toValue: showPicker ? 1 : 0,
-            duration: 300,
+            duration: 250,
             useNativeDriver: false,
         }).start();
     }, [showPicker]);
 
+    // Sincronizar si el recordatorio cambia en background
     useEffect(() => {
         if (isEditing && id) {
             const reminder = reminders.find(r => r.id === id);
-            if (reminder) {
+            if (reminder && reminder !== cachedReminder) {
                 setTitle(reminder.title);
                 setDescription(reminder.description || '');
                 const rawAttachments = reminder.attachments ? JSON.parse(reminder.attachments) : [];
@@ -65,7 +122,6 @@ export const useCreateReminder = (id?: string) => {
                 setDate(new Date(reminder.due_date_ms));
                 setControlLevel(reminder.control_level);
                 setStatus(reminder.status);
-                // Load recurrence
                 if (reminder.repeat_rule) {
                     try {
                         const parsed = JSON.parse(reminder.repeat_rule);
@@ -236,10 +292,11 @@ export const useCreateReminder = (id?: string) => {
                 control_level: controlLevel,
                 repeat_rule: repeatRule || undefined,
                 attachments: JSON.stringify(attachments),
-                links: JSON.stringify(links)
+                links: JSON.stringify(links),
+                subtasks: JSON.stringify(subtasks),
             });
         } else {
-            await addReminder(title, date.getTime(), controlLevel, description, repeatRule, JSON.stringify(attachments), JSON.stringify(links));
+            await addReminder(title, date.getTime(), controlLevel, description, repeatRule, JSON.stringify(attachments), JSON.stringify(links), JSON.stringify(subtasks));
         }
         router.back();
     };
@@ -267,6 +324,8 @@ export const useCreateReminder = (id?: string) => {
         setAttachments,
         links,
         setLinks,
+        subtasks,
+        setSubtasks,
         status,
         date,
         setDate,
@@ -283,6 +342,7 @@ export const useCreateReminder = (id?: string) => {
         pickImageForEditor,
         processCroppedImage,
         cropperUri,
+        setCropperUri,
         isCropperVisible,
         setIsCropperVisible,
         pickDocument,

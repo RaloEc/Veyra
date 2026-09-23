@@ -128,7 +128,7 @@ export function TimeWheel({ value, onChange, isDark = false }: TimeWheelProps) {
 
     useEffect(() => {
         const locales = Localization.getLocales();
-        const systemClock = locales?.[0]?.use24HourClock;
+        const systemClock = (locales?.[0] as any)?.use24HourClock;
         if (systemClock !== undefined) {
             setIsSystem24h(systemClock);
         } else {

@@ -1,47 +1,92 @@
-import { View, YStack, XStack, Text, H2, Button, ScrollView, Switch } from 'tamagui';
+import React, { useState } from 'react';
+import {
+    View,
+    Text,
+    ScrollView,
+    TouchableOpacity,
+    StyleSheet,
+    Switch,
+    Platform,
+    Linking,
+    Alert,
+} from 'react-native';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { useStore } from '../src/store/useStore';
-import { Bell, Moon, Sun, Globe, Volume2, Zap, Clock, Battery, AlertOctagon, ChevronRight, Cloud, RefreshCw, Palette, Check } from '@tamagui/lucide-icons';
-import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Platform, Linking, TouchableOpacity } from 'react-native';
+import {
+    Bell,
+    Moon,
+    Sun,
+    Globe,
+    Volume2,
+    Zap,
+    Clock,
+    Battery,
+    AlertOctagon,
+    ChevronRight,
+    Cloud,
+    RefreshCw,
+    Check,
+    ChevronLeft,
+    Database,
+    Sparkles,
+    ShieldAlert,
+} from '@tamagui/lucide-icons';
 import * as IntentLauncher from 'expo-intent-launcher';
 import * as Application from 'expo-application';
-import { getSoundName } from '../src/constants/sounds';
 import Constants from 'expo-constants';
-import { ACCENT_OPTIONS, AccentTheme } from '../src/theme/accentColors';
+
+import { useStore } from '../src/store/useStore';
+import { seedTestData } from '../src/utils/seedTestData';
+import { getSoundName } from '../src/constants/sounds';
+import { ACCENT_OPTIONS } from '../src/theme/accentColors';
+import { useVeyraTheme } from '../src/theme/useVeyraTheme';
+import { VeyraSurface } from '../src/components/ui/VeyraSurface';
+import { VeyraIconButton } from '../src/components/ui/VeyraIconButton';
+import { VeyraSectionHeader } from '../src/components/ui/VeyraSectionHeader';
+import { VeyraDivider } from '../src/components/ui/VeyraDivider';
+import { AlarmPermissionsModal } from '../src/components/settings/AlarmPermissionsModal';
 
 export default function SettingsScreen() {
     const router = useRouter();
     const { t } = useTranslation();
-    const { theme, toggleTheme, defaultControlLevel, setDefaultControlLevel, soundSettings, language, setLanguage, cloudSyncEnabled, setCloudSyncEnabled, isSyncing, lastSyncTime, syncError, triggerSync, session, accentTheme, setAccentTheme } = useStore();
+    const [showAlarmPermissionsModal, setShowAlarmPermissionsModal] = useState(false);
+    const {
+        theme,
+        toggleTheme,
+        defaultControlLevel,
+        setDefaultControlLevel,
+        soundSettings,
+        language,
+        setLanguage,
+        cloudSyncEnabled,
+        setCloudSyncEnabled,
+        isSyncing,
+        lastSyncTime,
+        syncError,
+        triggerSync,
+        session,
+        accentTheme,
+        setAccentTheme,
+    } = useStore();
+
     const [notificationsEnabled, setNotificationsEnabled] = useState(true);
     const [soundEnabled, setSoundEnabled] = useState(true);
 
-    const isDark = theme === 'dark';
-
-    // Colores optimizados para mejor contraste
-    const colors = {
-        bg: isDark ? '#0a0a0a' : '#F8FAFC',
-        textPrimary: isDark ? '#EDEDED' : '#0c0a09',
-        textSecondary: isDark ? '#A1A1A1' : '#64748B',
-        textMuted: isDark ? '#737373' : '#94A3B8',
-        border: isDark ? '#262626' : '#E2E8F0',
-        surface: isDark ? '#171717' : '#FFFFFF',
-    };
+    const { colors, typography, accent, isDark } = useVeyraTheme();
+    const insets = useSafeAreaInsets();
 
     const controlLevels = [
-        { value: 'normal', label: t('settings.normal'), color: isDark ? '#22c55e' : '#10B981' },
-        { value: 'strict', label: t('settings.strict'), color: isDark ? '#eab308' : '#F59E0B' },
-        { value: 'critical', label: t('settings.critical'), color: isDark ? '#ef4444' : '#E11D48' },
+        { value: 'normal', label: t('settings.normal'), color: isDark ? '#34D399' : '#059669' },
+        { value: 'strict', label: t('settings.strict'), color: isDark ? '#FBBF24' : '#F59E0B' },
+        { value: 'critical', label: t('settings.critical'), color: isDark ? '#FB7185' : '#E11D48' },
     ];
 
     const openAppSettings = async () => {
         if (Platform.OS === 'android') {
             try {
                 await IntentLauncher.startActivityAsync(IntentLauncher.ActivityAction.APPLICATION_DETAILS_SETTINGS, {
-                    data: `package:${Application.applicationId}`
+                    data: `package:${Application.applicationId}`,
                 });
             } catch (e) {
                 Linking.openSettings();
@@ -51,483 +96,511 @@ export default function SettingsScreen() {
         }
     };
 
+    const openExactAlarmSettings = async () => {
+        if (Platform.OS === 'android') {
+            try {
+                await IntentLauncher.startActivityAsync('android.settings.REQUEST_SCHEDULE_EXACT_ALARM', {
+                    data: `package:${Application.applicationId}`,
+                });
+            } catch (e) {
+                openAppSettings();
+            }
+        }
+    };
+
     return (
-        <View style={{ flex: 1, backgroundColor: colors.bg }}>
+        <SafeAreaView style={[styles.screen, { backgroundColor: colors.bg }]} edges={['top', 'right', 'left']}>
+            {/* Header */}
+            <View style={styles.header}>
+                <VeyraIconButton
+                    variant="ghost"
+                    size="sm"
+                    icon={<ChevronLeft size={24} color={colors.textPrimary} />}
+                    onPress={() => router.back()}
+                />
+                <View style={{ flex: 1 }} />
+            </View>
 
             <ScrollView
-                contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 100, paddingTop: 10 }}
+                contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom + 40 }]}
                 showsVerticalScrollIndicator={false}
             >
-                <YStack gap="$6" pb="$8">
-                    {/* Título Principal */}
-                    <H2
-                        fontSize="$8"
-                        fontWeight="900"
-                        color={colors.textPrimary}
-                        letterSpacing={-0.5}
-                    >
+                {/* One UI Visual Viewing Zone: Large Title */}
+                <View style={styles.titleContainer}>
+                    <Text style={[styles.largeTitle, { color: colors.textPrimary }]}>
                         {t('settings.title')}
-                    </H2>
-
-                    {/* Advertencia de Batería Android */}
-                    {Platform.OS === 'android' && (
-                        <TouchableOpacity onPress={openAppSettings} activeOpacity={0.8}>
-                            <XStack
-                                backgroundColor={isDark ? 'rgba(249, 115, 22, 0.08)' : 'rgba(249, 115, 22, 0.05)'}
-                                padding="$4"
-                                borderRadius="$5"
-                                borderWidth={1}
-                                borderColor={isDark ? 'rgba(249, 115, 22, 0.3)' : 'rgba(249, 115, 22, 0.2)'}
-                                alignItems="center"
-                                gap="$3"
-                            >
-                                <Battery size={22} color={isDark ? '#fb923c' : '#f97316'} />
-                                <YStack flex={1}>
-                                    <Text
-                                        fontWeight="700"
-                                        color={isDark ? '#fb923c' : '#f97316'}
-                                        fontSize="$4"
-                                        mb="$1"
-                                    >
-                                        {t('settings.battery_optimization')}
-                                    </Text>
-                                    <Text
-                                        color={isDark ? '#d4d4d4' : '#64748B'}
-                                        fontSize="$3"
-                                        lineHeight={18}
-                                    >
-                                        {t('settings.battery_desc')}
-                                    </Text>
-                                </YStack>
-                                <ChevronRight size={18} color={isDark ? '#a1a1a1' : '#94A3B8'} />
-                            </XStack>
-                        </TouchableOpacity>
-                    )}
-
-                    {/* Sección: General */}
-                    <YStack gap="$3">
-                        <Text
-                            fontSize="$2"
-                            color={colors.textMuted}
-                            textTransform="uppercase"
-                            fontWeight="800"
-                            letterSpacing={1.2}
-                            mb="$1"
+                    </Text>
+                </View>
+                {/* Alarm & Lockscreen Guarantee (Android) */}
+                {Platform.OS === 'android' && (
+                    <TouchableOpacity onPress={() => setShowAlarmPermissionsModal(true)} activeOpacity={0.8}>
+                        <VeyraSurface
+                            level={1}
+                            radius="md"
+                            style={[
+                                styles.permissionBanner,
+                                {
+                                    backgroundColor: isDark ? 'rgba(239, 68, 68, 0.08)' : 'rgba(239, 68, 68, 0.04)',
+                                    borderColor: 'rgba(239, 68, 68, 0.25)',
+                                },
+                            ]}
                         >
-                            {t('settings.general')}
-                        </Text>
+                            <ShieldAlert size={22} color="#EF4444" />
+                            <View style={{ flex: 1, gap: 2 }}>
+                                <Text style={[styles.bannerTitle, { color: isDark ? '#F87171' : '#DC2626', fontSize: typography.body.fontSize, fontWeight: '700' }]}>
+                                    {t('settings.alarm_warranty')}
+                                </Text>
+                                <Text style={[styles.bannerDesc, { color: colors.textSecondary, fontSize: typography.caption.fontSize }]}>
+                                    {t('settings.alarm_warranty_desc')}
+                                </Text>
+                            </View>
+                            <ChevronRight size={18} color={colors.textMuted} />
+                        </VeyraSurface>
+                    </TouchableOpacity>
+                )}
 
-                        <SettingsItem
-                            icon={theme === 'dark' ? Moon : Sun}
-                            label={t('settings.dark_mode')}
-                            iconColor={theme === 'dark' ? '#a78bfa' : '#eab308'}
-                            rightElement={
-                                <Switch
-                                    checked={theme === 'dark'}
-                                    onCheckedChange={toggleTheme}
-                                    size="$3"
-                                    backgroundColor={theme === 'dark' ? '$purple8' : '$gray5'}
+                {/* General Section */}
+                <VeyraSectionHeader title={t('settings.general')} />
+                <VeyraSurface level={1} radius="lg" style={styles.groupCard}>
+                    <SettingsRow
+                        icon={isDark ? Moon : Sun}
+                        iconColor={isDark ? '#A78BFA' : '#F59E0B'}
+                        label={t('settings.dark_mode')}
+                        rightElement={
+                            <Switch
+                                value={isDark}
+                                onValueChange={toggleTheme}
+                                trackColor={{ false: colors.surfaceElevated, true: accent.primary }}
+                                thumbColor="#FFFFFF"
+                            />
+                        }
+                    />
+                    <VeyraDivider />
+                    <SettingsRow
+                        icon={Globe}
+                        iconColor="#10B981"
+                        label={t('settings.language')}
+                        value={language === 'es' ? t('settings.spanish') : t('settings.english')}
+                        onPress={() => setLanguage(language === 'es' ? 'en' : 'es')}
+                    />
+                    <VeyraDivider />
+                    <SettingsRow
+                        icon={Clock}
+                        iconColor="#3B82F6"
+                        label={t('settings.time_format_label')}
+                        value={t('settings.hours_format')}
+                    />
+                </VeyraSurface>
+
+                {/* Accent Theme Section */}
+                <VeyraSectionHeader title={t('settings.accent_theme')} style={{ marginTop: 8 }} />
+                <VeyraSurface level={1} radius="lg" style={[styles.groupCard, { paddingVertical: 14 }]}>
+                    <View style={styles.accentsRow}>
+                        {ACCENT_OPTIONS.map(option => {
+                            const isActive = accentTheme === option.key;
+                            const displayColor = isDark ? option.darkColor : option.lightColor;
+                            return (
+                                <TouchableOpacity
+                                    key={option.key}
+                                    onPress={() => setAccentTheme(option.key)}
+                                    activeOpacity={0.7}
+                                    style={styles.accentItem}
                                 >
-                                    <Switch.Thumb animation="quicker" />
-                                </Switch>
-                            }
-                            isDark={isDark}
-                            colors={colors}
-                        />
+                                    <View
+                                        style={[
+                                            styles.accentCircle,
+                                            {
+                                                backgroundColor: displayColor,
+                                                borderColor: isDark ? '#FFFFFF' : '#0F172A',
+                                                borderWidth: isActive ? 2.5 : 0,
+                                                transform: isActive ? [{ scale: 1.1 }] : [{ scale: 1 }],
+                                            },
+                                        ]}
+                                    >
+                                        {isActive && <Check size={14} color="#FFFFFF" strokeWidth={3} />}
+                                    </View>
+                                    <Text
+                                        style={[
+                                            styles.accentLabel,
+                                            {
+                                                color: isActive ? displayColor : colors.textMuted,
+                                                fontWeight: isActive ? '800' : '600',
+                                                fontSize: typography.micro.fontSize,
+                                            },
+                                        ]}
+                                    >
+                                        {t(`settings.accent_${option.key}`)}
+                                    </Text>
+                                </TouchableOpacity>
+                            );
+                        })}
+                    </View>
+                </VeyraSurface>
 
-                        <SettingsItem
-                            icon={Globe}
-                            label={t('settings.language')}
-                            value={language === 'es' ? t('settings.spanish') : t('settings.english')}
-                            iconColor="#10b981"
-                            onPress={() => setLanguage(language === 'es' ? 'en' : 'es')}
-                            isDark={isDark}
-                            colors={colors}
-                        />
-
-                        <SettingsItem
-                            icon={Clock}
-                            label={t('settings.time_format_label')}
-                            value={t('settings.hours_format')}
-                            iconColor="#3b82f6"
-                            isDark={isDark}
-                            colors={colors}
-                        />
-                    </YStack>
-
-                    {/* Sección: Tema de Color */}
-                    <YStack gap="$3">
-                        <Text
-                            fontSize="$2"
-                            color={colors.textMuted}
-                            textTransform="uppercase"
-                            fontWeight="800"
-                            letterSpacing={1.2}
-                            mb="$1"
-                        >
-                            {t('settings.accent_theme')}
-                        </Text>
-
-                        <YStack
-                            backgroundColor={colors.surface}
-                            borderRadius="$5"
-                            borderWidth={1}
-                            borderColor={colors.border}
-                            padding="$4"
-                        >
-                            <XStack justifyContent="space-between" alignItems="center">
-                                {ACCENT_OPTIONS.map((option) => {
-                                    const isActive = accentTheme === option.key;
-                                    const displayColor = isDark ? option.darkColor : option.lightColor;
-                                    return (
-                                        <TouchableOpacity
-                                            key={option.key}
-                                            onPress={() => setAccentTheme(option.key)}
-                                            activeOpacity={0.7}
-                                            style={{ alignItems: 'center', gap: 6 }}
-                                        >
-                                            <View
-                                                width={isActive ? 42 : 36}
-                                                height={isActive ? 42 : 36}
-                                                borderRadius={isActive ? 21 : 18}
-                                                backgroundColor={displayColor}
-                                                borderWidth={isActive ? 3 : 0}
-                                                borderColor={isDark ? 'white' : '#0c0a09'}
-                                                justifyContent="center"
-                                                alignItems="center"
-                                                style={{ opacity: isActive ? 1 : 0.7 }}
-                                            >
-                                                {isActive && <Check size={18} color="white" strokeWidth={3} />}
-                                            </View>
-                                            <Text
-                                                fontSize={10}
-                                                fontWeight={isActive ? "800" : "500"}
-                                                color={isActive ? displayColor : colors.textMuted}
-                                            >
-                                                {t(`settings.accent_${option.key}`)}
-                                            </Text>
-                                        </TouchableOpacity>
-                                    );
-                                })}
-                            </XStack>
-                        </YStack>
-                    </YStack>
-
-                    {/* Sección: Notificaciones */}
-                    <YStack gap="$3">
-                        <Text
-                            fontSize="$2"
-                            color={colors.textMuted}
-                            textTransform="uppercase"
-                            fontWeight="800"
-                            letterSpacing={1.2}
-                            mb="$1"
-                        >
-                            {t('settings.notifications')}
-                        </Text>
-
-                        <SettingsItem
-                            icon={Bell}
-                            label={t('settings.notifications_label')}
-                            iconColor="#3b82f6"
-                            rightElement={
-                                <Switch
-                                    checked={notificationsEnabled}
-                                    onCheckedChange={setNotificationsEnabled}
-                                    size="$3"
-                                    backgroundColor={notificationsEnabled ? '$blue8' : '$gray5'}
-                                >
-                                    <Switch.Thumb animation="quicker" />
-                                </Switch>
-                            }
-                            isDark={isDark}
-                            colors={colors}
-                        />
-
-                        {notificationsEnabled && (
-                            <SettingsItem
+                {/* Notifications Section */}
+                <VeyraSectionHeader title={t('settings.notifications')} style={{ marginTop: 8 }} />
+                <VeyraSurface level={1} radius="lg" style={styles.groupCard}>
+                    <SettingsRow
+                        icon={Bell}
+                        iconColor="#3B82F6"
+                        label={t('settings.notifications_label')}
+                        rightElement={
+                            <Switch
+                                value={notificationsEnabled}
+                                onValueChange={setNotificationsEnabled}
+                                trackColor={{ false: colors.surfaceElevated, true: accent.primary }}
+                                thumbColor="#FFFFFF"
+                            />
+                        }
+                    />
+                    {notificationsEnabled && (
+                        <>
+                            <VeyraDivider />
+                            <SettingsRow
                                 icon={Volume2}
+                                iconColor="#A78BFA"
                                 label={t('settings.sound')}
-                                iconColor="#a78bfa"
                                 rightElement={
                                     <Switch
-                                        checked={soundEnabled}
-                                        onCheckedChange={setSoundEnabled}
-                                        size="$3"
-                                        backgroundColor={soundEnabled ? '$purple8' : '$gray5'}
-                                    >
-                                        <Switch.Thumb animation="quicker" />
-                                    </Switch>
+                                        value={soundEnabled}
+                                        onValueChange={setSoundEnabled}
+                                        trackColor={{ false: colors.surfaceElevated, true: accent.primary }}
+                                        thumbColor="#FFFFFF"
+                                    />
                                 }
-                                isDark={isDark}
-                                colors={colors}
                             />
-                        )}
-                    </YStack>
+                        </>
+                    )}
+                </VeyraSurface>
 
-                    {/* Sección: Sincronización en la Nube */}
-                    {session && (
-                        <YStack gap="$3">
-                            <Text
-                                fontSize="$2"
-                                color={colors.textMuted}
-                                textTransform="uppercase"
-                                fontWeight="800"
-                                letterSpacing={1.2}
-                                mb="$1"
-                            >
-                                {t('settings.cloud_sync')}
-                            </Text>
-
-                            <SettingsItem
+                {/* Cloud Sync (if logged in) */}
+                {session && (
+                    <>
+                        <VeyraSectionHeader title={t('settings.cloud_sync')} style={{ marginTop: 8 }} />
+                        <VeyraSurface level={1} radius="lg" style={styles.groupCard}>
+                            <SettingsRow
                                 icon={Cloud}
+                                iconColor="#0EA5E9"
                                 label={t('settings.cloud_sync_toggle')}
-                                iconColor="#0ea5e9"
                                 rightElement={
                                     <Switch
-                                        checked={cloudSyncEnabled}
-                                        onCheckedChange={setCloudSyncEnabled}
-                                        size="$3"
-                                        backgroundColor={cloudSyncEnabled ? '$blue8' : '$gray5'}
-                                    >
-                                        <Switch.Thumb animation="quicker" />
-                                    </Switch>
+                                        value={cloudSyncEnabled}
+                                        onValueChange={setCloudSyncEnabled}
+                                        trackColor={{ false: colors.surfaceElevated, true: accent.primary }}
+                                        thumbColor="#FFFFFF"
+                                    />
                                 }
-                                isDark={isDark}
-                                colors={colors}
                             />
-
                             {cloudSyncEnabled && (
                                 <>
-                                    <SettingsItem
+                                    <VeyraDivider />
+                                    <SettingsRow
                                         icon={RefreshCw}
+                                        iconColor={isSyncing ? colors.textMuted : '#10B981'}
                                         label={t('settings.sync_now')}
-                                        value={isSyncing ? t('settings.syncing') : (lastSyncTime ? new Date(lastSyncTime).toLocaleTimeString() : t('settings.never'))}
-                                        iconColor={isSyncing ? '#a1a1a1' : '#22c55e'}
+                                        value={
+                                            isSyncing
+                                                ? t('settings.syncing')
+                                                : lastSyncTime
+                                                ? new Date(lastSyncTime).toLocaleTimeString()
+                                                : t('settings.never')
+                                        }
                                         onPress={isSyncing ? undefined : triggerSync}
-                                        isDark={isDark}
-                                        colors={colors}
                                     />
-
-                                    {syncError && (
-                                        <XStack
-                                            backgroundColor={isDark ? 'rgba(239, 68, 68, 0.08)' : 'rgba(239, 68, 68, 0.05)'}
-                                            padding="$3"
-                                            borderRadius="$4"
-                                            borderWidth={1}
-                                            borderColor={isDark ? 'rgba(239, 68, 68, 0.3)' : 'rgba(239, 68, 68, 0.2)'}
-                                        >
-                                            <Text
-                                                color="#ef4444"
-                                                fontSize="$2"
-                                                fontWeight="600"
-                                            >
-                                                {syncError}
-                                            </Text>
-                                        </XStack>
-                                    )}
                                 </>
                             )}
-                        </YStack>
-                    )}
+                        </VeyraSurface>
+                    </>
+                )}
 
-                    {/* Sección: Tonos de Recordatorio */}
-                    {notificationsEnabled && soundEnabled && (
-                        <YStack gap="$3">
-                            <Text
-                                fontSize="$2"
-                                color={colors.textMuted}
-                                textTransform="uppercase"
-                                fontWeight="800"
-                                letterSpacing={1.2}
-                                mb="$1"
-                            >
-                                {t('settings.tones')}
-                            </Text>
-
-                            <SettingsItem
+                {/* Tones Section */}
+                {notificationsEnabled && soundEnabled && (
+                    <>
+                        <VeyraSectionHeader title={t('settings.tones')} style={{ marginTop: 8 }} />
+                        <VeyraSurface level={1} radius="lg" style={styles.groupCard}>
+                            <SettingsRow
                                 icon={Bell}
+                                iconColor="#10B981"
                                 label={t('settings.normal')}
                                 value={getSoundName(soundSettings.normal)}
-                                iconColor="#22c55e"
-                                onPress={() => router.push({ pathname: '/sounds', params: { level: 'normal' } })}
                                 isLink
-                                isDark={isDark}
-                                colors={colors}
+                                onPress={() => router.push({ pathname: '/sounds', params: { level: 'normal' } })}
                             />
-
-                            <SettingsItem
+                            <VeyraDivider />
+                            <SettingsRow
                                 icon={Zap}
+                                iconColor="#F59E0B"
                                 label={t('settings.strict')}
                                 value={getSoundName(soundSettings.strict)}
-                                iconColor="#f59e0b"
-                                onPress={() => router.push({ pathname: '/sounds', params: { level: 'strict' } })}
                                 isLink
-                                isDark={isDark}
-                                colors={colors}
+                                onPress={() => router.push({ pathname: '/sounds', params: { level: 'strict' } })}
                             />
-
-                            <SettingsItem
+                            <VeyraDivider />
+                            <SettingsRow
                                 icon={AlertOctagon}
+                                iconColor="#E11D48"
                                 label={t('settings.critical')}
                                 value={getSoundName(soundSettings.critical)}
-                                iconColor="#ef4444"
-                                onPress={() => router.push({ pathname: '/sounds', params: { level: 'critical' } })}
                                 isLink
-                                isDark={isDark}
-                                colors={colors}
+                                onPress={() => router.push({ pathname: '/sounds', params: { level: 'critical' } })}
                             />
-                        </YStack>
-                    )}
+                        </VeyraSurface>
+                    </>
+                )}
 
-                    {/* Sección: Nivel de Control por Defecto */}
-                    <YStack gap="$3">
-                        <Text
-                            fontSize="$2"
-                            color={colors.textMuted}
-                            textTransform="uppercase"
-                            fontWeight="800"
-                            letterSpacing={1.2}
-                            mb="$1"
-                        >
-                            {t('settings.control_level')}
-                        </Text>
-
-                        <YStack
-                            backgroundColor={colors.surface}
-                            borderRadius="$5"
-                            borderWidth={1}
-                            borderColor={colors.border}
-                            overflow="hidden"
-                        >
-                            {controlLevels.map((level, index) => {
-                                const isActive = defaultControlLevel === level.value;
-                                return (
-                                    <TouchableOpacity
-                                        key={level.value}
-                                        onPress={() => setDefaultControlLevel(level.value as any)}
-                                        activeOpacity={0.7}
-                                    >
-                                        <XStack
-                                            paddingHorizontal="$4"
-                                            paddingVertical="$3.5"
-                                            alignItems="center"
-                                            justifyContent="space-between"
-                                            backgroundColor={isActive
-                                                ? (isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)')
-                                                : 'transparent'
-                                            }
-                                            borderTopWidth={index > 0 ? 1 : 0}
-                                            borderTopColor={colors.border}
+                {/* Default Control Level */}
+                <VeyraSectionHeader title={t('settings.control_level')} style={{ marginTop: 8 }} />
+                <VeyraSurface level={1} radius="lg" style={styles.groupCard}>
+                    {controlLevels.map((level, idx) => {
+                        const isActive = defaultControlLevel === level.value;
+                        return (
+                            <React.Fragment key={level.value}>
+                                {idx > 0 && <VeyraDivider />}
+                                <TouchableOpacity
+                                    onPress={() => setDefaultControlLevel(level.value as any)}
+                                    activeOpacity={0.7}
+                                    style={styles.controlLevelRow}
+                                >
+                                    <View style={styles.controlLevelLeft}>
+                                        <View
+                                            style={[
+                                                styles.controlDot,
+                                                { backgroundColor: level.color, opacity: isActive ? 1 : 0.4 },
+                                            ]}
+                                        />
+                                        <Text
+                                            style={[
+                                                styles.controlLevelLabel,
+                                                {
+                                                    color: isActive ? colors.textPrimary : colors.textSecondary,
+                                                    fontWeight: isActive ? '700' : '500',
+                                                    fontSize: typography.body.fontSize,
+                                                },
+                                            ]}
                                         >
-                                            <XStack alignItems="center" gap="$3">
-                                                <View
-                                                    width={8}
-                                                    height={8}
-                                                    borderRadius={4}
-                                                    backgroundColor={level.color}
-                                                    opacity={isActive ? 1 : 0.4}
-                                                />
-                                                <Text
-                                                    fontSize="$4"
-                                                    fontWeight={isActive ? "700" : "500"}
-                                                    color={isActive ? colors.textPrimary : colors.textSecondary}
-                                                >
-                                                    {level.label}
-                                                </Text>
-                                            </XStack>
+                                            {level.label}
+                                        </Text>
+                                    </View>
 
-                                            {isActive && (
-                                                <View
-                                                    width={18}
-                                                    height={18}
-                                                    borderRadius={9}
-                                                    backgroundColor={level.color}
-                                                    alignItems="center"
-                                                    justifyContent="center"
-                                                >
-                                                    <View
-                                                        width={6}
-                                                        height={6}
-                                                        borderRadius={3}
-                                                        backgroundColor="white"
-                                                    />
-                                                </View>
-                                            )}
-                                        </XStack>
-                                    </TouchableOpacity>
+                                    {isActive && (
+                                        <View style={[styles.controlActiveBadge, { backgroundColor: level.color }]}>
+                                            <View style={styles.controlActiveInnerDot} />
+                                        </View>
+                                    )}
+                                </TouchableOpacity>
+                            </React.Fragment>
+                        );
+                    })}
+                </VeyraSurface>
+
+                {/* Datos de Demostración y Pruebas */}
+                <VeyraSectionHeader title={language === 'es' ? 'Datos de Demostración' : 'Demo & Test Data'} />
+                <VeyraSurface level={1} radius="lg" style={styles.groupCard}>
+                    <SettingsRow
+                        icon={Database}
+                        iconColor={accent.primary}
+                        label={language === 'es' ? 'Generar datos de prueba' : 'Generate sample data'}
+                        value={language === 'es' ? 'Carpetas, Notas y Recordatorios' : 'Folders, Notes & Reminders'}
+                        onPress={async () => {
+                            try {
+                                await seedTestData();
+                                Alert.alert(
+                                    language === 'es' ? 'Datos de Demostración Creados' : 'Sample Data Created',
+                                    language === 'es'
+                                        ? 'Se han creado carpetas personalizadas (Universidad, Trabajo, Ideas), notas con formato enriquecido y recordatorios con subtareas para hoy y todo el mes.'
+                                        : 'Custom folders, rich notes, and reminders with subtasks for today and the whole month have been created.'
                                 );
-                            })}
-                        </YStack>
+                            } catch (error) {
+                                console.error('Error generating sample data:', error);
+                            }
+                        }}
+                    />
+                </VeyraSurface>
 
-                    </YStack>
-
-                    <Text
-                        textAlign="center"
-                        fontSize="$2"
-                        color={colors.textMuted}
-                        opacity={0.5}
-                        mt="$4"
-                    >
-                        {t('settings.version')} {Constants.expoConfig?.version || '1.0.0'} ({Platform.OS})
-                    </Text>
-                </YStack>
+                <Text style={[styles.versionText, { color: colors.textMuted, fontSize: typography.micro.fontSize }]}>
+                    {t('settings.version')} {Constants.expoConfig?.version || '1.0.0'} ({Platform.OS})
+                </Text>
             </ScrollView>
-        </View>
+
+            {Platform.OS === 'android' && (
+                <AlarmPermissionsModal
+                    visible={showAlarmPermissionsModal}
+                    onClose={() => setShowAlarmPermissionsModal(false)}
+                />
+            )}
+        </SafeAreaView>
     );
 }
 
-// Componente de ítem individual optimizado
-function SettingsItem({
+interface SettingsRowProps {
+    icon: any;
+    iconColor: string;
+    label: string;
+    value?: string;
+    rightElement?: React.ReactNode;
+    isLink?: boolean;
+    onPress?: () => void;
+}
+
+function SettingsRow({
     icon: Icon,
+    iconColor,
     label,
     value,
-    iconColor,
-    onPress,
     rightElement,
-    isLink = false,
-    isDark,
-    colors
-}: any) {
-    return (
-        <TouchableOpacity onPress={onPress} disabled={!onPress} activeOpacity={0.7}>
-            <XStack
-                paddingHorizontal="$4"
-                paddingVertical="$3.5"
-                alignItems="center"
-                justifyContent="space-between"
-                backgroundColor={colors.surface}
-                borderRadius="$5"
-                borderWidth={1}
-                borderColor={colors.border}
-            >
-                <XStack gap="$3" alignItems="center" flex={1}>
-                    <Icon size={20} color={iconColor} />
-                    <Text
-                        fontSize="$4"
-                        fontWeight="600"
-                        color={colors.textPrimary}
-                    >
-                        {label}
-                    </Text>
-                </XStack>
+    isLink,
+    onPress,
+}: SettingsRowProps) {
+    const { colors, typography } = useVeyraTheme();
 
-                <XStack alignItems="center" gap="$2.5">
-                    {value && (
-                        <Text
-                            fontSize="$3"
-                            color={colors.textSecondary}
-                            numberOfLines={1}
-                            maxWidth={150}
-                            fontWeight="500"
-                        >
-                            {value}
-                        </Text>
-                    )}
-                    {rightElement}
-                    {isLink && <ChevronRight size={18} color={colors.textMuted} />}
-                </XStack>
-            </XStack>
+    return (
+        <TouchableOpacity
+            onPress={onPress}
+            disabled={!onPress}
+            activeOpacity={0.7}
+            style={styles.settingsRow}
+        >
+            <View style={styles.rowLeftGroup}>
+                <Icon size={18} color={iconColor} />
+                <Text style={[styles.rowLabel, { color: colors.textPrimary, fontSize: typography.body.fontSize }]}>
+                    {label}
+                </Text>
+            </View>
+
+            <View style={styles.rowRightGroup}>
+                {value && (
+                    <Text
+                        style={[styles.rowValue, { color: colors.textSecondary, fontSize: typography.caption.fontSize }]}
+                        numberOfLines={1}
+                    >
+                        {value}
+                    </Text>
+                )}
+                {rightElement}
+                {isLink && <ChevronRight size={16} color={colors.textMuted} />}
+            </View>
         </TouchableOpacity>
     );
 }
+
+const styles = StyleSheet.create({
+    screen: {
+        flex: 1,
+    },
+    header: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingHorizontal: 16,
+        paddingVertical: 8,
+    },
+    titleContainer: {
+        paddingTop: 4,
+        paddingBottom: 14,
+    },
+    largeTitle: {
+        fontSize: 28,
+        fontWeight: '900',
+        letterSpacing: -0.6,
+    },
+    scrollContent: {
+        paddingHorizontal: 20,
+        paddingTop: 8,
+        gap: 10,
+    },
+    permissionBanner: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        padding: 14,
+        gap: 12,
+        marginBottom: 6,
+    },
+    bannerTitle: {
+        fontWeight: '700',
+    },
+    bannerDesc: {
+        lineHeight: 18,
+    },
+    groupCard: {
+        paddingHorizontal: 14,
+    },
+    settingsRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        paddingVertical: 13,
+        minHeight: 48,
+    },
+    rowLeftGroup: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 12,
+        flex: 1,
+    },
+    rowLabel: {
+        fontWeight: '600',
+    },
+    rowRightGroup: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+    },
+    rowValue: {
+        fontWeight: '500',
+        maxWidth: 140,
+    },
+    accentsRow: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+    },
+    accentItem: {
+        alignItems: 'center',
+        gap: 6,
+    },
+    accentCircle: {
+        width: 36,
+        height: 36,
+        borderRadius: 18,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    accentLabel: {
+        textTransform: 'capitalize',
+    },
+    controlLevelRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        paddingVertical: 13,
+        minHeight: 48,
+    },
+    controlLevelLeft: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 10,
+    },
+    controlDot: {
+        width: 8,
+        height: 8,
+        borderRadius: 4,
+    },
+    controlLevelLabel: {},
+    controlActiveBadge: {
+        width: 18,
+        height: 18,
+        borderRadius: 9,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    controlActiveInnerDot: {
+        width: 6,
+        height: 6,
+        borderRadius: 3,
+        backgroundColor: '#FFFFFF',
+    },
+    versionText: {
+        textAlign: 'center',
+        opacity: 0.5,
+        marginTop: 16,
+    },
+});

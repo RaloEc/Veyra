@@ -11,7 +11,8 @@ export const ReminderService = {
         description?: string,
         repeatRule?: string, // JSON
         attachments?: string, // JSON
-        links?: string // JSON
+        links?: string, // JSON
+        subtasks?: string // JSON
     ): Promise<Reminder> {
         const db = await getDB();
         const id = Crypto.randomUUID();
@@ -37,13 +38,14 @@ export const ReminderService = {
             deleted: 0,
             repeat_rule: repeatRule,
             attachments,
-            links
+            links,
+            subtasks,
         };
 
         await db.runAsync(
-            `INSERT INTO reminders (id, user_id, title, description, due_date_ms, control_level, priority, status, next_attempt_ms, retry_count, max_retries, last_modified_ms, deleted, repeat_rule, attachments, links)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [id, newReminder.user_id, title, description || null, dueDate, controlLevel, priority, 'pending', dueDate, 0, newReminder.max_retries, now, 0, repeatRule || null, attachments || null, links || null]
+            `INSERT INTO reminders (id, user_id, title, description, due_date_ms, control_level, priority, status, next_attempt_ms, retry_count, max_retries, last_modified_ms, deleted, repeat_rule, attachments, links, subtasks)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [id, newReminder.user_id, title, description || null, dueDate, controlLevel, priority, 'pending', dueDate, 0, newReminder.max_retries, now, 0, repeatRule || null, attachments || null, links || null, subtasks || null]
         );
 
         return newReminder;
@@ -72,11 +74,12 @@ export const ReminderService = {
         );
     },
 
-    async getHistory(): Promise<Reminder[]> {
+    async getHistory(limit: number = 20, offset: number = 0): Promise<Reminder[]> {
         const db = await getDB();
-        // Fetch Completed OR Deleted items
+        // Fetch Completed OR Deleted items with pagination
         return await db.getAllAsync<Reminder>(
-            `SELECT * FROM reminders WHERE (status = 'completed' OR deleted = 1) ORDER BY last_modified_ms DESC`
+            `SELECT * FROM reminders WHERE (status = 'completed' OR deleted = 1) ORDER BY last_modified_ms DESC LIMIT ? OFFSET ?`,
+            [limit, offset]
         );
     },
 
@@ -137,9 +140,52 @@ export const ReminderService = {
         );
     },
 
+    async restoreReminders(ids: string[]): Promise<void> {
+        if (!ids || ids.length === 0) return;
+        const db = await getDB();
+        const now = Date.now();
+        const placeholders = ids.map(() => '?').join(', ');
+        await db.runAsync(
+            `UPDATE reminders SET deleted = 0, deleted_at_ms = NULL, last_modified_ms = ? WHERE id IN (${placeholders})`,
+            [now, ...ids]
+        );
+    },
+
+    async reactivateReminder(id: string): Promise<void> {
+        const db = await getDB();
+        const now = Date.now();
+        await db.runAsync(
+            `UPDATE reminders SET status = 'pending', last_modified_ms = ? WHERE id = ?`,
+            [now, id]
+        );
+    },
+
+    async reactivateReminders(ids: string[]): Promise<void> {
+        if (!ids || ids.length === 0) return;
+        const db = await getDB();
+        const now = Date.now();
+        const placeholders = ids.map(() => '?').join(', ');
+        await db.runAsync(
+            `UPDATE reminders SET status = 'pending', last_modified_ms = ? WHERE id IN (${placeholders})`,
+            [now, ...ids]
+        );
+    },
+
     async deleteForever(id: string): Promise<void> {
         const db = await getDB();
         await db.runAsync(`DELETE FROM reminders WHERE id = ?`, [id]);
+    },
+
+    async deleteRemindersForever(ids: string[]): Promise<void> {
+        if (!ids || ids.length === 0) return;
+        const db = await getDB();
+        const placeholders = ids.map(() => '?').join(', ');
+        await db.runAsync(`DELETE FROM reminders WHERE id IN (${placeholders})`, ids);
+    },
+
+    async emptyRemindersTrash(): Promise<void> {
+        const db = await getDB();
+        await db.runAsync(`DELETE FROM reminders WHERE deleted = 1`);
     },
 
     async getOverdueReminders(): Promise<Reminder[]> {

@@ -1,93 +1,204 @@
 import * as Notifications from 'expo-notifications';
-import { Reminder, ControlLevel } from '../types/db';
+import Constants, { ExecutionEnvironment } from 'expo-constants';
+import { Reminder, ControlLevel, CalendarEvent } from '../types/db';
 import { Platform } from 'react-native';
-import { useStore } from '../store/useStore';
+import { format } from 'date-fns';
+import { getSoundName } from '../constants/sounds';
 import i18n from '../lib/i18n';
+
+export const DEFAULT_SOUND_SETTINGS = {
+    normal: 'ping_brillante.wav',
+    strict: 'buzzer_fabrica.wav',
+    critical: 'alarma_fuego.mp3',
+};
 
 const stripHtml = (html: string) => {
     if (!html) return '';
     return html.replace(/<[^>]*>?/gm, '').trim();
 };
 
+const stripExtension = (filename: string): string => {
+    if (!filename) return '';
+    const lastDot = filename.lastIndexOf('.');
+    return lastDot !== -1 ? filename.substring(0, lastDot) : filename;
+};
+
 export const NotificationService = {
     async setup() {
+        console.log('[NotificationService] 🚀 Inicializando NotificationHandler');
         Notifications.setNotificationHandler({
-            handleNotification: async () => ({
-                shouldShowAlert: true,
-                shouldPlaySound: true,
-                shouldSetBadge: true,
-                shouldShowBanner: true,
-                shouldShowList: true,
-            }),
+            handleNotification: async (notification) => {
+                console.log(`[NotificationService] 🔔 Notificación recibida en primer plano: [${notification.request.identifier}] "${notification.request.content.title}"`);
+                return {
+                    shouldShowBanner: true,
+                    shouldShowList: true,
+                    shouldPlaySound: true,
+                    shouldSetBadge: true,
+                };
+            },
         });
     },
 
-    async requestPermissions() {
-        const { status: existingStatus } = await Notifications.getPermissionsAsync();
-        let finalStatus = existingStatus;
+    /**
+     * Asegura la creación del canal de notificación dinámico en Android
+     * según el nivel de control y el archivo de sonido elegido.
+     */
+    async ensureChannel(level: ControlLevel, soundFilename: string): Promise<string> {
+        if (Platform.OS !== 'android') {
+            return 'default';
+        }
 
-        if (existingStatus !== 'granted') {
-            const { status } = await Notifications.requestPermissionsAsync({
-                ios: {
-                    allowAlert: true,
-                    allowBadge: true,
-                    allowSound: true,
-                    allowCriticalAlerts: true,
+        const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient || (Constants as any).appOwnership === 'expo';
+        if (isExpoGo) {
+            return 'default';
+        }
+
+        try {
+            const soundKey = stripExtension(soundFilename);
+            const channelId = `veyra_v5_${level}_${soundKey || 'default'}`;
+            const soundLabel = getSoundName(soundFilename);
+
+            let channelName = 'Normal';
+            let importance = Notifications.AndroidImportance.HIGH;
+            let vibrationPattern = [0, 250, 250, 250];
+            let lightColor = '#3b82f6';
+            let bypassDnd = false;
+
+            if (level === 'strict') {
+                channelName = `Estricto (${soundLabel})`;
+                importance = Notifications.AndroidImportance.MAX;
+                vibrationPattern = [0, 500, 250, 500];
+                lightColor = '#f59e0b';
+                bypassDnd = true;
+            } else if (level === 'critical') {
+                channelName = `Crítico (${soundLabel})`;
+                importance = Notifications.AndroidImportance.MAX;
+                vibrationPattern = [0, 500, 500, 500, 500, 500];
+                lightColor = '#ef4444';
+                bypassDnd = true;
+            } else {
+                channelName = `Normal (${soundLabel})`;
+            }
+
+            console.log(`[NotificationService] 📡 Configurando canal Android: ${channelId} | Sonido: ${soundFilename} | Importancia: ${importance}`);
+
+            await Notifications.setNotificationChannelAsync(channelId, {
+                name: channelName,
+                importance,
+                vibrationPattern,
+                lightColor,
+                sound: soundFilename,
+                lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+                bypassDnd,
+                enableVibrate: true,
+                enableLights: true,
+                audioAttributes: {
+                    usage: level === 'normal'
+                        ? Notifications.AndroidAudioUsage.NOTIFICATION
+                        : Notifications.AndroidAudioUsage.ALARM,
+                    contentType: Notifications.AndroidAudioContentType.SONIFICATION,
+                    flags: {
+                        enforceAudibility: true,
+                        requestHardwareAudioVideoSynchronization: false,
+                    },
                 },
             });
-            finalStatus = status;
+
+            return channelId;
+        } catch (e) {
+            console.warn('[NotificationService] Error configurando canal:', e);
+            return 'default';
         }
-
-        // Explicitly set channels for Android
-        if (Platform.OS === 'android') {
-            const { soundSettings } = useStore.getState();
-
-            // Normal Channel
-            await Notifications.setNotificationChannelAsync('normal', {
-                name: 'Normal',
-                importance: Notifications.AndroidImportance.HIGH,
-                vibrationPattern: [0, 250, 250, 250],
-                lightColor: '#3b82f6',
-                sound: soundSettings.normal,
-                lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
-                bypassDnd: false,
-            });
-
-            // Strict Channel
-            await Notifications.setNotificationChannelAsync('strict', {
-                name: 'Estricto',
-                importance: Notifications.AndroidImportance.MAX,
-                vibrationPattern: [0, 500, 250, 500],
-                lightColor: '#f59e0b',
-                sound: soundSettings.strict,
-                lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
-                bypassDnd: true,
-                audioAttributes: {
-                    usage: Notifications.AndroidAudioUsage.ALARM,
-                    contentType: Notifications.AndroidAudioContentType.SONIFICATION,
-                }
-            });
-
-            // Critical Channel (Max Priority)
-            await Notifications.setNotificationChannelAsync('critical', {
-                name: 'Críticos',
-                importance: Notifications.AndroidImportance.MAX,
-                vibrationPattern: [0, 500, 500, 500, 500, 500],
-                lightColor: '#ef4444',
-                sound: soundSettings.critical,
-                lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
-                bypassDnd: true,
-                audioAttributes: {
-                    usage: Notifications.AndroidAudioUsage.ALARM,
-                    contentType: Notifications.AndroidAudioContentType.SONIFICATION,
-                }
-            });
-        }
-
-        return finalStatus === 'granted';
     },
 
-    async scheduleReminderNotification(reminder: Reminder): Promise<string[]> {
+    async requestPermissions(soundSettings?: { normal?: string; strict?: string; critical?: string }) {
+        try {
+            console.log('[NotificationService] 📋 Verificando permisos de notificación...');
+            const { status: existingStatus } = await Notifications.getPermissionsAsync();
+            let finalStatus = existingStatus;
+
+            if (existingStatus !== 'granted') {
+                console.log('[NotificationService] Solicitando permisos al usuario...');
+                const { status } = await Notifications.requestPermissionsAsync({
+                    ios: {
+                        allowAlert: true,
+                        allowBadge: true,
+                        allowSound: true,
+                        allowCriticalAlerts: true,
+                    },
+                });
+                finalStatus = status;
+            }
+
+            console.log(`[NotificationService] Estado final de permisos: ${finalStatus}`);
+
+            // Crear canales iniciales según la configuración actual (solo en Android nativo/APK, omitido en Expo Go)
+            if (Platform.OS === 'android') {
+                const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient || (Constants as any).appOwnership === 'expo';
+                if (!isExpoGo) {
+                    try {
+                        // Limpiar canales obsoletos (v1, v2, v3, v4) para garantizar configuración limpia
+                        const existingChannels = await Notifications.getNotificationChannelsAsync();
+                        for (const ch of existingChannels) {
+                            if (
+                                ch.id.startsWith('veyra_v1_') ||
+                                ch.id.startsWith('veyra_v2_') ||
+                                ch.id.startsWith('veyra_v3_') ||
+                                ch.id.startsWith('veyra_v4_')
+                            ) {
+                                console.log(`[NotificationService] 🧹 Eliminando canal obsoleto: ${ch.id}`);
+                                await Notifications.deleteNotificationChannelAsync(ch.id);
+                            }
+                        }
+                    } catch (cleanErr) {
+                        // Silenciar error en entornos donde el provider no esté disponible
+                    }
+
+                    const sounds = { ...DEFAULT_SOUND_SETTINGS, ...soundSettings };
+                    await this.ensureChannel('normal', sounds.normal);
+                    await this.ensureChannel('strict', sounds.strict);
+                    await this.ensureChannel('critical', sounds.critical);
+                }
+            }
+
+            return finalStatus === 'granted';
+        } catch (e) {
+            console.warn('[NotificationService] Error requesting notification permissions:', e);
+            return false;
+        }
+    },
+
+    async getDiagnosticInfo() {
+        try {
+            const permissions = await Notifications.getPermissionsAsync();
+            let channels: Notifications.NotificationChannel[] = [];
+            if (Platform.OS === 'android') {
+                channels = await Notifications.getNotificationChannelsAsync();
+            }
+            const scheduled = await Notifications.getAllScheduledNotificationsAsync();
+            const report = {
+                platform: Platform.OS,
+                permissionsGranted: permissions.granted,
+                status: permissions.status,
+                channelsCount: channels.length,
+                channels: channels.map(c => ({
+                    id: c.id,
+                    name: c.name,
+                    importance: c.importance,
+                    sound: c.sound,
+                    bypassDnd: c.bypassDnd,
+                })),
+                scheduledCount: scheduled.length,
+            };
+            console.log('[NotificationService Diagnostics]\n' + JSON.stringify(report, null, 2));
+            return report;
+        } catch (e) {
+            console.warn('[NotificationService Diagnostics] Error gathering diagnostics:', e);
+            return null;
+        }
+    },
+
+    async scheduleReminderNotification(reminder: Reminder, soundSettings?: { normal?: string; strict?: string; critical?: string }): Promise<string[]> {
         const trigger = reminder.due_date_ms;
         const notificationIds: string[] = [];
         if (trigger < Date.now()) return [];
@@ -96,36 +207,40 @@ export const NotificationService = {
         if (Platform.OS === 'ios') {
             try {
                 const scheduled = await Notifications.getAllScheduledNotificationsAsync();
-
-                // Calculamos cuántos slots necesitamos para este nuevo recordatorio
-                let slotsNeeded = 1; // Base
+                let slotsNeeded = 1;
                 if (reminder.control_level === 'strict') slotsNeeded += 2;
                 if (reminder.control_level === 'critical') slotsNeeded += 5;
 
-                // Mantenemos un margen de seguridad (60 en lugar de 64)
                 const MAX_SCHEDULED = 60;
-
                 if (scheduled.length + slotsNeeded > MAX_SCHEDULED) {
-                    console.log(`[iOS Notification Limit] Limit reached (${scheduled.length}). Clearing space for ${slotsNeeded} new notifications.`);
-
-                    // Ordenar notificaciones: las más cercanas primero (ascendente)
                     const sorted = scheduled.sort((a, b) => {
+                        const levelA = (a.content as any)?.interruptionLevel as string | undefined;
+                        const levelB = (b.content as any)?.interruptionLevel as string | undefined;
+
+                        const getWeight = (level: string | undefined | null) => {
+                            if (level === 'critical') return 3;
+                            if (level === 'timeSensitive') return 2;
+                            return 1;
+                        };
+
+                        const weightA = getWeight(levelA);
+                        const weightB = getWeight(levelB);
+
+                        if (weightA !== weightB) {
+                            return weightA - weightB;
+                        }
+
                         const triggerA = a.trigger as any;
                         const triggerB = b.trigger as any;
-                        // Intentamos obtener el timestamp tanto si es objeto Date como si es número
-                        const dateA = triggerA.date instanceof Date ? triggerA.date.getTime() : (new Date(triggerA.date || triggerA.value || 0).getTime());
-                        const dateB = triggerB.date instanceof Date ? triggerB.date.getTime() : (new Date(triggerB.date || triggerB.value || 0).getTime());
-                        return dateA - dateB;
+                        const dateA = triggerA?.date instanceof Date ? triggerA.date.getTime() : new Date(triggerA?.date || triggerA?.value || 0).getTime();
+                        const dateB = triggerB?.date instanceof Date ? triggerB.date.getTime() : new Date(triggerB?.date || triggerB?.value || 0).getTime();
+
+                        return dateB - dateA;
                     });
 
-                    // Calculamos cuántas borrar
                     const countToRemove = (scheduled.length + slotsNeeded) - MAX_SCHEDULED;
-
-                    // Borramos las notificaciones MÁS LEJANAS (al final del array ordenado)
-                    // para priorizar los recordatorios inmediatos/cercanos.
-                    // Aseguramos que countToRemove sea positivo y no exceda el length
                     if (countToRemove > 0) {
-                        const toRemove = sorted.slice(sorted.length - countToRemove);
+                        const toRemove = sorted.slice(0, countToRemove);
                         for (const notif of toRemove) {
                             await Notifications.cancelScheduledNotificationAsync(notif.identifier);
                         }
@@ -136,86 +251,113 @@ export const NotificationService = {
             }
         }
 
-        const { soundSettings } = useStore.getState();
-        let channelId = 'normal';
-        let soundFile = soundSettings.normal;
+        const sounds = { ...DEFAULT_SOUND_SETTINGS, ...soundSettings };
+        let soundFile = sounds.normal;
 
         switch (reminder.control_level) {
             case 'strict':
-                channelId = 'strict';
-                soundFile = soundSettings.strict;
+                soundFile = sounds.strict;
                 break;
             case 'critical':
-                channelId = 'critical';
-                soundFile = soundSettings.critical;
+                soundFile = sounds.critical;
                 break;
             default:
-                channelId = 'normal';
-                soundFile = soundSettings.normal;
+                soundFile = sounds.normal;
                 break;
         }
 
+        // Crear/obtener canal dinámico en Android para el sonido específico
+        const channelId = await this.ensureChannel(reminder.control_level, soundFile);
+
         const t = i18n.t.bind(i18n);
         const descriptionBody = stripHtml(reminder.description || '');
+
+        const isPersistent = reminder.control_level === 'strict' || reminder.control_level === 'critical';
+
+        const vibrationPattern = reminder.control_level === 'critical'
+            ? [0, 500, 500, 500, 500, 500]
+            : reminder.control_level === 'strict'
+            ? [0, 500, 250, 500]
+            : [0, 250, 250, 250];
 
         const baseContent = {
             title: reminder.title,
             body: descriptionBody || t('notifications.default_body'),
             data: {
                 reminderId: reminder.id,
-                url: `veyra://confirm/${reminder.id}`
+                url: `veyra://confirm/${reminder.id}`,
             },
-            sound: soundFile, // iOS custom sound
+            sound: soundFile, // Usado en iOS
+            vibrate: vibrationPattern, // Usado explícitamente en Android
             categoryIdentifier: 'REMINDER_ACTION',
-            priority: reminder.control_level === 'critical' ? Notifications.AndroidNotificationPriority.MAX : Notifications.AndroidNotificationPriority.HIGH,
-            interruptionLevel: (reminder.control_level === 'critical' ? 'critical' : reminder.control_level === 'strict' ? 'timeSensitive' : 'active') as any,
+            priority: reminder.control_level === 'critical'
+                ? Notifications.AndroidNotificationPriority.MAX
+                : Notifications.AndroidNotificationPriority.HIGH,
+            interruptionLevel: (reminder.control_level === 'critical'
+                ? 'critical'
+                : reminder.control_level === 'strict'
+                ? 'timeSensitive'
+                : 'active') as any,
+            sticky: isPersistent,
+            autoDismiss: !isPersistent,
         };
 
-        // Schedule primary notification
+        console.log(`[NotificationService] ⏰ Programando recordatorio "${reminder.title}" [${reminder.control_level.toUpperCase()}] para ${new Date(trigger).toLocaleString()} | Canal: ${channelId} | Sonido: ${soundFile}`);
+
+        // Programar notificación primaria
         const primaryId = await Notifications.scheduleNotificationAsync({
             content: baseContent,
             trigger: {
                 type: Notifications.SchedulableTriggerInputTypes.DATE,
                 date: new Date(trigger),
-                channelId: channelId, // Android channel
+                channelId,
             },
         });
         notificationIds.push(primaryId);
+        console.log(`[NotificationService] ✅ Notificación primaria programada: [${primaryId}]`);
 
-        // Schedule follow-ups for Strict and Critical
+        // Repeticiones para niveles Estricto y Crítico (mecanismo de respaldo)
         if (reminder.control_level === 'strict' || reminder.control_level === 'critical') {
-            const interval = reminder.control_level === 'critical' ? 5 * 60 * 1000 : 15 * 60 * 1000; // 5 min critical, 15 min strict
-            const repeats = reminder.control_level === 'critical' ? 5 : 2; // +5 times for critical, +2 for strict
+            const interval = reminder.control_level === 'critical' ? 5 * 60 * 1000 : 15 * 60 * 1000;
+            const repeats = reminder.control_level === 'critical' ? 5 : 2;
 
             for (let i = 1; i <= repeats; i++) {
                 const followUpId = await Notifications.scheduleNotificationAsync({
                     content: {
                         ...baseContent,
-                        body: t('notifications.follow_up_body', { level: reminder.control_level.toUpperCase(), title: reminder.title }),
+                        body: t('notifications.follow_up_body', {
+                            level: reminder.control_level.toUpperCase(),
+                            title: reminder.title,
+                        }),
                     },
                     trigger: {
                         type: Notifications.SchedulableTriggerInputTypes.DATE,
                         date: new Date(trigger + (interval * i)),
-                        channelId: channelId,
+                        channelId,
                     },
                 });
                 notificationIds.push(followUpId);
             }
+            console.log(`[NotificationService] 🔁 ${repeats} notificaciones de respaldo programadas a intervalos de ${interval / 60000}m`);
         }
         return notificationIds;
     },
 
     async cancelNotificationsForReminder(reminderId: string, storedIds?: string[]) {
+        console.log(`[NotificationService] 🛑 Cancelando notificaciones para recordatorio: ${reminderId}`);
         if (storedIds && storedIds.length > 0) {
             await Promise.all(storedIds.map(id => Notifications.cancelScheduledNotificationAsync(id)));
+            console.log(`[NotificationService] Canceladas ${storedIds.length} notificaciones por ID almacenado`);
         } else {
-            // Fallback for legacy or missing IDs
             const scheduled = await Notifications.getAllScheduledNotificationsAsync();
+            let canceledCount = 0;
             for (const notif of scheduled) {
                 if (notif.content.data?.reminderId === reminderId) {
                     await Notifications.cancelScheduledNotificationAsync(notif.identifier);
+                    canceledCount++;
                 }
             }
+            console.log(`[NotificationService] Canceladas ${canceledCount} notificaciones coincidentes`);
         }
     },
 
@@ -243,40 +385,153 @@ export const NotificationService = {
         await Notifications.cancelAllScheduledNotificationsAsync();
     },
 
-    async scheduleImmediateNotification(reminder: Reminder) {
-        const { soundSettings } = useStore.getState();
-        let channelId = 'normal';
-        let soundFile = soundSettings.normal;
+    async scheduleImmediateNotification(reminder: Reminder, soundSettings?: { normal?: string; strict?: string; critical?: string }) {
+        const sounds = { ...DEFAULT_SOUND_SETTINGS, ...soundSettings };
+        let soundFile = sounds.normal;
 
         switch (reminder.control_level) {
             case 'strict':
-                channelId = 'strict';
-                soundFile = soundSettings.strict;
+                soundFile = sounds.strict;
                 break;
             case 'critical':
-                channelId = 'critical';
-                soundFile = soundSettings.critical;
+                soundFile = sounds.critical;
                 break;
             default:
-                channelId = 'normal';
-                soundFile = soundSettings.normal;
+                soundFile = sounds.normal;
                 break;
         }
 
+        const channelId = await this.ensureChannel(reminder.control_level, soundFile);
         const t = i18n.t.bind(i18n);
+
+        const isPersistent = reminder.control_level === 'strict' || reminder.control_level === 'critical';
+
+        const vibrationPattern = reminder.control_level === 'critical'
+            ? [0, 500, 500, 500, 500, 500]
+            : reminder.control_level === 'strict'
+            ? [0, 500, 250, 500]
+            : [0, 250, 250, 250];
+
         await Notifications.scheduleNotificationAsync({
             content: {
                 title: t('notifications.overdue_title', { title: reminder.title }),
                 body: t('notifications.overdue_body'),
                 data: {
                     reminderId: reminder.id,
-                    url: `veyra://confirm/${reminder.id}`
+                    url: `veyra://confirm/${reminder.id}`,
                 },
                 sound: soundFile,
+                vibrate: vibrationPattern,
                 categoryIdentifier: 'REMINDER_ACTION',
-                priority: reminder.control_level === 'critical' ? Notifications.AndroidNotificationPriority.MAX : Notifications.AndroidNotificationPriority.HIGH,
+                priority: reminder.control_level === 'critical'
+                    ? Notifications.AndroidNotificationPriority.MAX
+                    : Notifications.AndroidNotificationPriority.HIGH,
+                sticky: isPersistent,
+                autoDismiss: !isPersistent,
             },
-            trigger: null, // Immediate
+            trigger: Platform.OS === 'android' ? { channelId } as any : null,
         });
-    }
+    },
+
+    /**
+     * Programa una notificación amigable y puntual para un evento de calendario.
+     */
+    async scheduleEventNotification(event: CalendarEvent): Promise<string[]> {
+        let offsets: number[] = [];
+        if (event.notification_offsets) {
+            try {
+                const parsed = JSON.parse(event.notification_offsets);
+                if (Array.isArray(parsed)) {
+                    offsets = parsed.filter(n => typeof n === 'number');
+                }
+            } catch {}
+        } else if (event.notification_offset_min !== undefined && event.notification_offset_min !== null) {
+            offsets = [event.notification_offset_min];
+        }
+
+        if (offsets.length === 0) {
+            return [];
+        }
+
+        const scheduledIds: string[] = [];
+        const now = Date.now();
+
+        for (const offsetMin of offsets) {
+            const offsetMs = offsetMin * 60 * 1000;
+            const triggerTime = event.start_time_ms - offsetMs;
+
+            if (triggerTime <= now) {
+                continue;
+            }
+
+            try {
+                const channelId = await this.ensureChannel('normal', DEFAULT_SOUND_SETTINGS.normal);
+                const startTimeFormatted = format(new Date(event.start_time_ms), 'HH:mm');
+                const endTimeFormatted = format(new Date(event.end_time_ms), 'HH:mm');
+
+                let body = `${startTimeFormatted} - ${endTimeFormatted}`;
+                if (offsetMin > 0) {
+                    if (offsetMin >= 10080 && offsetMin % 10080 === 0) {
+                        const weeks = offsetMin / 10080;
+                        body = `Comienza en ${weeks} ${weeks === 1 ? 'semana' : 'semanas'} (${startTimeFormatted} - ${endTimeFormatted})`;
+                    } else if (offsetMin >= 1440) {
+                        const days = Math.round(offsetMin / 1440);
+                        body = `Comienza en ${days} ${days === 1 ? 'día' : 'días'} (${startTimeFormatted} - ${endTimeFormatted})`;
+                    } else if (offsetMin >= 60) {
+                        const hours = Math.round(offsetMin / 60);
+                        body = `Comienza en ${hours} ${hours === 1 ? 'hora' : 'horas'} (${startTimeFormatted} - ${endTimeFormatted})`;
+                    } else {
+                        body = `Comienza en ${offsetMin} min (${startTimeFormatted} - ${endTimeFormatted})`;
+                    }
+                } else {
+                    body = `Comienza ahora (${startTimeFormatted} - ${endTimeFormatted})`;
+                }
+                if (event.location) {
+                    body += ` • ${event.location}`;
+                }
+
+                const notifId = await Notifications.scheduleNotificationAsync({
+                    content: {
+                        title: `📅 ${event.title}`,
+                        body,
+                        data: {
+                            eventId: event.id,
+                            noteId: event.note_id || undefined,
+                            url: `veyra://event/${event.id}`,
+                        },
+                        sound: DEFAULT_SOUND_SETTINGS.normal,
+                        priority: Notifications.AndroidNotificationPriority.HIGH,
+                    },
+                    trigger: {
+                        type: Notifications.SchedulableTriggerInputTypes.DATE,
+                        date: new Date(triggerTime),
+                        channelId,
+                    },
+                });
+
+                scheduledIds.push(notifId);
+            } catch (error) {
+                console.warn('[NotificationService] Error scheduling event notification:', error);
+            }
+        }
+
+        return scheduledIds;
+    },
+
+    /**
+     * Cancela las notificaciones programadas de un evento.
+     */
+    async cancelEventNotifications(notificationIdsJson?: string) {
+        if (!notificationIdsJson) return;
+        try {
+            const ids: string[] = JSON.parse(notificationIdsJson);
+            if (Array.isArray(ids)) {
+                for (const id of ids) {
+                    await Notifications.cancelScheduledNotificationAsync(id);
+                }
+            }
+        } catch (error) {
+            console.warn('[NotificationService] Error canceling event notifications:', error);
+        }
+    },
 };

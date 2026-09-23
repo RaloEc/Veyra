@@ -448,6 +448,52 @@ export const ComplianceService = {
         };
     },
 
+    // Lightweight method to compute only current streak for TopBar/Store
+    async getCurrentStreak(): Promise<number> {
+        const db = await getDB();
+        const completionEvents = await db.getAllAsync<{ timestamp_ms: number }>(
+            `SELECT DISTINCT timestamp_ms FROM compliance_events WHERE event_type = 'completed' ORDER BY timestamp_ms ASC`
+        );
+
+        if (!completionEvents || completionEvents.length === 0) {
+            return 0;
+        }
+
+        const uniqueDays = new Set<string>();
+        completionEvents.forEach(e => {
+            const date = new Date(e.timestamp_ms);
+            uniqueDays.add(date.toISOString().split('T')[0]);
+        });
+
+        const sortedDays = Array.from(uniqueDays).sort();
+        if (sortedDays.length === 0) return 0;
+
+        const today = new Date().toISOString().split('T')[0];
+        const yesterdayDate = new Date();
+        yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+        const yesterday = yesterdayDate.toISOString().split('T')[0];
+
+        const lastDay = sortedDays[sortedDays.length - 1];
+        if (lastDay === today || lastDay === yesterday) {
+            let idx = sortedDays.length - 1;
+            let currentStreak = 1;
+            while (idx > 0) {
+                const curr = new Date(sortedDays[idx]);
+                const prev = new Date(sortedDays[idx - 1]);
+                const diff = (curr.getTime() - prev.getTime()) / (1000 * 60 * 60 * 24);
+                if (diff === 1) {
+                    currentStreak++;
+                    idx--;
+                } else {
+                    break;
+                }
+            }
+            return currentStreak;
+        }
+
+        return 0;
+    },
+
     // Keep backward compatibility
     async getComplianceStats(userId: string = 'local_user') {
         const full = await this.getFullStats();

@@ -1,75 +1,113 @@
-import { Button, Text, AnimatePresence, YStack } from 'tamagui';
+import React from 'react';
+import {
+    TouchableOpacity,
+    Text,
+    StyleSheet,
+    View,
+} from 'react-native';
+import Animated, {
+    useSharedValue,
+    useAnimatedStyle,
+    withSpring,
+} from 'react-native-reanimated';
 import { Plus } from '@tamagui/lucide-icons';
 import { useRouter, useSegments } from 'expo-router';
-import { useStore } from '../store/useStore';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
-import { useAccentColor } from '../theme/accentColors';
+import { useVeyraTheme } from '../theme/useVeyraTheme';
 
+/**
+ * FloatingCreateButton — Botón flotante accesible de creación rápida (FAB)
+ * Diseñado según la sección 23 de VEYRA_DESIGN_SYSTEM.md
+ */
 export function FloatingCreateButton() {
     const router = useRouter();
     const segments = useSegments();
-    const { theme, detailReminder } = useStore();
     const { t } = useTranslation();
     const insets = useSafeAreaInsets();
-    const { accent, primaryMuted } = useAccentColor();
+    const { accent, motion, isDark, typography } = useVeyraTheme();
+    const scale = useSharedValue(1);
 
-    // El botón SOLO debe aparecer en la pantalla principal (cuando segments esté vacío)
-    // y cuando NO haya un recordatorio abierto en detalle.
+    const animatedStyle = useAnimatedStyle(() => ({
+        transform: [{ scale: scale.value }],
+    }));
+
+    // Solo visible en el Dashboard principal
     const isMainScreen = segments[0] === undefined;
-    const shouldHide = !isMainScreen;
+    if (!isMainScreen) return null;
+
+    const handlePressIn = () => {
+        'worklet';
+        scale.value = withSpring(0.92, { damping: 15, stiffness: 300 });
+    };
+
+    const handlePressOut = () => {
+        'worklet';
+        scale.value = withSpring(1, { damping: 12, stiffness: 200 });
+    };
 
     return (
-        <AnimatePresence>
-            {!shouldHide && (
-                <YStack
-                    key="floating-create-container"
-                    position="absolute"
-                    bottom={insets.bottom + 30}
-                    alignSelf="center"
-                    zIndex={1000}
-                    // @ts-ignore
-                    animation="quick"
-                    enterStyle={{ opacity: 0, scale: 0.8, y: 50 }}
-                    exitStyle={{ opacity: 0, scale: 0.8, y: 50 }}
+        <Animated.View
+            style={[
+                styles.container,
+                {
+                    bottom: insets.bottom + 24,
+                },
+                animatedStyle,
+            ]}
+        >
+            <TouchableOpacity
+                activeOpacity={0.88}
+                onPress={() => router.push('/create')}
+                onPressIn={handlePressIn}
+                onPressOut={handlePressOut}
+                style={[
+                    styles.button,
+                    {
+                        backgroundColor: accent.primary,
+                        shadowColor: accent.primary,
+                    },
+                ]}
+            >
+                <Plus size={18} color={isDark ? '#1B1B1B' : '#FFFFFF'} strokeWidth={3} />
+                <Text
+                    style={[
+                        styles.label,
+                        {
+                            color: isDark ? '#1B1B1B' : '#FFFFFF',
+                            fontSize: typography.caption.fontSize,
+                        },
+                    ]}
                 >
-                    <Button
-                        size="$4"
-                        borderRadius={100}
-                        height={52}
-
-                        // Diseño con el Tema Dinámico (Más sutil en modo oscuro)
-                        backgroundColor={theme === 'dark' ? (primaryMuted as any) : (accent as any)}
-                        borderWidth={0}
-
-                        elevation={15}
-                        shadowColor={theme === 'dark' ? (primaryMuted as any) : (accent as any)}
-                        shadowOffset={{ width: 0, height: 8 }}
-                        shadowOpacity={0.35}
-                        shadowRadius={15}
-
-                        pressStyle={{
-                            scale: 0.95,
-                            opacity: 0.85,
-                        }}
-
-                        onPress={() => router.push('/create')}
-                        icon={<Plus size={20} color="#FFFFFF" strokeWidth={3} />}
-                        paddingHorizontal="$5"
-                    >
-                        <Text
-                            color="#FFFFFF"
-                            fontWeight="900"
-                            fontSize="$4"
-                            fontFamily="$body"
-                            letterSpacing={1.5}
-                            textTransform="uppercase"
-                        >
-                            {t('home.create_fab')}
-                        </Text>
-                    </Button>
-                </YStack>
-            )}
-        </AnimatePresence>
+                    {t('home.create_fab')}
+                </Text>
+            </TouchableOpacity>
+        </Animated.View>
     );
 }
+
+const styles = StyleSheet.create({
+    container: {
+        position: 'absolute',
+        alignSelf: 'center',
+        zIndex: 1000,
+    },
+    button: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        paddingVertical: 12,
+        paddingHorizontal: 20,
+        borderRadius: 999,
+        gap: 6,
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.25,
+        shadowRadius: 10,
+        elevation: 6,
+    },
+    label: {
+        fontWeight: '800',
+        letterSpacing: 0.8,
+        textTransform: 'uppercase',
+    },
+});

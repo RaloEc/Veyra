@@ -1,15 +1,45 @@
-import { YStack, XStack, Text, H2, Avatar, Button, Input, ScrollView, AnimatePresence, Separator, View } from 'tamagui';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { useStore } from '../src/store/useStore';
-import { User, Mail, Calendar, Award, TrendingUp, Target, Flame, CheckCircle2, AlertCircle, XCircle, ChevronRight } from '@tamagui/lucide-icons';
-import { useState, useEffect, useMemo } from 'react';
-import { ComplianceService } from '../src/services/complianceService';
+import React, { useState, useEffect, useMemo } from 'react';
+import {
+    View,
+    Text,
+    TextInput,
+    ScrollView,
+    TouchableOpacity,
+    StyleSheet,
+    Animated,
+} from 'react-native';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
-import { useAccentColor } from '../src/theme/accentColors';
+import {
+    User,
+    Mail,
+    Calendar,
+    Award,
+    TrendingUp,
+    Target,
+    Flame,
+    CheckCircle2,
+    AlertCircle,
+    XCircle,
+    ChevronLeft,
+} from '@tamagui/lucide-icons';
+
+import { useStore } from '../src/store/useStore';
+import { ComplianceService } from '../src/services/complianceService';
+import { useVeyraTheme } from '../src/theme/useVeyraTheme';
+import { VeyraSurface } from '../src/components/ui/VeyraSurface';
+import { VeyraIconButton } from '../src/components/ui/VeyraIconButton';
+import { VeyraButton } from '../src/components/ui/VeyraButton';
+import { VeyraSectionHeader } from '../src/components/ui/VeyraSectionHeader';
+import { VeyraBadge } from '../src/components/ui/VeyraBadge';
 
 export default function ProfileScreen() {
     const { t } = useTranslation();
-    const { theme, userProfile, userName, userEmail, setUserName, setUserEmail } = useStore();
+    const router = useRouter();
+    const { userProfile, userName, userEmail, setUserName, setUserEmail, session } = useStore();
+    const insets = useSafeAreaInsets();
+    const { colors, typography, accent, isDark } = useVeyraTheme();
 
     const [name, setName] = useState('');
     const [email, setEmail] = useState('');
@@ -20,23 +50,6 @@ export default function ProfileScreen() {
         currentStreak: 0,
         bestStreak: 0,
     });
-
-    const isDark = theme === 'dark';
-    const { accent } = useAccentColor();
-
-    const colors = {
-        bg: isDark ? '#0a0a0a' : '#F8FAFC',
-        textPrimary: isDark ? '#EDEDED' : '#0c0a09',
-        textSecondary: isDark ? '#A1A1A1' : '#64748B',
-        textMuted: isDark ? '#525252' : '#94A3B8',
-        border: isDark ? '#262626' : '#E2E8F0',
-        surface: isDark ? '#171717' : '#FFFFFF',
-        inputBg: isDark ? '#1f1f1f' : '#f1f5f9',
-        accent: accent,
-        success: '#10b981',
-        error: '#ef4444',
-        warning: '#f59e0b',
-    };
 
     const [toast, setToast] = useState<{
         show: boolean;
@@ -51,24 +64,38 @@ export default function ProfileScreen() {
     });
 
     const hasChanges = useMemo(() => {
-        const nameChanged = name.trim() !== (userName || '');
-        const emailChanged = email.trim() !== (userEmail || '');
+        const effectiveName = userName || session?.user?.user_metadata?.full_name || session?.user?.email?.split('@')[0] || '';
+        const effectiveEmail = userEmail || session?.user?.email || '';
+        const nameChanged = name.trim() !== effectiveName;
+        const emailChanged = email.trim() !== effectiveEmail;
         return nameChanged || emailChanged;
-    }, [name, email, userName, userEmail]);
+    }, [name, email, userName, userEmail, session]);
 
     useEffect(() => {
+        let isMounted = true;
         async function loadStats() {
-            const data = await ComplianceService.getComplianceStats();
-            setStats(data);
+            try {
+                const data = await ComplianceService.getComplianceStats();
+                if (isMounted) setStats(data);
+            } catch (e) {
+                console.error('Error loading compliance stats in ProfileScreen:', e);
+            }
         }
         loadStats();
-        if (userName) setName(userName);
-        if (userEmail) setEmail(userEmail);
-    }, [userName, userEmail]);
+
+        const defaultName = userName || session?.user?.user_metadata?.full_name || session?.user?.email?.split('@')[0] || '';
+        const defaultEmail = userEmail || session?.user?.email || '';
+        setName(defaultName);
+        setEmail(defaultEmail);
+
+        return () => {
+            isMounted = false;
+        };
+    }, [userName, userEmail, session]);
 
     const showToast = (type: 'success' | 'info' | 'error', title: string, message: string) => {
         setToast({ show: true, type, title, message });
-        setTimeout(() => setToast(prev => ({ ...prev, show: false })), 4000);
+        setTimeout(() => setToast(prev => ({ ...prev, show: false })), 3500);
     };
 
     const handleSave = () => {
@@ -85,267 +112,371 @@ export default function ProfileScreen() {
         showToast('success', t('profile.toasts.profile_updated_title'), t('profile.toasts.profile_updated_msg'));
     };
 
+    const displayName = name || userName || t('profile.new_user');
+
     return (
-        <View style={{ flex: 1, backgroundColor: colors.bg }}>
+        <SafeAreaView style={[styles.screen, { backgroundColor: colors.bg }]} edges={['top', 'right', 'left']}>
+            {/* Header */}
+            <View style={[styles.header, { borderBottomColor: colors.borderSubtle }]}>
+                <VeyraIconButton
+                    variant="ghost"
+                    size="sm"
+                    icon={<ChevronLeft size={24} color={colors.textPrimary} />}
+                    onPress={() => router.back()}
+                />
+                <Text style={[styles.headerTitle, { color: colors.textPrimary, fontSize: 20 }]}>
+                    {t('menu.profile')}
+                </Text>
+                <View style={{ width: 34 }} />
+            </View>
 
             <ScrollView
-                contentContainerStyle={{ paddingTop: 20, paddingBottom: 120 }}
                 showsVerticalScrollIndicator={false}
+                contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom + 90 }]}
             >
-                <YStack gap="$10">
-                    {/* HEADER AREA - More Airy & Premium */}
-                    <YStack
-                        backgroundColor={colors.surface}
-                        pt="$8"
-                        pb="$10"
-                        alignItems="center"
-                        borderBottomWidth={1}
-                        borderBottomColor={colors.border}
-                        gap="$5"
+                {/* Profile Hero Avatar */}
+                <VeyraSurface
+                    level={1}
+                    radius="lg"
+                    style={styles.avatarHeroCard}
+                >
+                    <View style={[styles.avatarCircle, { backgroundColor: accent.primary }]}>
+                        <Text style={styles.avatarInitial}>
+                            {displayName.charAt(0).toUpperCase()}
+                        </Text>
+                    </View>
+
+                    <Text
+                        style={[
+                            styles.profileName,
+                            { color: colors.textPrimary, fontSize: typography.h2.fontSize },
+                        ]}
                     >
-                        <YStack position="relative">
-                            <View
-                                position="absolute"
-                                top={-10}
-                                left={-10}
-                                right={-10}
-                                bottom={-10}
-                                borderRadius={100}
-                                borderWidth={2}
-                                borderColor={colors.accent}
-                                opacity={0.3}
-                            />
-                            <Avatar circular size="$11" borderWidth={4} borderColor={colors.surface}>
-                                <Avatar.Fallback
-                                    backgroundColor={colors.accent}
-                                    alignItems="center"
-                                    justifyContent="center"
-                                >
-                                    {userName ? (
-                                        <Text fontSize="$10" fontWeight="900" color="white" textTransform="uppercase">
-                                            {userName.charAt(0)}
-                                        </Text>
-                                    ) : (
-                                        <User size={48} color="white" />
-                                    )}
-                                </Avatar.Fallback>
-                            </Avatar>
-                        </YStack>
+                        {displayName}
+                    </Text>
 
-                        <YStack alignItems="center" space="$1">
-                            <Text fontSize="$8" fontWeight="900" color={colors.textPrimary} letterSpacing={-0.5}>
-                                {userName || t('profile.new_user')}
+                    <VeyraBadge
+                        label={userProfile ? (t(`menu.profiles.${userProfile}`) || userProfile) : t('profile.standard_profile')}
+                        size="md"
+                    />
+                </VeyraSurface>
+
+                {/* Performance Metrics */}
+                <VeyraSectionHeader title={t('profile.performance')} />
+
+                <View style={styles.metricsGrid}>
+                    <VeyraSurface level={1} radius="md" style={styles.metricCard}>
+                        <View style={[styles.metricIconBox, { backgroundColor: 'rgba(16, 185, 129, 0.12)' }]}>
+                            <Target size={18} color="#10B981" />
+                        </View>
+                        <Text style={[styles.metricNumber, { color: '#10B981' }]}>
+                            {stats.totalCompleted}
+                        </Text>
+                        <Text style={[styles.metricLabel, { color: colors.textMuted, fontSize: typography.micro.fontSize }]}>
+                            {t('profile.successes')}
+                        </Text>
+                    </VeyraSurface>
+
+                    <VeyraSurface level={1} radius="md" style={styles.metricCard}>
+                        <View style={[styles.metricIconBox, { backgroundColor: 'rgba(245, 158, 11, 0.12)' }]}>
+                            <Flame size={18} color="#F59E0B" />
+                        </View>
+                        <Text style={[styles.metricNumber, { color: '#F59E0B' }]}>
+                            {stats.currentStreak}
+                        </Text>
+                        <Text style={[styles.metricLabel, { color: colors.textMuted, fontSize: typography.micro.fontSize }]}>
+                            {t('profile.streak')}
+                        </Text>
+                    </VeyraSurface>
+
+                    <VeyraSurface level={1} radius="md" style={styles.metricCard}>
+                        <View style={[styles.metricIconBox, { backgroundColor: `${accent.primary}20` }]}>
+                            <Award size={18} color={accent.primary} />
+                        </View>
+                        <Text style={[styles.metricNumber, { color: accent.primary }]}>
+                            {stats.completionRate.toFixed(0)}%
+                        </Text>
+                        <Text style={[styles.metricLabel, { color: colors.textMuted, fontSize: typography.micro.fontSize }]}>
+                            {t('profile.compliance')}
+                        </Text>
+                    </VeyraSurface>
+
+                    <VeyraSurface level={1} radius="md" style={styles.metricCard}>
+                        <View style={[styles.metricIconBox, { backgroundColor: 'rgba(239, 68, 68, 0.12)' }]}>
+                            <TrendingUp size={18} color="#EF4444" />
+                        </View>
+                        <Text style={[styles.metricNumber, { color: '#EF4444' }]}>
+                            {stats.totalFailed}
+                        </Text>
+                        <Text style={[styles.metricLabel, { color: colors.textMuted, fontSize: typography.micro.fontSize }]}>
+                            {t('profile.failures')}
+                        </Text>
+                    </VeyraSurface>
+                </View>
+
+                {/* Account Form */}
+                <VeyraSectionHeader title={t('profile.account_info')} style={{ marginTop: 8 }} />
+
+                <VeyraSurface level={1} radius="lg" style={styles.formCard}>
+                    {/* Name */}
+                    <View style={styles.inputGroup}>
+                        <View style={styles.inputLabelRow}>
+                            <User size={14} color={colors.textMuted} />
+                            <Text style={[styles.inputLabelText, { color: colors.textMuted, fontSize: typography.micro.fontSize }]}>
+                                {t('profile.full_name')}
                             </Text>
-                            <XStack space="$2" alignItems="center" backgroundColor={isDark ? '#222' : '#F1F5F9'} px="$3" py="$1" borderRadius="$10">
-                                <Award size={14} color={colors.accent} />
-                                <Text color={colors.textSecondary} fontSize="$2" fontWeight="700" textTransform="uppercase">
-                                    {userProfile ? t(`menu.profiles.${userProfile}`) : t('profile.standard_profile')}
-                                </Text>
-                            </XStack>
-                        </YStack>
-                    </YStack>
+                        </View>
+                        <TextInput
+                            value={name}
+                            onChangeText={setName}
+                            placeholder={t('profile.full_name_placeholder')}
+                            placeholderTextColor={colors.textMuted}
+                            style={[
+                                styles.inputField,
+                                {
+                                    backgroundColor: colors.surfaceElevated,
+                                    borderColor: colors.borderSubtle,
+                                    color: colors.textPrimary,
+                                    fontSize: typography.body.fontSize,
+                                },
+                            ]}
+                            selectionColor={accent.primary}
+                        />
+                    </View>
 
-                    <YStack px="$5" gap="$10">
-                        {/* PERFORMANCE GRID - Modern Cards */}
-                        <YStack gap="$5">
-                            <XStack justifyContent="space-between" alignItems="center">
-                                <Text fontSize="$4" fontWeight="900" color={colors.textPrimary} letterSpacing={0.5}>
-                                    {t('profile.performance')}
-                                </Text>
-                                <XStack space="$1" alignItems="center">
-                                    <Text fontSize="$2" fontWeight="700" color={colors.accent}>{t('profile.view_all')}</Text>
-                                    <ChevronRight size={14} color={colors.accent} />
-                                </XStack>
-                            </XStack>
-
-                            <XStack gap="$4">
-                                <YStack flex={1} backgroundColor={colors.surface} p="$5" borderRadius="$6" gap="$4" borderWidth={1} borderColor={colors.border}>
-                                    <YStack backgroundColor="#22C55E15" alignSelf="flex-start" p="$2" borderRadius="$4">
-                                        <Target size={20} color="#22C55E" />
-                                    </YStack>
-                                    <YStack>
-                                        <Text fontSize="$8" fontWeight="900" color="#22C55E">{stats.totalCompleted}</Text>
-                                        <Text fontSize="$1" fontWeight="700" color={colors.textMuted} textTransform="uppercase">{t('profile.successes')}</Text>
-                                    </YStack>
-                                </YStack>
-
-                                <YStack flex={1} backgroundColor={colors.surface} p="$5" borderRadius="$6" gap="$4" borderWidth={1} borderColor={colors.border}>
-                                    <YStack backgroundColor="#F59E0B15" alignSelf="flex-start" p="$2" borderRadius="$4">
-                                        <Flame size={20} color="#F59E0B" />
-                                    </YStack>
-                                    <YStack>
-                                        <Text fontSize="$8" fontWeight="900" color="#F59E0B">{stats.currentStreak}</Text>
-                                        <Text fontSize="$1" fontWeight="700" color={colors.textMuted} textTransform="uppercase">{t('profile.streak')}</Text>
-                                    </YStack>
-                                </YStack>
-                            </XStack>
-
-                            <XStack gap="$4">
-                                <YStack flex={1} backgroundColor={colors.surface} p="$5" borderRadius="$6" gap="$4" borderWidth={1} borderColor={colors.border}>
-                                    <YStack backgroundColor={colors.accent + '15'} alignSelf="flex-start" p="$2" borderRadius="$4">
-                                        <Award size={20} color={colors.accent} />
-                                    </YStack>
-                                    <YStack>
-                                        <Text fontSize="$8" fontWeight="900" color={colors.accent}>{stats.completionRate.toFixed(0)}%</Text>
-                                        <Text fontSize="$1" fontWeight="700" color={colors.textMuted} textTransform="uppercase">{t('profile.compliance')}</Text>
-                                    </YStack>
-                                </YStack>
-
-                                <YStack flex={1} backgroundColor={colors.surface} p="$5" borderRadius="$6" gap="$4" borderWidth={1} borderColor={colors.border}>
-                                    <YStack backgroundColor="#EF444415" alignSelf="flex-start" p="$2" borderRadius="$4">
-                                        <TrendingUp size={20} color="#EF4444" />
-                                    </YStack>
-                                    <YStack>
-                                        <Text fontSize="$8" fontWeight="900" color="#EF4444">{stats.totalFailed}</Text>
-                                        <Text fontSize="$1" fontWeight="700" color={colors.textMuted} textTransform="uppercase">{t('profile.failures')}</Text>
-                                    </YStack>
-                                </YStack>
-                            </XStack>
-                        </YStack>
-
-                        {/* ACCOUNT INFORMATION - Clean Inputs */}
-                        <YStack gap="$5">
-                            <Text fontSize="$4" fontWeight="900" color={colors.textPrimary} letterSpacing={0.5}>
-                                {t('profile.account_info')}
+                    {/* Email */}
+                    <View style={styles.inputGroup}>
+                        <View style={styles.inputLabelRow}>
+                            <Mail size={14} color={colors.textMuted} />
+                            <Text style={[styles.inputLabelText, { color: colors.textMuted, fontSize: typography.micro.fontSize }]}>
+                                {t('profile.email')}
                             </Text>
+                        </View>
+                        <TextInput
+                            value={email}
+                            onChangeText={setEmail}
+                            placeholder={t('profile.email_placeholder')}
+                            placeholderTextColor={colors.textMuted}
+                            keyboardType="email-address"
+                            autoCapitalize="none"
+                            style={[
+                                styles.inputField,
+                                {
+                                    backgroundColor: colors.surfaceElevated,
+                                    borderColor: colors.borderSubtle,
+                                    color: colors.textPrimary,
+                                    fontSize: typography.body.fontSize,
+                                },
+                            ]}
+                            selectionColor={accent.primary}
+                        />
+                    </View>
+                </VeyraSurface>
 
-                            <YStack gap="$6">
-                                <YStack space="$2">
-                                    <XStack space="$2" alignItems="center" px="$1">
-                                        <User size={14} color={colors.textMuted} />
-                                        <Text fontSize="$2" fontWeight="800" color={colors.textMuted} textTransform="uppercase">{t('profile.full_name')}</Text>
-                                    </XStack>
-                                    <Input
-                                        size="$5"
-                                        placeholder={t('profile.full_name_placeholder')}
-                                        value={name}
-                                        onChangeText={setName}
-                                        backgroundColor={colors.inputBg}
-                                        borderColor={colors.border}
-                                        focusStyle={{ borderColor: colors.accent, backgroundColor: colors.surface }}
-                                        borderWidth={1.5}
-                                        borderRadius="$5"
-                                        fontWeight="600"
-                                        color={colors.textPrimary}
-                                    />
-                                </YStack>
-
-                                <YStack space="$2">
-                                    <XStack space="$2" alignItems="center" px="$1">
-                                        <Mail size={14} color={colors.textMuted} />
-                                        <Text fontSize="$2" fontWeight="800" color={colors.textMuted} textTransform="uppercase">{t('profile.email')}</Text>
-                                    </XStack>
-                                    <Input
-                                        size="$5"
-                                        placeholder={t('profile.email_placeholder')}
-                                        value={email}
-                                        onChangeText={setEmail}
-                                        backgroundColor={colors.inputBg}
-                                        borderColor={colors.border}
-                                        focusStyle={{ borderColor: colors.accent, backgroundColor: colors.surface }}
-                                        borderWidth={1.5}
-                                        borderRadius="$5"
-                                        fontWeight="600"
-                                        color={colors.textPrimary}
-                                        keyboardType="email-address"
-                                    />
-                                </YStack>
-                            </YStack>
-                        </YStack>
-
-                        <XStack
-                            backgroundColor={isDark ? '#1A1A1A' : '#F1F5F9'}
-                            p="$5"
-                            borderRadius="$6"
-                            alignItems="center"
-                            justifyContent="space-between"
-                            marginTop="$2"
-                        >
-                            <XStack space="$3" alignItems="center">
-                                <YStack backgroundColor={isDark ? '#333' : '#FFF'} p="$2" borderRadius="$4">
-                                    <Calendar size={18} color={colors.textPrimary} />
-                                </YStack>
-                                <YStack>
-                                    <Text fontSize="$2" fontWeight="700" color={colors.textMuted}>{t('profile.member_since')}</Text>
-                                    <Text fontSize="$4" fontWeight="800" color={colors.textPrimary}>{t('profile.member_date')}</Text>
-                                </YStack>
-                            </XStack>
-                        </XStack>
-
-                        <Button
-                            size="$6"
-                            backgroundColor={hasChanges ? colors.textPrimary : (isDark ? '#222' : '#E2E8F0')}
-                            borderRadius="$6"
-                            pressStyle={{ scale: 0.98, opacity: 0.9 }}
-                            onPress={handleSave}
-                            disabled={!hasChanges}
-                            elevation={hasChanges ? 8 : 0}
-                            shadowColor={colors.textPrimary}
-                            marginTop="$6"
-                        >
-                            <Text
-                                color={hasChanges ? colors.bg : colors.textMuted}
-                                fontWeight="900"
-                                fontSize="$5"
-                                textTransform="uppercase"
-                                letterSpacing={1}
-                            >
-                                {t('profile.update_button')}
+                {/* Membership metadata */}
+                <VeyraSurface level={1} radius="md" style={styles.metaRow}>
+                    <View style={styles.metaLeftGroup}>
+                        <Calendar size={18} color={accent.primary} />
+                        <View style={{ gap: 2 }}>
+                            <Text style={[styles.metaLabel, { color: colors.textMuted, fontSize: typography.micro.fontSize }]}>
+                                {t('profile.member_since')}
                             </Text>
-                        </Button>
-                    </YStack>
-                </YStack>
+                            <Text style={[styles.metaValue, { color: colors.textPrimary, fontSize: typography.body.fontSize }]}>
+                                {t('profile.member_date')}
+                            </Text>
+                        </View>
+                    </View>
+                </VeyraSurface>
             </ScrollView>
 
-            <AnimatePresence>
-                {toast.show && (
-                    <YStack
-                        key="toast"
-                        position="absolute"
-                        bottom={40}
-                        left={20}
-                        right={20}
-                        backgroundColor={isDark ? '#1A1A1A' : '#FFFFFF'}
-                        borderRadius="$8"
-                        padding="$4"
-                        borderWidth={1}
-                        borderColor={
-                            toast.type === 'success' ? colors.success + '40' :
-                                toast.type === 'error' ? colors.error + '40' :
-                                    colors.accent + '40'
-                        }
-                        shadowColor="#000"
-                        shadowOffset={{ width: 0, height: 10 }}
-                        shadowOpacity={0.2}
-                        shadowRadius={20}
-                        elevation={20}
-                        enterStyle={{ opacity: 0, y: 50, scale: 0.9 }}
-                        exitStyle={{ opacity: 0, scale: 0.95 }}
-                        animation="bouncy"
-                        zIndex={10000}
-                    >
-                        <XStack space="$4" alignItems="center">
-                            <YStack
-                                backgroundColor={
-                                    toast.type === 'success' ? colors.success + '20' :
-                                        toast.type === 'error' ? colors.error + '20' :
-                                            colors.accent + '20'
-                                }
-                                p="$3"
-                                borderRadius="$5"
-                            >
-                                {toast.type === 'success' && <CheckCircle2 size={24} color={colors.success} />}
-                                {toast.type === 'error' && <XCircle size={24} color={colors.error} />}
-                                {toast.type === 'info' && <AlertCircle size={24} color={colors.accent} />}
-                            </YStack>
-                            <YStack flex={1}>
-                                <Text color={colors.textPrimary} fontWeight="900" fontSize="$4">{toast.title}</Text>
-                                <Text color={colors.textSecondary} fontSize="$3" fontWeight="500">{toast.message}</Text>
-                            </YStack>
-                        </XStack>
-                    </YStack>
-                )}
-            </AnimatePresence>
-        </View>
+            {/* Sticky Action Footer — Zona del pulgar One UI */}
+            <View
+                style={[
+                    styles.stickyFooter,
+                    {
+                        backgroundColor: colors.surface,
+                        borderTopColor: colors.borderSubtle,
+                        paddingBottom: Math.max(insets.bottom, 16),
+                    },
+                ]}
+            >
+                <VeyraButton
+                    variant="primary"
+                    size="lg"
+                    label={t('profile.update_button')}
+                    disabled={!hasChanges}
+                    onPress={handleSave}
+                />
+            </View>
+
+            {/* Toast feedback */}
+            {toast.show && (
+                <View
+                    style={[
+                        styles.toastContainer,
+                        {
+                            backgroundColor: colors.surfaceElevated,
+                            borderColor:
+                                toast.type === 'success'
+                                    ? '#10B981'
+                                    : toast.type === 'error'
+                                    ? '#EF4444'
+                                    : accent.primary,
+                        },
+                    ]}
+                >
+                    {toast.type === 'success' && <CheckCircle2 size={20} color="#10B981" />}
+                    {toast.type === 'error' && <XCircle size={20} color="#EF4444" />}
+                    {toast.type === 'info' && <AlertCircle size={20} color={accent.primary} />}
+                    <View style={{ flex: 1, gap: 2 }}>
+                        <Text style={[styles.toastTitle, { color: colors.textPrimary, fontSize: typography.bodyMedium.fontSize }]}>
+                            {toast.title}
+                        </Text>
+                        <Text style={[styles.toastMsg, { color: colors.textSecondary, fontSize: typography.caption.fontSize }]}>
+                            {toast.message}
+                        </Text>
+                    </View>
+                </View>
+            )}
+        </SafeAreaView>
     );
 }
+
+const styles = StyleSheet.create({
+    screen: {
+        flex: 1,
+    },
+    header: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        paddingHorizontal: 16,
+        paddingVertical: 8,
+        borderBottomWidth: 1,
+    },
+    headerTitle: {
+        fontWeight: '800',
+        letterSpacing: -0.4,
+    },
+    scrollContent: {
+        paddingHorizontal: 20,
+        paddingTop: 16,
+        gap: 14,
+    },
+    avatarHeroCard: {
+        alignItems: 'center',
+        paddingVertical: 20,
+        gap: 10,
+    },
+    avatarCircle: {
+        width: 72,
+        height: 72,
+        borderRadius: 36,
+        alignItems: 'center',
+        justifyContent: 'center',
+        borderWidth: 3,
+        borderColor: 'rgba(255, 255, 255, 0.2)',
+    },
+    avatarInitial: {
+        color: '#FFFFFF',
+        fontSize: 28,
+        fontWeight: '900',
+    },
+    profileName: {
+        fontWeight: '800',
+        letterSpacing: -0.4,
+    },
+    metricsGrid: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        gap: 10,
+    },
+    metricCard: {
+        flex: 1,
+        minWidth: '45%',
+        padding: 14,
+        gap: 6,
+    },
+    metricIconBox: {
+        width: 32,
+        height: 32,
+        borderRadius: 8,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    metricNumber: {
+        fontSize: 22,
+        fontWeight: '900',
+    },
+    metricLabel: {
+        fontWeight: '700',
+        textTransform: 'uppercase',
+    },
+    formCard: {
+        padding: 16,
+        gap: 14,
+    },
+    inputGroup: {
+        gap: 6,
+    },
+    inputLabelRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+    },
+    inputLabelText: {
+        fontWeight: '700',
+        textTransform: 'uppercase',
+        letterSpacing: 0.5,
+    },
+    inputField: {
+        borderWidth: 1,
+        borderRadius: 10,
+        paddingHorizontal: 14,
+        paddingVertical: 12,
+        fontWeight: '600',
+    },
+    metaRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        padding: 14,
+    },
+    metaLeftGroup: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 12,
+    },
+    metaLabel: {
+        fontWeight: '700',
+        textTransform: 'uppercase',
+    },
+    metaValue: {
+        fontWeight: '700',
+    },
+    toastContainer: {
+        position: 'absolute',
+        bottom: 30,
+        left: 20,
+        right: 20,
+        borderRadius: 14,
+        borderWidth: 1,
+        padding: 14,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 12,
+        elevation: 10,
+        zIndex: 10000,
+    },
+    toastTitle: {
+        fontWeight: '800',
+    },
+    toastMsg: {
+        fontWeight: '500',
+    },
+    stickyFooter: {
+        paddingHorizontal: 20,
+        paddingTop: 12,
+        borderTopWidth: 1,
+    },
+});

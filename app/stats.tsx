@@ -1,49 +1,47 @@
-import { View, YStack, XStack, Text, H2, ScrollView } from 'tamagui';
-import { useStore } from '../src/store/useStore';
+import React, { useState, useCallback } from 'react';
 import {
-    Target, TrendingUp, Award, Flame, Clock, Zap, BarChart3,
-    Layers, ChevronLeft, AlertTriangle, CheckCircle2, Lightbulb,
-    StickyNote, Pin, Paperclip, ArrowUpRight, ArrowDownRight, Minus, Info
-} from '@tamagui/lucide-icons';
-import { useState, useEffect, useCallback } from 'react';
-import { ComplianceService, FullStats, SmartInsight } from '../src/services/complianceService';
+    View,
+    Text,
+    ScrollView,
+    TouchableOpacity,
+    StyleSheet,
+    ActivityIndicator,
+} from 'react-native';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useRouter, useFocusEffect } from 'expo-router';
 import { useTranslation } from 'react-i18next';
-import { TouchableOpacity, StyleSheet } from 'react-native';
-import { useRouter } from 'expo-router';
-import { useFocusEffect } from 'expo-router';
-import { useAccentColor } from '../src/theme/accentColors';
+import {
+    Target,
+    TrendingUp,
+    Flame,
+    Clock,
+    Zap,
+    ChevronLeft,
+    AlertTriangle,
+    CheckCircle2,
+    Lightbulb,
+    Info,
+} from '@tamagui/lucide-icons';
+
+import { ComplianceService, FullStats, SmartInsight } from '../src/services/complianceService';
+import { useVeyraTheme } from '../src/theme/useVeyraTheme';
+import { VeyraSurface } from '../src/components/ui/VeyraSurface';
+import { VeyraIconButton } from '../src/components/ui/VeyraIconButton';
+import { VeyraSectionHeader } from '../src/components/ui/VeyraSectionHeader';
+import { VeyraBadge } from '../src/components/ui/VeyraBadge';
 
 export default function StatsScreen() {
     const { t } = useTranslation();
-    const { theme, language } = useStore();
     const router = useRouter();
-    const isDark = theme === 'dark';
-
-    const { accent } = useAccentColor();
-
-    const colors = {
-        bg: isDark ? '#0a0a0a' : '#F8FAFC',
-        surface: isDark ? '#171717' : '#FFFFFF',
-        textPrimary: isDark ? '#EDEDED' : '#0c0a09',
-        textSecondary: isDark ? '#A1A1A1' : '#64748B',
-        textMuted: isDark ? '#525252' : '#94A3B8',
-        border: isDark ? '#262626' : '#E2E8F0',
-        brand: accent,
-        green: isDark ? '#22c55e' : '#10B981',
-        red: isDark ? '#ef4444' : '#E11D48',
-        orange: isDark ? '#f97316' : '#EA580C',
-        blue: isDark ? '#3b82f6' : '#2563EB',
-        purple: isDark ? '#a855f7' : '#7C3AED',
-        yellow: isDark ? '#eab308' : '#D97706',
-        cyan: isDark ? '#06b6d4' : '#0891B2',
-    };
+    const { colors, typography, accent, isDark } = useVeyraTheme();
+    const insets = useSafeAreaInsets();
 
     const [stats, setStats] = useState<FullStats | null>(null);
     const [loading, setLoading] = useState(true);
     const [activeTooltip, setActiveTooltip] = useState<string | null>(null);
 
     const toggleTooltip = (key: string) => {
-        setActiveTooltip(prev => prev === key ? null : key);
+        setActiveTooltip(prev => (prev === key ? null : key));
     };
 
     useFocusEffect(
@@ -66,42 +64,41 @@ export default function StatsScreen() {
 
     if (!stats && loading) {
         return (
-            <View style={{ flex: 1, backgroundColor: colors.bg, justifyContent: 'center', alignItems: 'center' }}>
-                <Text color={colors.textSecondary}>{t('stats.title')}...</Text>
-            </View>
+            <SafeAreaView style={[styles.screen, styles.center, { backgroundColor: colors.bg }]}>
+                <ActivityIndicator size="small" color={accent.primary} />
+                <Text style={[styles.loadingText, { color: colors.textSecondary }]}>
+                    {t('stats.title')}...
+                </Text>
+            </SafeAreaView>
         );
     }
 
     if (!stats) return null;
 
-    const total = stats.totalCompleted + stats.totalFailed;
+    const total = (stats.totalCompleted || 0) + (stats.totalFailed || 0);
 
     // Helper: productivity score (0-100)
-    const score = Math.min(100, Math.round(
-        (stats.completionRate * 0.5) +
-        (Math.min(stats.currentStreak, 30) / 30 * 25) +
-        (stats.behavior.snoozeRate < 20 ? 25 : stats.behavior.snoozeRate < 50 ? 15 : 5)
-    ));
+    const snoozeRate = stats.behavior?.snoozeRate ?? 0;
+    const score = Math.min(
+        100,
+        Math.round(
+            (stats.completionRate || 0) * 0.5 +
+                (Math.min(stats.currentStreak || 0, 30) / 30) * 25 +
+                (snoozeRate < 20 ? 25 : snoozeRate < 50 ? 15 : 5)
+        )
+    );
 
-    // Weekly chart: max value for scaling
-    const weeklyMax = Math.max(...stats.weeklyActivity.map(d => d.completed), 1);
+    const weeklyActivity = stats.weeklyActivity || [];
+    const weeklyMax = Math.max(...weeklyActivity.map(d => d?.completed || 0), 1);
+    const orderedWeek = [1, 2, 3, 4, 5, 6, 0].map(
+        d => weeklyActivity[d] || { day: d, completed: 0, failed: 0, total: 0 }
+    );
 
-    // Top productive hours (top 3)
-    const topHours = Object.entries(stats.productiveHours)
-        .sort(([, a], [, b]) => b - a)
-        .slice(0, 4)
-        .filter(([, count]) => count > 0);
-
-    // Reorder weekly to start on Monday (1,2,3,4,5,6,0)
-    const orderedWeek = [1, 2, 3, 4, 5, 6, 0].map(d => stats.weeklyActivity[d]);
-
-    // Day names for insights
     const dayNames: Record<number, string> = {};
     for (let i = 0; i < 7; i++) {
         dayNames[i] = t(`stats.days_short.${i}`);
     }
 
-    // Get insight text
     const getInsightText = (insight: SmartInsight): string => {
         switch (insight.key) {
             case 'best_hour':
@@ -131,720 +128,524 @@ export default function StatsScreen() {
     };
 
     const getInsightIcon = (insight: SmartInsight) => {
-        if (insight.type === 'positive') return <CheckCircle2 size={14} color={colors.green} />;
-        if (insight.type === 'warning') return <AlertTriangle size={14} color={colors.orange} />;
-        return <Lightbulb size={14} color={colors.blue} />;
+        if (insight.type === 'positive') return <CheckCircle2 size={15} color="#10B981" />;
+        if (insight.type === 'warning') return <AlertTriangle size={15} color="#F59E0B" />;
+        return <Lightbulb size={15} color="#3B82F6" />;
     };
 
-    // ─── SECTION HEADER ───
-    const SectionHeader = ({ icon: Icon, title, color = colors.textPrimary, subtitle }: any) => (
-        <XStack alignItems="center" gap="$2" mb="$3" mt="$2">
-            <Icon size={18} color={color} />
-            <Text fontSize="$4" fontWeight="800" color={color} letterSpacing={-0.3}>
-                {title}
-            </Text>
-            {subtitle && (
-                <Text fontSize="$2" color={colors.textMuted} ml="auto" fontWeight="600">
-                    {subtitle}
-                </Text>
-            )}
-        </XStack>
-    );
-
-    // ─── MINI STAT CARD ───
-    const MiniStat = ({ label, value, color, icon: Icon }: any) => (
-        <YStack
-            flex={1}
-            backgroundColor={colors.surface}
-            borderRadius="$4"
-            padding="$3"
-            borderWidth={1}
-            borderColor={colors.border}
-            gap="$1"
-        >
-            <XStack alignItems="center" gap="$1.5">
-                <Icon size={14} color={color || colors.textSecondary} />
-                <Text fontSize="$1" fontWeight="600" color={colors.textSecondary} textTransform="uppercase">
-                    {label}
-                </Text>
-            </XStack>
-            <Text fontSize="$6" fontWeight="900" color={color || colors.textPrimary}>
-                {value}
-            </Text>
-        </YStack>
-    );
+    const scoreColor = score >= 70 ? '#10B981' : score >= 40 ? '#F59E0B' : '#E11D48';
 
     return (
-        <View style={{ flex: 1, backgroundColor: colors.bg }}>
-            <ScrollView
-                px="$4"
-                contentContainerStyle={{ paddingTop: 8, paddingBottom: 100 }}
-                showsVerticalScrollIndicator={false}
-            >
-                {/* ─── HEADER ─── */}
-                <XStack alignItems="center" justifyContent="space-between" h={50} mb="$3">
-                    <XStack alignItems="center" gap="$3">
-                        <TouchableOpacity onPress={() => router.back()}>
-                            <ChevronLeft size={28} color={colors.textPrimary} />
-                        </TouchableOpacity>
-                        <H2 fontSize="$7" fontWeight="900" color={colors.textPrimary} letterSpacing={-0.5}>
-                            {t('stats.title')}
-                        </H2>
-                    </XStack>
-                </XStack>
+        <SafeAreaView style={[styles.screen, { backgroundColor: colors.bg }]} edges={['top', 'right', 'left']}>
+            {/* Header */}
+            <View style={[styles.header, { borderBottomColor: colors.borderSubtle }]}>
+                <VeyraIconButton
+                    variant="ghost"
+                    size="sm"
+                    icon={<ChevronLeft size={24} color={colors.textPrimary} />}
+                    onPress={() => router.back()}
+                />
+                <Text style={[styles.headerTitle, { color: colors.textPrimary, fontSize: 20 }]}>
+                    {t('stats.title')}
+                </Text>
+                <View style={{ width: 34 }} />
+            </View>
 
-                {/* ─── SCORE + STREAK + TODAY (Hero Row) ─── */}
-                <XStack gap="$3" mb="$3">
-                    {/* Score Circle */}
-                    <TouchableOpacity style={{ flex: 1 }} onPress={() => toggleTooltip('score')} activeOpacity={0.8}>
-                        <YStack
-                            backgroundColor={activeTooltip === 'score' ? (isDark ? '#1c1c1c' : '#F1F5F9') : colors.surface}
-                            borderRadius="$5"
-                            padding="$4"
-                            borderWidth={1}
-                            borderColor={activeTooltip === 'score'
-                                ? (score >= 70 ? colors.green : score >= 40 ? colors.orange : colors.red)
-                                : colors.border}
-                            alignItems="center"
-                            gap="$2"
+            <ScrollView
+                showsVerticalScrollIndicator={false}
+                contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom + 40 }]}
+            >
+                {/* ─── HERO ROW (Score, Streak, Today) ─── */}
+                <View style={styles.heroRow}>
+                    {/* Score */}
+                    <TouchableOpacity
+                        style={{ flex: 1 }}
+                        activeOpacity={0.8}
+                        onPress={() => toggleTooltip('score')}
+                    >
+                        <VeyraSurface
+                            level={activeTooltip === 'score' ? 2 : 1}
+                            radius="lg"
+                            style={styles.heroCard}
                         >
-                            <View
-                                width={64}
-                                height={64}
-                                borderRadius={32}
-                                borderWidth={4}
-                                borderColor={score >= 70 ? colors.green : score >= 40 ? colors.orange : colors.red}
-                                justifyContent="center"
-                                alignItems="center"
-                            >
-                                <Text fontSize="$6" fontWeight="900"
-                                    color={score >= 70 ? colors.green : score >= 40 ? colors.orange : colors.red}>
+                            <View style={[styles.scoreRing, { borderColor: scoreColor }]}>
+                                <Text style={[styles.scoreNumber, { color: scoreColor }]}>
                                     {score}
                                 </Text>
                             </View>
-                            <Text fontSize="$1" fontWeight="700" color={colors.textSecondary} textTransform="uppercase" letterSpacing={0.5}>
+                            <Text style={[styles.heroLabel, { color: colors.textSecondary, fontSize: typography.micro.fontSize }]}>
                                 {t('stats.score')}
                             </Text>
-                        </YStack>
+                        </VeyraSurface>
                     </TouchableOpacity>
 
                     {/* Streak */}
-                    <TouchableOpacity style={{ flex: 1 }} onPress={() => toggleTooltip('streak')} activeOpacity={0.8}>
-                        <YStack
-                            backgroundColor={activeTooltip === 'streak' ? (isDark ? '#1c1c1c' : '#F1F5F9') : colors.surface}
-                            borderRadius="$5"
-                            padding="$4"
-                            borderWidth={1}
-                            borderColor={activeTooltip === 'streak' ? colors.purple : colors.border}
-                            alignItems="center"
-                            gap="$2"
+                    <TouchableOpacity
+                        style={{ flex: 1 }}
+                        activeOpacity={0.8}
+                        onPress={() => toggleTooltip('streak')}
+                    >
+                        <VeyraSurface
+                            level={activeTooltip === 'streak' ? 2 : 1}
+                            radius="lg"
+                            style={styles.heroCard}
                         >
-                            <View
-                                width={64}
-                                height={64}
-                                borderRadius={32}
-                                backgroundColor={isDark ? 'rgba(168, 85, 247, 0.12)' : 'rgba(124, 58, 237, 0.08)'}
-                                justifyContent="center"
-                                alignItems="center"
-                            >
-                                <Flame size={28} color={colors.purple} />
+                            <View style={[styles.heroIconCircle, { backgroundColor: 'rgba(245, 158, 11, 0.12)' }]}>
+                                <Flame size={24} color="#F59E0B" />
                             </View>
-                            <Text fontSize="$6" fontWeight="900" color={colors.purple}>
-                                {stats.currentStreak}
+                            <Text style={[styles.heroStatValue, { color: '#F59E0B' }]}>
+                                {stats.currentStreak ?? 0}
                             </Text>
-                            <Text fontSize="$1" fontWeight="700" color={colors.textSecondary} textTransform="uppercase" letterSpacing={0.5}>
+                            <Text style={[styles.heroLabel, { color: colors.textSecondary, fontSize: typography.micro.fontSize }]}>
                                 {t('stats.current_streak')}
                             </Text>
-                        </YStack>
+                        </VeyraSurface>
                     </TouchableOpacity>
 
                     {/* Today */}
-                    <TouchableOpacity style={{ flex: 1 }} onPress={() => toggleTooltip('today')} activeOpacity={0.8}>
-                        <YStack
-                            backgroundColor={activeTooltip === 'today' ? (isDark ? '#1c1c1c' : '#F1F5F9') : colors.surface}
-                            borderRadius="$5"
-                            padding="$4"
-                            borderWidth={1}
-                            borderColor={activeTooltip === 'today' ? colors.green : colors.border}
-                            alignItems="center"
-                            gap="$2"
+                    <TouchableOpacity
+                        style={{ flex: 1 }}
+                        activeOpacity={0.8}
+                        onPress={() => toggleTooltip('today')}
+                    >
+                        <VeyraSurface
+                            level={activeTooltip === 'today' ? 2 : 1}
+                            radius="lg"
+                            style={styles.heroCard}
                         >
-                            <View
-                                width={64}
-                                height={64}
-                                borderRadius={32}
-                                backgroundColor={isDark ? 'rgba(34, 197, 94, 0.12)' : 'rgba(16, 185, 129, 0.08)'}
-                                justifyContent="center"
-                                alignItems="center"
-                            >
-                                <Target size={28} color={colors.green} />
+                            <View style={[styles.heroIconCircle, { backgroundColor: 'rgba(16, 185, 129, 0.12)' }]}>
+                                <Target size={24} color="#10B981" />
                             </View>
-                            <Text fontSize="$6" fontWeight="900" color={colors.green}>
-                                {stats.daily.completedToday}
+                            <Text style={[styles.heroStatValue, { color: '#10B981' }]}>
+                                {stats.daily?.completedToday ?? 0}
                             </Text>
-                            <Text fontSize="$1" fontWeight="700" color={colors.textSecondary} textTransform="uppercase" letterSpacing={0.5}>
+                            <Text style={[styles.heroLabel, { color: colors.textSecondary, fontSize: typography.micro.fontSize }]}>
                                 {t('stats.completed_today')}
                             </Text>
-                        </YStack>
+                        </VeyraSurface>
                     </TouchableOpacity>
-                </XStack>
+                </View>
 
-                {/* Tooltip bubble for hero cards */}
+                {/* Tooltip Info */}
                 {activeTooltip && ['score', 'streak', 'today'].includes(activeTooltip) && (
-                    <YStack
-                        mb="$5"
-                        backgroundColor={isDark ? '#1a1a1a' : '#F8FAFC'}
-                        borderRadius="$4"
-                        borderWidth={1}
-                        borderColor={
-                            activeTooltip === 'score'
-                                ? (score >= 70 ? colors.green : score >= 40 ? colors.orange : colors.red)
-                                : activeTooltip === 'streak' ? colors.purple : colors.green
-                        }
-                        padding="$3"
+                    <VeyraSurface
+                        level={2}
+                        radius="md"
+                        style={styles.tooltipBox}
                     >
-                        <XStack alignItems="flex-start" gap="$2">
-                            <Info size={14} color={
-                                activeTooltip === 'score'
-                                    ? (score >= 70 ? colors.green : score >= 40 ? colors.orange : colors.red)
-                                    : activeTooltip === 'streak' ? colors.purple : colors.green
-                            } style={{ marginTop: 2 }} />
-                            <Text fontSize="$2" color={colors.textSecondary} flex={1} lineHeight={18}>
-                                {t(`stats.tooltip_${activeTooltip}`)}
-                            </Text>
-                        </XStack>
-                    </YStack>
+                        <Info size={14} color={accent.primary} style={{ marginTop: 2 }} />
+                        <Text style={[styles.tooltipText, { color: colors.textSecondary, fontSize: typography.caption.fontSize }]}>
+                            {t(`stats.tooltip_${activeTooltip}`)}
+                        </Text>
+                    </VeyraSurface>
                 )}
 
-                {/* ─── COMPLIANCE RATE BAR ─── */}
-                <TouchableOpacity onPress={() => toggleTooltip('compliance')} activeOpacity={0.9}>
-                    <YStack
-                        backgroundColor={activeTooltip === 'compliance' ? (isDark ? '#1c1c1c' : '#F1F5F9') : colors.surface}
-                        borderRadius="$5"
-                        padding="$4"
-                        borderWidth={1}
-                        borderColor={activeTooltip === 'compliance' ? colors.blue : colors.border}
-                        mb={activeTooltip === 'compliance' ? '$2' : '$5'}
-                    >
-                        <XStack justifyContent="space-between" alignItems="center" mb="$3">
-                            <XStack alignItems="center" gap="$2">
-                                <TrendingUp size={18} color={colors.blue} />
-                                <Text fontSize="$4" fontWeight="800" color={colors.textPrimary}>
-                                    {t('stats.compliance_rate')}
-                                </Text>
-                            </XStack>
-                            <Text fontSize="$6" fontWeight="900" color={colors.blue}>
-                                {stats.completionRate.toFixed(1)}%
+                {/* ─── COMPLIANCE RATE ─── */}
+                <VeyraSurface
+                    level={1}
+                    radius="lg"
+                    style={styles.sectionCard}
+                >
+                    <View style={styles.cardHeaderRow}>
+                        <View style={styles.cardHeaderTitleGroup}>
+                            <TrendingUp size={16} color={accent.primary} />
+                            <Text style={[styles.cardTitle, { color: colors.textPrimary, fontSize: typography.bodyMedium.fontSize }]}>
+                                {t('stats.compliance_rate')}
                             </Text>
-                        </XStack>
-
-                        {/* Progress bar */}
-                        <View
-                            height={8}
-                            borderRadius={4}
-                            backgroundColor={isDark ? '#262626' : '#E2E8F0'}
-                            overflow="hidden"
-                            mb="$2"
-                        >
-                            <View
-                                height={8}
-                                borderRadius={4}
-                                backgroundColor={colors.blue}
-                                width={`${Math.min(stats.completionRate, 100)}%` as any}
-                            />
                         </View>
+                        <Text style={[styles.bigRateNumber, { color: accent.primary }]}>
+                            {(stats.completionRate || 0).toFixed(1)}%
+                        </Text>
+                    </View>
 
-                        <XStack justifyContent="space-between">
-                            <Text fontSize="$1" color={colors.textMuted} fontWeight="600">
-                                {t('stats.total_tasks', { count: total })}
-                            </Text>
-                            <XStack gap="$3">
-                                <XStack alignItems="center" gap="$1">
-                                    <View width={8} height={8} borderRadius={4} backgroundColor={colors.green} />
-                                    <Text fontSize="$1" color={colors.textSecondary} fontWeight="600">{stats.totalCompleted}</Text>
-                                </XStack>
-                                <XStack alignItems="center" gap="$1">
-                                    <View width={8} height={8} borderRadius={4} backgroundColor={colors.red} />
-                                    <Text fontSize="$1" color={colors.textSecondary} fontWeight="600">{stats.totalFailed}</Text>
-                                </XStack>
-                            </XStack>
-                        </XStack>
-                    </YStack>
-                </TouchableOpacity>
+                    {/* Progress Track */}
+                    <View style={[styles.progressTrack, { backgroundColor: colors.surfaceElevated }]}>
+                        <View
+                            style={[
+                                styles.progressBar,
+                                {
+                                    backgroundColor: accent.primary,
+                                    width: `${Math.min(stats.completionRate || 0, 100)}%`,
+                                },
+                            ]}
+                        />
+                    </View>
 
-                {/* Compliance tooltip */}
-                {activeTooltip === 'compliance' && (
-                    <YStack
-                        mb="$5"
-                        backgroundColor={isDark ? '#1a1a1a' : '#F8FAFC'}
-                        borderRadius="$4"
-                        borderWidth={1}
-                        borderColor={colors.blue}
-                        padding="$3"
-                    >
-                        <XStack alignItems="flex-start" gap="$2">
-                            <Info size={14} color={colors.blue} style={{ marginTop: 2 }} />
-                            <Text fontSize="$2" color={colors.textSecondary} flex={1} lineHeight={18}>
-                                {t('stats.tooltip_compliance')}
-                            </Text>
-                        </XStack>
-                    </YStack>
-                )}
+                    <View style={styles.progressFooter}>
+                        <Text style={[styles.totalTasksText, { color: colors.textMuted, fontSize: typography.micro.fontSize }]}>
+                            {t('stats.total_tasks', { count: total })}
+                        </Text>
+                        <View style={styles.statsCountersRow}>
+                            <View style={styles.counterItem}>
+                                <View style={[styles.counterDot, { backgroundColor: '#10B981' }]} />
+                                <Text style={[styles.counterText, { color: colors.textSecondary, fontSize: typography.micro.fontSize }]}>
+                                    {stats.totalCompleted ?? 0}
+                                </Text>
+                            </View>
+                            <View style={styles.counterItem}>
+                                <View style={[styles.counterDot, { backgroundColor: '#E11D48' }]} />
+                                <Text style={[styles.counterText, { color: colors.textSecondary, fontSize: typography.micro.fontSize }]}>
+                                    {stats.totalFailed ?? 0}
+                                </Text>
+                            </View>
+                        </View>
+                    </View>
+                </VeyraSurface>
 
-                {/* ─── WEEKLY ACTIVITY CHART ─── */}
-                <YStack
-                    backgroundColor={colors.surface}
-                    borderRadius="$5"
-                    padding="$4"
-                    borderWidth={1}
-                    borderColor={colors.border}
-                    mb="$5"
+                {/* ─── WEEKLY ACTIVITY ─── */}
+                <VeyraSectionHeader title={t('stats.weekly_activity')} style={{ marginTop: 16 }} />
+
+                <VeyraSurface
+                    level={1}
+                    radius="lg"
+                    style={styles.sectionCard}
                 >
-                    <SectionHeader
-                        icon={BarChart3}
-                        title={t('stats.weekly_activity')}
-                        color={colors.cyan}
-                        subtitle={t('stats.weekly_activity_desc')}
-                    />
-
-                    {/* Bar Chart */}
-                    <XStack justifyContent="space-between" alignItems="flex-end" height={160} mt="$2" px="$1">
-                        {orderedWeek.map((dayData, index) => {
-                            const maxBarArea = 100;
-                            const totalForDay = dayData.completed + dayData.failed;
-                            const barHeight = weeklyMax > 0 ? (dayData.completed / weeklyMax) * maxBarArea : 0;
-                            const failedHeight = weeklyMax > 0 ? (dayData.failed / weeklyMax) * maxBarArea : 0;
-                            // Cap combined height so it never exceeds maxBarArea
-                            const combinedHeight = barHeight + failedHeight;
-                            const scale = combinedHeight > maxBarArea ? maxBarArea / combinedHeight : 1;
-                            const finalBarHeight = Math.max(barHeight * scale, dayData.completed > 0 ? 4 : 2);
-                            const finalFailedHeight = Math.max(failedHeight * scale, dayData.failed > 0 ? 4 : 0);
-
-                            const dayIndex = [1, 2, 3, 4, 5, 6, 0][index];
-                            const isToday = new Date().getDay() === dayIndex;
+                    <View style={styles.chartBarsRow}>
+                        {orderedWeek.map((day, idx) => {
+                            const dayIndex = [1, 2, 3, 4, 5, 6, 0][idx];
+                            const completedCount = day?.completed || 0;
+                            const heightPercent = completedCount > 0 ? Math.max((completedCount / weeklyMax) * 100, 15) : 8;
+                            const isHighest = completedCount === weeklyMax && completedCount > 0;
 
                             return (
-                                <YStack key={index} alignItems="center" flex={1}>
-                                    {/* Count label */}
-                                    <Text fontSize={10} fontWeight="700" color={colors.textMuted} height={16}>
-                                        {dayData.completed > 0 ? dayData.completed : ''}
+                                <View key={idx} style={styles.chartCol}>
+                                    <Text style={[styles.chartCount, { color: completedCount > 0 ? colors.textPrimary : 'transparent' }]}>
+                                        {completedCount}
                                     </Text>
-
-                                    {/* Bars container */}
-                                    <YStack alignItems="center" justifyContent="flex-end" height={maxBarArea} mt="$1">
-                                        {dayData.failed > 0 && (
-                                            <View
-                                                width={22}
-                                                height={finalFailedHeight}
-                                                borderRadius={6}
-                                                backgroundColor={isDark ? 'rgba(239,68,68,0.3)' : 'rgba(225,29,72,0.15)'}
-                                                mb={2}
-                                            />
-                                        )}
+                                    <View style={[styles.barTrack, { backgroundColor: colors.surfaceElevated }]}>
                                         <View
-                                            width={22}
-                                            height={finalBarHeight}
-                                            borderRadius={6}
-                                            backgroundColor={isToday ? colors.cyan : (isDark ? 'rgba(6,182,212,0.4)' : 'rgba(8,145,178,0.25)')}
-                                        />
-                                    </YStack>
-
-                                    {/* Day label */}
-                                    <Text
-                                        fontSize={11}
-                                        fontWeight={isToday ? '900' : '600'}
-                                        color={isToday ? colors.cyan : colors.textMuted}
-                                        mt="$1.5"
-                                        height={16}
-                                    >
-                                        {t(`stats.days_short.${dayIndex}`)}
-                                    </Text>
-                                </YStack>
-                            );
-                        })}
-                    </XStack>
-                </YStack>
-
-                {/* ─── LEVEL DISTRIBUTION ─── */}
-                <YStack
-                    backgroundColor={colors.surface}
-                    borderRadius="$5"
-                    padding="$4"
-                    borderWidth={1}
-                    borderColor={colors.border}
-                    mb="$5"
-                >
-                    <SectionHeader
-                        icon={Layers}
-                        title={t('stats.level_distribution')}
-                        color={colors.yellow}
-                    />
-
-                    <YStack gap="$3" mt="$1">
-                        {(['normal', 'strict', 'critical'] as const).map(level => {
-                            const data = stats.levelDistribution[level];
-                            const levelColor = level === 'normal' ? colors.green
-                                : level === 'strict' ? colors.yellow
-                                    : colors.red;
-                            const decidedTotal = data.completed + data.failed;
-
-                            return (
-                                <YStack key={level} gap="$1.5">
-                                    <XStack justifyContent="space-between" alignItems="center">
-                                        <XStack alignItems="center" gap="$2">
-                                            <View width={10} height={10} borderRadius={5} backgroundColor={levelColor} />
-                                            <Text fontSize="$3" fontWeight="700" color={colors.textPrimary}>
-                                                {t(`stats.levels.${level}`)}
-                                            </Text>
-                                            <Text fontSize="$1" color={colors.textMuted} fontWeight="600">
-                                                ({data.total})
-                                            </Text>
-                                        </XStack>
-                                        <Text fontSize="$2" fontWeight="800" color={levelColor}>
-                                            {decidedTotal > 0 ? `${data.rate.toFixed(0)}%` : '—'}
-                                        </Text>
-                                    </XStack>
-
-                                    {/* Progress */}
-                                    <View
-                                        height={6}
-                                        borderRadius={3}
-                                        backgroundColor={isDark ? '#262626' : '#E2E8F0'}
-                                        overflow="hidden"
-                                    >
-                                        <View
-                                            height={6}
-                                            borderRadius={3}
-                                            backgroundColor={levelColor}
-                                            opacity={0.8}
-                                            width={`${decidedTotal > 0 ? data.rate : 0}%` as any}
+                                            style={[
+                                                styles.barFill,
+                                                {
+                                                    height: `${heightPercent}%`,
+                                                    backgroundColor: isHighest
+                                                        ? accent.primary
+                                                        : completedCount > 0
+                                                        ? colors.textSecondary
+                                                        : colors.borderSubtle,
+                                                },
+                                            ]}
                                         />
                                     </View>
-                                </YStack>
+                                    <Text style={[styles.chartDayLabel, { color: colors.textSecondary, fontSize: typography.micro.fontSize }]}>
+                                        {dayNames[dayIndex]}
+                                    </Text>
+                                </View>
                             );
                         })}
-                    </YStack>
-                </YStack>
+                    </View>
+                </VeyraSurface>
 
-                {/* ─── QUICK STATS ROW ─── */}
-                <XStack gap="$3" mb="$5">
-                    <MiniStat
-                        label={t('stats.snoozed')}
-                        value={stats.totalSnoozed}
-                        color={colors.orange}
-                        icon={Clock}
-                    />
-                    <MiniStat
-                        label={t('stats.best_streak')}
-                        value={`${stats.bestStreak}d`}
-                        color={colors.yellow}
-                        icon={Award}
-                    />
-                </XStack>
+                {/* ─── CONTROL LEVELS BREAKDOWN ─── */}
+                <VeyraSectionHeader title={t('stats.by_level')} style={{ marginTop: 16 }} />
 
-                {/* ─── PRODUCTIVE HOURS ─── */}
-                {topHours.length > 0 && (
-                    <YStack
-                        backgroundColor={colors.surface}
-                        borderRadius="$5"
-                        padding="$4"
-                        borderWidth={1}
-                        borderColor={colors.border}
-                        mb="$5"
-                    >
-                        <SectionHeader
-                            icon={Zap}
-                            title={t('stats.productive_hours')}
-                            color={colors.blue}
-                        />
+                <View style={styles.levelsGrid}>
+                    {(['normal', 'strict', 'critical'] as const).map(levelKey => {
+                        const levelData = stats.levelDistribution?.[levelKey] || { completed: 0, failed: 0, total: 0, rate: 0 };
+                        const totalLevel = (levelData.completed || 0) + (levelData.failed || 0);
+                        const levelRate = totalLevel > 0 ? Math.round(((levelData.completed || 0) / totalLevel) * 100) : 0;
+                        const levelColor = levelKey === 'critical' ? '#E11D48' : levelKey === 'strict' ? '#F59E0B' : accent.primary;
 
-                        <YStack gap="$3" mt="$1">
-                            {topHours.map(([hour, count], idx) => {
-                                const percentage = stats.totalCompleted > 0 ? (count / stats.totalCompleted) * 100 : 0;
-                                return (
-                                    <XStack key={hour} alignItems="center" gap="$3">
-                                        <View
-                                            width={42}
-                                            height={42}
-                                            borderRadius={21}
-                                            backgroundColor={isDark ? 'rgba(59,130,246,0.12)' : 'rgba(37,99,235,0.06)'}
-                                            justifyContent="center"
-                                            alignItems="center"
-                                        >
-                                            <Text fontSize="$2" fontWeight="800" color={colors.blue}>
-                                                {hour}h
-                                            </Text>
-                                        </View>
-                                        <YStack flex={1} gap="$1">
-                                            <XStack justifyContent="space-between">
-                                                <Text fontSize="$3" fontWeight="700" color={colors.textPrimary}>
-                                                    {hour}:00 - {parseInt(hour) + 1}:00
-                                                </Text>
-                                                <Text fontSize="$2" fontWeight="700" color={colors.blue}>
-                                                    {count}
-                                                </Text>
-                                            </XStack>
-                                            <View
-                                                height={4}
-                                                borderRadius={2}
-                                                backgroundColor={isDark ? '#262626' : '#E2E8F0'}
-                                                overflow="hidden"
-                                            >
-                                                <View
-                                                    height={4}
-                                                    borderRadius={2}
-                                                    backgroundColor={colors.blue}
-                                                    opacity={idx === 0 ? 1 : 0.5 + (0.5 * (1 - idx / topHours.length))}
-                                                    width={`${percentage}%` as any}
-                                                />
-                                            </View>
-                                        </YStack>
-                                    </XStack>
-                                );
-                            })}
-                        </YStack>
-                    </YStack>
-                )}
-
-                {/* ─── MONTHLY TREND ─── */}
-                <YStack
-                    backgroundColor={colors.surface}
-                    borderRadius="$5"
-                    padding="$4"
-                    borderWidth={1}
-                    borderColor={colors.border}
-                    mb="$5"
-                >
-                    <SectionHeader
-                        icon={TrendingUp}
-                        title={t('stats.monthly_trend')}
-                        color={stats.monthlyComparison.trend >= 0 ? colors.green : colors.red}
-                    />
-
-                    <XStack justifyContent="space-between" alignItems="center" mt="$1">
-                        <YStack gap="$1">
-                            <Text fontSize="$2" color={colors.textSecondary} fontWeight="600">
-                                {t('stats.this_month')}
-                            </Text>
-                            <Text fontSize="$7" fontWeight="900" color={colors.textPrimary}>
-                                {stats.monthlyComparison.current}
-                            </Text>
-                        </YStack>
-
-                        <YStack alignItems="center" gap="$1">
-                            {stats.monthlyComparison.trend > 0 ? (
-                                <ArrowUpRight size={24} color={colors.green} />
-                            ) : stats.monthlyComparison.trend < 0 ? (
-                                <ArrowDownRight size={24} color={colors.red} />
-                            ) : (
-                                <Minus size={24} color={colors.textMuted} />
-                            )}
-                            <Text
-                                fontSize="$3"
-                                fontWeight="800"
-                                color={stats.monthlyComparison.trend > 0 ? colors.green : stats.monthlyComparison.trend < 0 ? colors.red : colors.textMuted}
+                        return (
+                            <VeyraSurface
+                                key={levelKey}
+                                level={1}
+                                radius="md"
+                                style={styles.levelCard}
                             >
-                                {stats.monthlyComparison.trend > 0 ? '+' : ''}{stats.monthlyComparison.trend}%
-                            </Text>
-                        </YStack>
+                                <View style={styles.levelHeader}>
+                                    <VeyraBadge
+                                        label={t(`stats.levels.${levelKey}`)}
+                                        controlLevel={levelKey}
+                                        size="sm"
+                                        dot={true}
+                                    />
+                                    <Text style={[styles.levelRateText, { color: levelColor }]}>
+                                        {levelRate}%
+                                    </Text>
+                                </View>
+                                <Text style={[styles.levelCountSubtitle, { color: colors.textMuted, fontSize: typography.micro.fontSize }]}>
+                                    {levelData.completed || 0} / {totalLevel} {t('home.completed').toLowerCase()}
+                                </Text>
+                            </VeyraSurface>
+                        );
+                    })}
+                </View>
 
-                        <YStack alignItems="flex-end" gap="$1">
-                            <Text fontSize="$2" color={colors.textSecondary} fontWeight="600">
-                                {t('stats.last_month')}
-                            </Text>
-                            <Text fontSize="$7" fontWeight="900" color={colors.textMuted}>
-                                {stats.monthlyComparison.previous}
-                            </Text>
-                        </YStack>
-                    </XStack>
-                </YStack>
-
-                {/* ─── DAILY OVERVIEW ROW ─── */}
-                <XStack gap="$3" mb="$5">
-                    <MiniStat
-                        label={t('stats.daily_average')}
-                        value={stats.daily.dailyAverage}
-                        color={colors.cyan}
-                        icon={BarChart3}
-                    />
-                    <MiniStat
-                        label={t('stats.active_now')}
-                        value={stats.daily.activeNow}
-                        color={colors.blue}
-                        icon={Target}
-                    />
-                </XStack>
-
-                <XStack gap="$3" mb="$5">
-                    <MiniStat
-                        label={t('stats.total_created')}
-                        value={stats.daily.totalCreated}
-                        color={colors.textSecondary}
-                        icon={Layers}
-                    />
-                    {stats.daily.overdueNow > 0 && (
-                        <MiniStat
-                            label={t('stats.overdue_now')}
-                            value={stats.daily.overdueNow}
-                            color={colors.red}
-                            icon={AlertTriangle}
-                        />
-                    )}
-                </XStack>
-
-                {/* ─── NOTES SECTION ─── */}
-                <YStack
-                    backgroundColor={colors.surface}
-                    borderRadius="$5"
-                    padding="$4"
-                    borderWidth={1}
-                    borderColor={colors.border}
-                    mb="$5"
-                >
-                    <SectionHeader
-                        icon={StickyNote}
-                        title={t('stats.notes_section_title')}
-                        color={colors.purple}
-                    />
-                    <XStack gap="$3" mt="$1">
-                        {/* Total */}
-                        <YStack flex={1} alignItems="center" gap="$1">
-                            <View
-                                width={44}
-                                height={44}
-                                borderRadius={22}
-                                backgroundColor={isDark ? 'rgba(168,85,247,0.12)' : 'rgba(124,58,237,0.07)'}
-                                justifyContent="center"
-                                alignItems="center"
-                            >
-                                <StickyNote size={20} color={colors.purple} />
-                            </View>
-                            <Text fontSize="$6" fontWeight="900" color={colors.textPrimary}>
-                                {stats.notesStats.totalNotes}
-                            </Text>
-                            <Text fontSize="$1" fontWeight="600" color={colors.textSecondary} textTransform="uppercase" letterSpacing={0.5}>
-                                {t('stats.notes_total')}
-                            </Text>
-                        </YStack>
-
-                        <View width={1} backgroundColor={colors.border} />
-
-                        {/* Pinned */}
-                        <YStack flex={1} alignItems="center" gap="$1">
-                            <View
-                                width={44}
-                                height={44}
-                                borderRadius={22}
-                                backgroundColor={isDark ? 'rgba(234,179,8,0.12)' : 'rgba(217,119,6,0.07)'}
-                                justifyContent="center"
-                                alignItems="center"
-                            >
-                                <Pin size={20} color={colors.yellow} />
-                            </View>
-                            <Text fontSize="$6" fontWeight="900" color={colors.textPrimary}>
-                                {stats.notesStats.pinnedNotes}
-                            </Text>
-                            <Text fontSize="$1" fontWeight="600" color={colors.textSecondary} textTransform="uppercase" letterSpacing={0.5}>
-                                {t('stats.notes_pinned')}
-                            </Text>
-                        </YStack>
-
-                        <View width={1} backgroundColor={colors.border} />
-
-                        {/* With attachments */}
-                        <YStack flex={1} alignItems="center" gap="$1">
-                            <View
-                                width={44}
-                                height={44}
-                                borderRadius={22}
-                                backgroundColor={isDark ? 'rgba(6,182,212,0.12)' : 'rgba(8,145,178,0.07)'}
-                                justifyContent="center"
-                                alignItems="center"
-                            >
-                                <Paperclip size={20} color={colors.cyan} />
-                            </View>
-                            <Text fontSize="$6" fontWeight="900" color={colors.textPrimary}>
-                                {stats.notesStats.notesWithAttachments}
-                            </Text>
-                            <Text fontSize="$1" fontWeight="600" color={colors.textSecondary} textTransform="uppercase" letterSpacing={0.5}>
-                                {t('stats.notes_attachments')}
-                            </Text>
-                        </YStack>
-                    </XStack>
-                </YStack>
-
-                {/* ─── INSIGHTS ─── */}
-                {stats.insights.length > 0 && (
-                    <YStack
-                        backgroundColor={colors.surface}
-                        borderRadius="$5"
-                        padding="$4"
-                        borderWidth={1}
-                        borderColor={colors.border}
-                        mb="$5"
-                    >
-                        <SectionHeader
-                            icon={Lightbulb}
-                            title={t('stats.insights_title')}
-                            color={colors.yellow}
-                        />
-
-                        <YStack gap="$3" mt="$1">
-                            {stats.insights.slice(0, 4).map((insight, idx) => (
-                                <XStack
+                {/* ─── SMART INSIGHTS ─── */}
+                {stats.insights && stats.insights.length > 0 && (
+                    <>
+                        <VeyraSectionHeader title={t('stats.insights')} style={{ marginTop: 16 }} />
+                        <View style={{ gap: 8 }}>
+                            {stats.insights.map((insight, idx) => (
+                                <VeyraSurface
                                     key={idx}
-                                    alignItems="flex-start"
-                                    gap="$2.5"
-                                    backgroundColor={
-                                        insight.type === 'positive'
-                                            ? (isDark ? 'rgba(34,197,94,0.06)' : 'rgba(16,185,129,0.05)')
-                                            : insight.type === 'warning'
-                                                ? (isDark ? 'rgba(249,115,22,0.06)' : 'rgba(234,88,12,0.05)')
-                                                : (isDark ? 'rgba(59,130,246,0.06)' : 'rgba(37,99,235,0.05)')
-                                    }
-                                    padding="$3"
-                                    borderRadius="$3"
+                                    level={1}
+                                    radius="md"
+                                    style={styles.insightCard}
                                 >
-                                    <View mt={2}>
-                                        {getInsightIcon(insight)}
-                                    </View>
-                                    <Text
-                                        fontSize="$3"
-                                        fontWeight="600"
-                                        color={colors.textPrimary}
-                                        flex={1}
-                                        lineHeight={20}
-                                    >
+                                    {getInsightIcon(insight)}
+                                    <Text style={[styles.insightText, { color: colors.textPrimary, fontSize: typography.caption.fontSize }]}>
                                         {getInsightText(insight)}
                                     </Text>
-                                </XStack>
+                                </VeyraSurface>
                             ))}
-                        </YStack>
-                    </YStack>
+                        </View>
+                    </>
                 )}
 
-                {/* ─── MOTIVATION CARD ─── */}
-                <YStack
-                    backgroundColor={isDark ? 'rgba(59,130,246,0.07)' : 'rgba(37,99,235,0.05)'}
-                    borderRadius="$5"
-                    borderWidth={1}
-                    borderColor={isDark ? 'rgba(59,130,246,0.25)' : 'rgba(37,99,235,0.18)'}
-                    padding="$5"
-                    mb="$4"
-                >
-                    <YStack gap="$2" ai="center">
-                        <Text fontSize="$4" fontWeight="800" color={colors.blue} ta="center">
-                            {stats.currentStreak > 0 ? t('stats.motivation_streak', { count: stats.currentStreak }) : t('stats.motivation_start')}
-                        </Text>
-                        <Text fontSize="$3" color={colors.textSecondary} ta="center" lineHeight={20}>
-                            {stats.currentStreak > 0
-                                ? t('stats.motivation_desc_streak')
-                                : t('stats.motivation_desc_start')}
-                        </Text>
-                    </YStack>
-                </YStack>
+                {/* ─── BEHAVIOR & METRICS ─── */}
+                <VeyraSectionHeader title={t('stats.behavior_title')} style={{ marginTop: 16 }} />
 
+                <View style={styles.behaviorRow}>
+                    <VeyraSurface
+                        level={1}
+                        radius="md"
+                        style={styles.behaviorCard}
+                    >
+                        <Zap size={16} color="#F59E0B" />
+                        <Text style={[styles.behaviorValue, { color: colors.textPrimary }]}>
+                            {stats.behavior?.snoozeRate ?? 0}%
+                        </Text>
+                        <Text style={[styles.behaviorLabel, { color: colors.textMuted, fontSize: typography.micro.fontSize }]}>
+                            {t('stats.snooze_rate')}
+                        </Text>
+                    </VeyraSurface>
+
+                    <VeyraSurface
+                        level={1}
+                        radius="md"
+                        style={styles.behaviorCard}
+                    >
+                        <Clock size={16} color={accent.primary} />
+                        <Text style={[styles.behaviorValue, { color: colors.textPrimary }]}>
+                            {(stats.behavior?.avgResponseMinutes ?? 0) < 60
+                                ? `${stats.behavior?.avgResponseMinutes ?? 0}m`
+                                : `${Math.round((stats.behavior?.avgResponseMinutes ?? 0) / 60)}h`}
+                        </Text>
+                        <Text style={[styles.behaviorLabel, { color: colors.textMuted, fontSize: typography.micro.fontSize }]}>
+                            {t('stats.avg_response_time')}
+                        </Text>
+                    </VeyraSurface>
+                </View>
             </ScrollView>
-        </View>
+        </SafeAreaView>
     );
 }
+
+const styles = StyleSheet.create({
+    screen: {
+        flex: 1,
+    },
+    center: {
+        justifyContent: 'center',
+        alignItems: 'center',
+        gap: 12,
+    },
+    loadingText: {
+        fontSize: 14,
+        fontWeight: '600',
+    },
+    header: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        paddingHorizontal: 16,
+        paddingVertical: 8,
+        borderBottomWidth: 1,
+    },
+    headerTitle: {
+        fontWeight: '800',
+        letterSpacing: -0.4,
+    },
+    scrollContent: {
+        paddingHorizontal: 20,
+        paddingTop: 16,
+        gap: 14,
+    },
+    heroRow: {
+        flexDirection: 'row',
+        gap: 10,
+    },
+    heroCard: {
+        alignItems: 'center',
+        paddingVertical: 14,
+        paddingHorizontal: 8,
+        gap: 6,
+    },
+    scoreRing: {
+        width: 52,
+        height: 52,
+        borderRadius: 26,
+        borderWidth: 3.5,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    scoreNumber: {
+        fontSize: 18,
+        fontWeight: '900',
+    },
+    heroIconCircle: {
+        width: 52,
+        height: 52,
+        borderRadius: 26,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    heroStatValue: {
+        fontSize: 20,
+        fontWeight: '900',
+    },
+    heroLabel: {
+        fontWeight: '700',
+        textTransform: 'uppercase',
+        letterSpacing: 0.5,
+    },
+    tooltipBox: {
+        flexDirection: 'row',
+        alignItems: 'flex-start',
+        padding: 12,
+        gap: 8,
+    },
+    tooltipText: {
+        flex: 1,
+        lineHeight: 18,
+    },
+    sectionCard: {
+        padding: 16,
+    },
+    cardHeaderRow: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginBottom: 12,
+    },
+    cardHeaderTitleGroup: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+    },
+    cardTitle: {
+        fontWeight: '700',
+    },
+    bigRateNumber: {
+        fontSize: 22,
+        fontWeight: '900',
+    },
+    progressTrack: {
+        height: 7,
+        borderRadius: 999,
+        overflow: 'hidden',
+        marginBottom: 10,
+    },
+    progressBar: {
+        height: '100%',
+        borderRadius: 999,
+    },
+    progressFooter: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+    },
+    totalTasksText: {
+        fontWeight: '600',
+    },
+    statsCountersRow: {
+        flexDirection: 'row',
+        gap: 12,
+    },
+    counterItem: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 5,
+    },
+    counterDot: {
+        width: 6,
+        height: 6,
+        borderRadius: 3,
+    },
+    counterText: {
+        fontWeight: '700',
+    },
+    chartBarsRow: {
+        flexDirection: 'row',
+        alignItems: 'flex-end',
+        justifyContent: 'space-between',
+        height: 120,
+        paddingTop: 8,
+    },
+    chartCol: {
+        flex: 1,
+        alignItems: 'center',
+        height: '100%',
+        justifyContent: 'flex-end',
+        gap: 4,
+    },
+    chartCount: {
+        fontSize: 10,
+        fontWeight: '700',
+    },
+    barTrack: {
+        width: 14,
+        height: 70,
+        borderRadius: 4,
+        justifyContent: 'flex-end',
+        overflow: 'hidden',
+    },
+    barFill: {
+        width: '100%',
+        borderRadius: 4,
+    },
+    chartDayLabel: {
+        fontWeight: '600',
+        textTransform: 'uppercase',
+    },
+    levelsGrid: {
+        gap: 8,
+    },
+    levelCard: {
+        padding: 12,
+        gap: 4,
+    },
+    levelHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+    },
+    levelRateText: {
+        fontSize: 16,
+        fontWeight: '900',
+    },
+    levelCountSubtitle: {
+        fontWeight: '500',
+    },
+    insightCard: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        padding: 12,
+        gap: 10,
+    },
+    insightText: {
+        flex: 1,
+        lineHeight: 18,
+        fontWeight: '500',
+    },
+    behaviorRow: {
+        flexDirection: 'row',
+        gap: 10,
+    },
+    behaviorCard: {
+        flex: 1,
+        padding: 14,
+        gap: 6,
+    },
+    behaviorValue: {
+        fontSize: 20,
+        fontWeight: '900',
+    },
+    behaviorLabel: {
+        fontWeight: '600',
+        textTransform: 'uppercase',
+        letterSpacing: 0.4,
+    },
+});

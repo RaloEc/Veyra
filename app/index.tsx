@@ -1,31 +1,887 @@
-import { View, Text, YStack, XStack, Button, H2, H4, Paragraph, Separator, Card, Theme, Spinner, AnimatePresence, Portal, Circle } from 'tamagui';
-import { useRouter } from 'expo-router';
-import { useStore } from '../src/store/useStore';
-import { useEffect, useMemo, useState, useRef } from 'react';
+import React, { useEffect, useMemo, useState, useRef, useCallback } from 'react';
+import {
+    View,
+    Text,
+    TouchableOpacity,
+    StyleSheet,
+    Image,
+    Animated,
+    BackHandler,
+    Platform,
+    ScrollView,
+    Share,
+    Easing,
+    LayoutAnimation,
+    TextInput,
+} from 'react-native';
+import { useRouter, useFocusEffect } from 'expo-router';
 import { useTranslation } from 'react-i18next';
-import { ScrollView, TouchableOpacity, useWindowDimensions, StyleSheet, Image, FlatList, Animated, Alert, BackHandler } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { format, isToday, isPast, formatDistanceToNow, differenceInMinutes } from 'date-fns';
-import { es } from 'date-fns/locale';
-import { Clock, AlertCircle, Zap, TrendingUp, Plus, ChevronRight, ChevronLeft, Activity, History, Check, Edit3, FileText, Image as ImageIcon, Link as LinkIcon, X, Trash2, Repeat } from '@tamagui/lucide-icons';
-import { Reminder } from '../src/types/db';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import Reanimated, {
+    useSharedValue,
+    useAnimatedStyle,
+    withSpring,
+    withTiming,
+    withDelay,
+    runOnJS,
+    interpolate,
+    Extrapolation,
+    Easing as ReanimatedEasing,
+    LinearTransition,
+    FadeIn,
+    SharedTransition,
+} from 'react-native-reanimated';
+
+const reminderSharedTransition = SharedTransition.duration(320);
+
+import ImageViewing from 'react-native-image-viewing';
 import RenderHTML from 'react-native-render-html';
-import { BlurView } from 'expo-blur';
-import { FlashList } from '@shopify/flash-list';
-import ImageViewing from "react-native-image-viewing";
-import { useAccentColor } from '../src/theme/accentColors';
+import { isToday, isPast, isTomorrow, differenceInMinutes, format, isSameDay, addDays } from 'date-fns';
+import { es, enUS } from 'date-fns/locale';
+import {
+    Clock,
+    Zap,
+    History,
+    Search,
+    Check,
+    Edit3,
+    Trash2,
+    X,
+    Repeat,
+    FileText,
+    ChevronLeft,
+    ChevronRight,
+    Sparkles,
+    ShieldAlert,
+    Calendar as CalendarIcon,
+    List as ListIcon,
+    CheckSquare,
+    Square,
+    Share2,
+    Image as ImageIcon,
+    Paperclip,
+    ChevronDown,
+    Plus,
+    MapPin,
+    Layers,
+} from '@tamagui/lucide-icons';
 import * as Sharing from 'expo-sharing';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as IntentLauncher from 'expo-intent-launcher';
-import { Platform } from 'react-native';
 
+import { useStore } from '../src/store/useStore';
+import { useEventsStore } from '../src/store/useEventsStore';
+import { Reminder, CalendarEvent } from '../src/types/db';
+import { isEventOccurringOnDate } from '../src/services/eventService';
+import { extractPlainTextFromPages } from '../src/utils/pageUtils';
+import { useCardTransitionStore, CardRect } from '../src/store/cardTransitionStore';
+import { useVeyraTheme } from '../src/theme/useVeyraTheme';
+import { CollapsibleCalendarHeader } from '../src/components/calendar/CollapsibleCalendarHeader';
+import {
+    VeyraSurface,
+    VeyraCard,
+    VeyraGlass,
+    VeyraButton,
+    VeyraIconButton,
+    VeyraBadge,
+    VeyraIndicator,
+    VeyraSectionHeader,
+    VeyraDivider,
+} from '../src/components/ui';
+import NotesScreen from './notes/index';
+import { TopBar } from '../src/components/TopBar';
+import { BottomTabBar } from '../src/components/layout/BottomTabBar';
+
+export type TimelineItem =
+    | { type: 'event'; event: CalendarEvent; time_ms: number }
+    | { type: 'reminder'; item: Reminder; time_ms: number };
+
+export interface AgendaSection {
+    key: string;
+    title: string;
+    count: number;
+    isOverdue?: boolean;
+    data: TimelineItem[];
+}
+
+function calculateRiskInfo(dueDate: number, now: number, isDark: boolean, textSecondaryColor: string, overdueText?: string, inTimeText?: string) {
+    const diff = differenceInMinutes(dueDate, now);
+    const absDiff = Math.abs(diff);
+
+    let shortText = '';
+    if (absDiff < 60) {
+        shortText = `${absDiff}m`;
+    } else if (absDiff < 1440) {
+        const h = Math.floor(absDiff / 60);
+        const m = absDiff % 60;
+        shortText = m > 0 ? `${h}h ${m}m` : `${h}h`;
+    } else {
+        const d = Math.floor(absDiff / 1440);
+        shortText = `${d}d`;
+    }
+
+    if (diff < 0) {
+        return {
+            text: shortText,
+            color: isDark ? '#FB7185' : '#E11D48',
+            full: overdueText ? overdueText.replace('{time}', shortText) : shortText,
+            isOverdue: true,
+        };
+    }
+
+    const color = diff <= 60 ? (isDark ? '#FBBF24' : '#F59E0B') : textSecondaryColor;
+    return {
+        text: shortText,
+        color,
+        full: inTimeText ? inTimeText.replace('{time}', shortText) : shortText,
+        isOverdue: false,
+    };
+}
+
+interface AgendaEventRowProps {
+    event: CalendarEvent;
+    isLast: boolean;
+    now: number;
+    language: string;
+    isDark: boolean;
+    colors: any;
+    onPress: (id: string) => void;
+    onPressNote: (noteId: string) => void;
+    onEdit: (id: string) => void;
+    onDeleteDismiss: (id: string) => void;
+}
+
+const AgendaEventRow = React.memo(function AgendaEventRow({
+    event,
+    isLast,
+    now,
+    language,
+    isDark,
+    colors,
+    onPress,
+    onPressNote,
+    onEdit,
+    onDeleteDismiss,
+}: AgendaEventRowProps) {
+    const evColor = event.color || '#3B82F6';
+    const startStr = format(new Date(event.start_time_ms), 'HH:mm');
+    const endStr = format(new Date(event.end_time_ms), 'HH:mm');
+    const isOngoing = useMemo(() => {
+        const today = new Date(now);
+        if (!isEventOccurringOnDate(event, today)) return false;
+        const s = new Date(today);
+        const origS = new Date(event.start_time_ms);
+        s.setHours(origS.getHours(), origS.getMinutes(), origS.getSeconds(), origS.getMilliseconds());
+        const e = new Date(today);
+        const origE = new Date(event.end_time_ms);
+        e.setHours(origE.getHours(), origE.getMinutes(), origE.getSeconds(), origE.getMilliseconds());
+        return now >= s.getTime() && now <= e.getTime();
+    }, [event, now]);
+
+    const measuredHeight = useRef(0);
+    const translateX = useSharedValue(0);
+    const rowOpacity = useSharedValue(1);
+    const rowHeight = useSharedValue<number | null>(null);
+    const isDismissingSV = useSharedValue(false);
+    const isDismissing = useRef(false);
+    const dismissTimer = useRef<any>(null);
+
+    useEffect(() => {
+        return () => {
+            if (dismissTimer.current) {
+                clearTimeout(dismissTimer.current);
+            }
+        };
+    }, []);
+
+    const triggerDismiss = useCallback(() => {
+        if (isDismissing.current) return;
+        isDismissing.current = true;
+        isDismissingSV.value = true;
+        const initialH = measuredHeight.current > 0 ? measuredHeight.current : 64;
+        rowHeight.value = initialH;
+
+        translateX.value = withTiming(
+            -380,
+            { duration: 200, easing: ReanimatedEasing.out(ReanimatedEasing.cubic) }
+        );
+        rowOpacity.value = withDelay(
+            25,
+            withTiming(0, { duration: 180, easing: ReanimatedEasing.out(ReanimatedEasing.quad) })
+        );
+        rowHeight.value = withDelay(
+            35,
+            withTiming(0, { duration: 240, easing: ReanimatedEasing.bezier(0.25, 1, 0.5, 1) })
+        );
+
+        dismissTimer.current = setTimeout(() => {
+            onDeleteDismiss(event.id);
+        }, 285);
+    }, [event.id, onDeleteDismiss]);
+
+    const triggerEdit = useCallback(() => {
+        translateX.value = withTiming(0, {
+            duration: 220,
+            easing: ReanimatedEasing.bezier(0.25, 1, 0.5, 1),
+        });
+        onEdit(event.id);
+    }, [event.id, onEdit]);
+
+    const panGesture = Gesture.Pan()
+        .activeOffsetX([-15, 15])
+        .failOffsetY([-12, 12])
+        .onUpdate((e) => {
+            'worklet';
+            if (isDismissingSV.value) return;
+            translateX.value = e.translationX;
+        })
+        .onFinalize((e) => {
+            'worklet';
+            if (isDismissingSV.value) return;
+            if (e.translationX < -105) {
+                isDismissingSV.value = true;
+                runOnJS(triggerDismiss)();
+            } else if (e.translationX > 105) {
+                runOnJS(triggerEdit)();
+            } else {
+                translateX.value = withTiming(0, {
+                    duration: 220,
+                    easing: ReanimatedEasing.bezier(0.25, 1, 0.5, 1),
+                });
+            }
+        });
+
+    const collapseAnimatedStyle = useAnimatedStyle(() => {
+        'worklet';
+        if (rowHeight.value === null) {
+            return {};
+        }
+        return {
+            height: rowHeight.value,
+            opacity: rowOpacity.value,
+        };
+    });
+
+    const rowAnimatedStyle = useAnimatedStyle(() => ({
+        transform: [{ translateX: translateX.value }],
+    }));
+
+    const bgAnimatedStyle = useAnimatedStyle(() => {
+        'worklet';
+        const tx = translateX.value;
+        if (tx > 5) {
+            const opacity = interpolate(tx, [5, 25, 75], [0, 0.6, 1], Extrapolation.CLAMP);
+            return {
+                backgroundColor: isDark ? '#1D4ED8' : '#2563EB',
+                opacity,
+            };
+        } else if (tx < -5) {
+            const opacity = interpolate(tx, [-75, -25, -5], [1, 0.6, 0], Extrapolation.CLAMP);
+            return {
+                backgroundColor: isDark ? '#DC2626' : '#EF4444',
+                opacity,
+            };
+        }
+        return { opacity: 0 };
+    });
+
+    const leftActionStyle = useAnimatedStyle(() => {
+        'worklet';
+        const tx = translateX.value;
+        const isVisible = tx > 5;
+        const opacity = interpolate(tx, [5, 25, 70], [0, 0.45, 1], Extrapolation.CLAMP);
+        const scale = interpolate(tx, [5, 30, 85], [0.85, 0.94, 1], Extrapolation.CLAMP);
+        return {
+            opacity: isVisible ? opacity : 0,
+            transform: [{ scale }],
+        };
+    });
+
+    const rightActionStyle = useAnimatedStyle(() => {
+        'worklet';
+        const tx = translateX.value;
+        const isVisible = tx < -5;
+        const opacity = interpolate(tx, [-70, -25, -5], [1, 0.45, 0], Extrapolation.CLAMP);
+        const scale = interpolate(tx, [-85, -30, -5], [1, 0.94, 0.85], Extrapolation.CLAMP);
+        return {
+            opacity: isVisible ? opacity : 0,
+            transform: [{ scale }],
+        };
+    });
+
+    return (
+        <Reanimated.View
+            pointerEvents={isDismissing.current ? 'none' : 'auto'}
+            style={[styles.collapsibleWrapper, collapseAnimatedStyle]}
+            onLayout={(e) => {
+                const h = e.nativeEvent.layout.height;
+                if (h > 0 && !isDismissing.current) {
+                    measuredHeight.current = h;
+                }
+            }}
+        >
+            <View collapsable={false} style={styles.agendaRowWrapper}>
+                <Reanimated.View style={[styles.swipeActionBg, bgAnimatedStyle]}>
+                    <Reanimated.View style={[styles.swipeActionContentLeft, leftActionStyle]}>
+                        <Edit3 size={18} color="#FFFFFF" strokeWidth={2.5} />
+                        <Text style={styles.swipeActionLabel}>
+                            {language === 'es' ? 'Editar' : 'Edit'}
+                        </Text>
+                    </Reanimated.View>
+                    <Reanimated.View style={[styles.swipeActionContentRight, rightActionStyle]}>
+                        <Text style={styles.swipeActionLabel}>
+                            {language === 'es' ? 'Eliminar' : 'Delete'}
+                        </Text>
+                        <Trash2 size={18} color="#FFFFFF" strokeWidth={2.5} />
+                    </Reanimated.View>
+                </Reanimated.View>
+
+                <GestureDetector gesture={panGesture}>
+                    <Reanimated.View
+                        style={[
+                            styles.swipeFrontRow,
+                            {
+                                backgroundColor: isOngoing
+                                    ? (isDark ? 'rgba(59, 130, 246, 0.12)' : 'rgba(59, 130, 246, 0.06)')
+                                    : (isDark ? '#1C1F26' : '#FFFFFF'),
+                            },
+                            rowAnimatedStyle,
+                        ]}
+                    >
+                        <TouchableOpacity
+                            activeOpacity={0.7}
+                            onPress={() => {
+                                if (!isDismissing.current) {
+                                    onPress(event.id);
+                                }
+                            }}
+                            style={[
+                                styles.agendaItemRow,
+                                isOngoing && {
+                                    backgroundColor: isDark ? 'rgba(59, 130, 246, 0.12)' : 'rgba(59, 130, 246, 0.06)',
+                                },
+                            ]}
+                        >
+                            <View style={styles.agendaRowContent}>
+                                <View style={styles.agendaRowTitleLine}>
+                                    <Text
+                                        style={[styles.agendaRowTitle, { color: colors.textPrimary }]}
+                                        numberOfLines={1}
+                                    >
+                                        {event.title}
+                                    </Text>
+                                    {isOngoing && (
+                                        <View style={[styles.liveBadge, { backgroundColor: isDark ? 'rgba(59, 130, 246, 0.2)' : '#DBEAFE' }]}>
+                                            <View style={[styles.liveDot, { backgroundColor: '#3B82F6' }]} />
+                                            <Text style={[styles.liveBadgeText, { color: '#3B82F6' }]}>
+                                                {language === 'es' ? 'En curso' : 'Now'}
+                                            </Text>
+                                        </View>
+                                    )}
+                                </View>
+
+                                <View style={styles.agendaRowMetaLine}>
+                                    <View style={styles.agendaRowTimeWrap}>
+                                        <CalendarIcon size={11} color={evColor} />
+                                        <Text style={[styles.agendaRowTimeText, { color: evColor }]}>
+                                            {startStr} - {endStr}
+                                        </Text>
+                                    </View>
+
+                                    {event.location ? (
+                                        <View style={styles.agendaRowLocationWrap}>
+                                            <MapPin size={10.5} color={colors.textMuted} />
+                                            <Text style={[styles.agendaRowLocationText, { color: colors.textSecondary }]} numberOfLines={1}>
+                                                {event.location}
+                                            </Text>
+                                        </View>
+                                    ) : null}
+
+                                    {event.note_id ? (
+                                        <TouchableOpacity
+                                            activeOpacity={0.7}
+                                            onPress={(e) => {
+                                                if (e && e.stopPropagation) e.stopPropagation();
+                                                onPressNote(event.note_id!);
+                                            }}
+                                            style={[
+                                                styles.agendaRowMiniChip,
+                                                { backgroundColor: isDark ? 'rgba(59, 130, 246, 0.15)' : 'rgba(59, 130, 246, 0.08)' },
+                                            ]}
+                                        >
+                                            <FileText size={9.5} color="#3B82F6" />
+                                            <Text style={[styles.agendaRowMiniChipText, { color: '#3B82F6' }]}>
+                                                {language === 'es' ? 'Nota' : 'Note'}
+                                            </Text>
+                                        </TouchableOpacity>
+                                    ) : null}
+                                </View>
+                            </View>
+
+                            <TouchableOpacity
+                                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                                onPress={() => onEdit(event.id)}
+                                style={styles.agendaRowActionBtn}
+                            >
+                                <Edit3 size={13} color={colors.textMuted} />
+                            </TouchableOpacity>
+                        </TouchableOpacity>
+                    </Reanimated.View>
+                </GestureDetector>
+            </View>
+            {!isLast && <VeyraDivider style={styles.rowDivider} />}
+        </Reanimated.View>
+    );
+});
+
+interface AgendaReminderRowProps {
+    item: Reminder;
+    isLast: boolean;
+    isSelected: boolean;
+    isSelectionMode: boolean;
+    isSubtasksExpanded: boolean;
+    language: string;
+    isDark: boolean;
+    colors: any;
+    accent: any;
+    now: number;
+    onPressRow: (id: string) => void;
+    onLongPressRow: (id: string) => void;
+    onToggleCardSubtasks: (id: string, e?: any) => void;
+    onToggleSubtask: (reminderId: string, subtaskId: string) => void;
+    onCompleteDismiss: (id: string) => void;
+    onDeleteDismiss: (id: string) => void;
+}
+
+const AgendaReminderRow = React.memo(function AgendaReminderRow({
+    item,
+    isLast,
+    isSelected,
+    isSelectionMode,
+    isSubtasksExpanded,
+    language,
+    isDark,
+    colors,
+    accent,
+    now,
+    onPressRow,
+    onLongPressRow,
+    onToggleCardSubtasks,
+    onToggleSubtask,
+    onCompleteDismiss,
+    onDeleteDismiss,
+}: AgendaReminderRowProps) {
+    const risk = calculateRiskInfo(item.due_date_ms, now, isDark, colors.textSecondary);
+    const isCritical = item.control_level === 'critical';
+    const isStrict = item.control_level === 'strict';
+
+    let subtasksList: any[] = [];
+    if (item.subtasks) {
+        try {
+            const parsed = JSON.parse(item.subtasks);
+            if (Array.isArray(parsed)) subtasksList = parsed;
+        } catch { }
+    }
+    const completedSubtasks = subtasksList.filter((s: any) => s.completed).length;
+
+    let parsedAttachments: any[] = [];
+    if (item.attachments) {
+        try {
+            const parsed = JSON.parse(item.attachments);
+            if (Array.isArray(parsed)) parsedAttachments = parsed;
+        } catch { }
+    }
+
+    const imageAttachments = parsedAttachments.filter((att: any) => {
+        const uri = typeof att === 'string' ? att : att.uri;
+        return (
+            uri &&
+            (uri.toLowerCase().match(/\.(jpg|jpeg|png|gif|webp|heic)$/i) ||
+                uri.startsWith('data:image') ||
+                uri.startsWith('file://'))
+        );
+    });
+    const docAttachments = parsedAttachments.filter((att: any) => {
+        const uri = typeof att === 'string' ? att : att.uri;
+        return !imageAttachments.includes(att);
+    });
+
+    const dueDate = new Date(item.due_date_ms);
+    const timeStr = format(dueDate, 'HH:mm');
+
+    const measuredHeight = useRef(0);
+    const translateX = useSharedValue(0);
+    const rowOpacity = useSharedValue(1);
+    const rowHeight = useSharedValue<number | null>(null);
+    const isDismissingSV = useSharedValue(false);
+    const isDismissing = useRef(false);
+    const dismissTimer = useRef<any>(null);
+
+    useEffect(() => {
+        return () => {
+            if (dismissTimer.current) {
+                clearTimeout(dismissTimer.current);
+            }
+        };
+    }, []);
+
+    const triggerDismiss = useCallback((action: 'complete' | 'delete') => {
+        if (isDismissing.current) return;
+        isDismissing.current = true;
+        isDismissingSV.value = true;
+        const initialH = measuredHeight.current > 0 ? measuredHeight.current : 64;
+        rowHeight.value = initialH;
+        const targetX = action === 'complete' ? 380 : -380;
+
+        translateX.value = withTiming(
+            targetX,
+            { duration: 200, easing: ReanimatedEasing.out(ReanimatedEasing.cubic) }
+        );
+        rowOpacity.value = withDelay(
+            25,
+            withTiming(0, { duration: 180, easing: ReanimatedEasing.out(ReanimatedEasing.quad) })
+        );
+        rowHeight.value = withDelay(
+            35,
+            withTiming(0, { duration: 240, easing: ReanimatedEasing.bezier(0.25, 1, 0.5, 1) })
+        );
+
+        dismissTimer.current = setTimeout(() => {
+            if (action === 'complete') {
+                onCompleteDismiss(item.id);
+            } else {
+                onDeleteDismiss(item.id);
+            }
+        }, 285);
+    }, [item.id, onCompleteDismiss, onDeleteDismiss]);
+
+    const panGesture = Gesture.Pan()
+        .enabled(!isSelectionMode)
+        .activeOffsetX([-15, 15])
+        .failOffsetY([-12, 12])
+        .onUpdate((event) => {
+            'worklet';
+            if (isDismissingSV.value) return;
+            translateX.value = event.translationX;
+        })
+        .onFinalize((event) => {
+            'worklet';
+            if (isDismissingSV.value) return;
+            if (event.translationX > 105) {
+                isDismissingSV.value = true;
+                runOnJS(triggerDismiss)('complete');
+            } else if (event.translationX < -105) {
+                isDismissingSV.value = true;
+                runOnJS(triggerDismiss)('delete');
+            } else {
+                translateX.value = withTiming(0, {
+                    duration: 220,
+                    easing: ReanimatedEasing.bezier(0.25, 1, 0.5, 1),
+                });
+            }
+        });
+
+    const collapseAnimatedStyle = useAnimatedStyle(() => {
+        'worklet';
+        if (rowHeight.value === null) {
+            return {};
+        }
+        return {
+            height: rowHeight.value,
+            opacity: rowOpacity.value,
+        };
+    });
+
+    const rowAnimatedStyle = useAnimatedStyle(() => ({
+        transform: [{ translateX: translateX.value }],
+    }));
+
+    const bgAnimatedStyle = useAnimatedStyle(() => {
+        'worklet';
+        const tx = translateX.value;
+        if (tx > 5) {
+            const opacity = interpolate(tx, [5, 25, 75], [0, 0.6, 1], Extrapolation.CLAMP);
+            return {
+                backgroundColor: isDark ? '#059669' : '#10B981',
+                opacity,
+            };
+        } else if (tx < -5) {
+            const opacity = interpolate(tx, [-75, -25, -5], [1, 0.6, 0], Extrapolation.CLAMP);
+            return {
+                backgroundColor: isDark ? '#DC2626' : '#EF4444',
+                opacity,
+            };
+        }
+        return {
+            opacity: 0,
+        };
+    });
+
+    const leftActionStyle = useAnimatedStyle(() => {
+        'worklet';
+        const tx = translateX.value;
+        const isVisible = tx > 5;
+        const opacity = interpolate(tx, [5, 25, 70], [0, 0.45, 1], Extrapolation.CLAMP);
+        const scale = interpolate(tx, [5, 30, 85], [0.85, 0.94, 1], Extrapolation.CLAMP);
+        return {
+            opacity: isVisible ? opacity : 0,
+            transform: [{ scale }],
+        };
+    });
+
+    const rightActionStyle = useAnimatedStyle(() => {
+        'worklet';
+        const tx = translateX.value;
+        const isVisible = tx < -5;
+        const opacity = interpolate(tx, [-70, -25, -5], [1, 0.45, 0], Extrapolation.CLAMP);
+        const scale = interpolate(tx, [-85, -30, -5], [1, 0.94, 0.85], Extrapolation.CLAMP);
+        return {
+            opacity: isVisible ? opacity : 0,
+            transform: [{ scale }],
+        };
+    });
+
+    const priorityColor = isCritical
+        ? (isDark ? '#FB7185' : '#E11D48')
+        : isStrict
+        ? '#FB923C'
+        : (isDark ? 'rgba(255, 255, 255, 0.2)' : 'rgba(0, 0, 0, 0.15)');
+
+    return (
+        <Reanimated.View
+            pointerEvents={isDismissing.current ? 'none' : 'auto'}
+            style={[styles.collapsibleWrapper, collapseAnimatedStyle]}
+            onLayout={(e) => {
+                const h = e.nativeEvent.layout.height;
+                if (h > 0 && !isDismissing.current) {
+                    measuredHeight.current = h;
+                }
+            }}
+        >
+            <View
+                collapsable={false}
+                style={[
+                    styles.agendaRowWrapper,
+                    isSelected && {
+                        backgroundColor: isDark ? 'rgba(59, 130, 246, 0.15)' : 'rgba(59, 130, 246, 0.08)',
+                    },
+                ]}
+            >
+                <Reanimated.View style={[styles.swipeActionBg, bgAnimatedStyle]}>
+                    <Reanimated.View style={[styles.swipeActionContentLeft, leftActionStyle]}>
+                        <Check size={18} color="#FFFFFF" strokeWidth={3} />
+                        <Text style={styles.swipeActionLabel}>
+                            {language === 'es' ? 'Completar' : 'Complete'}
+                        </Text>
+                    </Reanimated.View>
+                    <Reanimated.View style={[styles.swipeActionContentRight, rightActionStyle]}>
+                        <Text style={styles.swipeActionLabel}>
+                            {language === 'es' ? 'Eliminar' : 'Delete'}
+                        </Text>
+                        <Trash2 size={18} color="#FFFFFF" strokeWidth={2.5} />
+                    </Reanimated.View>
+                </Reanimated.View>
+
+                <GestureDetector gesture={panGesture}>
+                    <Reanimated.View
+                        sharedTransitionTag={`reminder-card-${item.id}`}
+                        sharedTransitionStyle={reminderSharedTransition}
+                        style={[
+                            styles.swipeFrontRow,
+                            {
+                                backgroundColor: isSelected
+                                    ? (isDark ? 'rgba(59, 130, 246, 0.15)' : 'rgba(59, 130, 246, 0.08)')
+                                    : (isDark ? '#1C1F26' : '#FFFFFF'),
+                            },
+                            rowAnimatedStyle,
+                        ]}
+                    >
+                        <TouchableOpacity
+                            activeOpacity={0.75}
+                            onPress={() => {
+                                if (!isDismissing.current) {
+                                    onPressRow(item.id);
+                                }
+                            }}
+                            onLongPress={() => onLongPressRow(item.id)}
+                            style={styles.agendaItemRow}
+                        >
+                            {isSelectionMode ? (
+                                <View
+                                    style={[
+                                        styles.selectionCheck,
+                                        {
+                                            backgroundColor: isSelected ? accent.primary : 'transparent',
+                                            borderColor: isSelected ? accent.primary : colors.borderMedium,
+                                        },
+                                    ]}
+                                >
+                                    {isSelected && <Check size={12} color="#FFFFFF" strokeWidth={3} />}
+                                </View>
+                            ) : (
+                                <View style={[styles.reminderSidePill, { backgroundColor: priorityColor }]} />
+                            )}
+
+                            <View style={styles.agendaRowContent}>
+                                <View style={styles.agendaRowTitleLine}>
+                                    <Text
+                                        style={[
+                                            styles.agendaRowTitle,
+                                            { color: colors.textPrimary },
+                                        ]}
+                                        numberOfLines={1}
+                                    >
+                                        {item.title}
+                                    </Text>
+                                </View>
+
+                                <View style={styles.agendaRowMetaLine}>
+                                    <View style={styles.agendaRowTimeWrap}>
+                                        <Clock size={11} color={risk.color} />
+                                        <Text style={[styles.agendaRowTimeText, { color: risk.color }]}>
+                                            {timeStr}
+                                        </Text>
+                                        <Text style={[styles.agendaRowRiskText, { color: colors.textMuted }]}>
+                                            • {risk.text}
+                                        </Text>
+                                    </View>
+
+                                    {subtasksList.length > 0 && (
+                                        <TouchableOpacity
+                                            activeOpacity={0.7}
+                                            onPress={(e) => onToggleCardSubtasks(item.id, e)}
+                                            style={[
+                                                styles.agendaRowMiniChip,
+                                                {
+                                                    backgroundColor: isSubtasksExpanded
+                                                        ? (isDark ? 'rgba(59, 130, 246, 0.2)' : 'rgba(59, 130, 246, 0.12)')
+                                                        : (isDark ? 'rgba(255, 255, 255, 0.06)' : 'rgba(0, 0, 0, 0.04)'),
+                                                },
+                                            ]}
+                                        >
+                                            <CheckSquare size={9.5} color={completedSubtasks === subtasksList.length ? (isDark ? '#34D399' : '#10B981') : accent.primary} />
+                                            <Text style={[styles.agendaRowMiniChipText, { color: colors.textSecondary }]}>
+                                                {completedSubtasks}/{subtasksList.length}
+                                            </Text>
+                                            <ChevronDown
+                                                size={9.5}
+                                                color={colors.textMuted}
+                                                style={{ transform: [{ rotate: isSubtasksExpanded ? '180deg' : '0deg' }] }}
+                                            />
+                                        </TouchableOpacity>
+                                    )}
+
+                                    {item.repeat_rule && (() => {
+                                        try {
+                                            const rule = JSON.parse(item.repeat_rule!);
+                                            return rule.type && rule.type !== 'none' ? (
+                                                <View style={[styles.agendaRowMiniChip, { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.06)' : 'rgba(0, 0, 0, 0.04)' }]}>
+                                                    <Repeat size={9.5} color={colors.textMuted} />
+                                                </View>
+                                            ) : null;
+                                        } catch {
+                                            return null;
+                                        }
+                                    })()}
+
+                                    {imageAttachments.length > 0 && (
+                                        <View style={[styles.agendaRowMiniChip, { backgroundColor: isDark ? 'rgba(59, 130, 246, 0.1)' : 'rgba(37, 99, 235, 0.06)' }]}>
+                                            <ImageIcon size={9.5} color={accent.primary} />
+                                            <Text style={[styles.agendaRowMiniChipText, { color: accent.primary }]}>
+                                                {imageAttachments.length}
+                                            </Text>
+                                        </View>
+                                    )}
+                                    {docAttachments.length > 0 && (
+                                        <View style={[styles.agendaRowMiniChip, { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.06)' : 'rgba(0, 0, 0, 0.04)' }]}>
+                                            <Paperclip size={9.5} color={colors.textMuted} />
+                                        </View>
+                                    )}
+                                </View>
+                            </View>
+                        </TouchableOpacity>
+
+                        {isSubtasksExpanded && subtasksList.length > 0 && (
+                            <View style={[styles.agendaRowSubtasksBox, { borderTopColor: colors.borderSubtle }]}>
+                                {subtasksList.map((st: any) => (
+                                    <TouchableOpacity
+                                        key={st.id}
+                                        activeOpacity={0.7}
+                                        style={styles.agendaRowSubtaskItem}
+                                        onPress={(e) => {
+                                            if (e && e.stopPropagation) e.stopPropagation();
+                                            onToggleSubtask(item.id, st.id);
+                                        }}
+                                    >
+                                        <View
+                                            style={[
+                                                styles.cardSubtaskCheckbox,
+                                                st.completed
+                                                    ? { backgroundColor: isDark ? '#34D399' : '#10B981', borderColor: isDark ? '#34D399' : '#10B981' }
+                                                    : { borderColor: colors.borderMedium },
+                                            ]}
+                                        >
+                                            {st.completed && <Check size={9} color="#FFFFFF" strokeWidth={3} />}
+                                        </View>
+                                        <Text
+                                            style={[
+                                                styles.agendaRowSubtaskText,
+                                                {
+                                                    color: st.completed ? colors.textMuted : colors.textPrimary,
+                                                    textDecorationLine: st.completed ? 'line-through' : 'none',
+                                                },
+                                            ]}
+                                            numberOfLines={1}
+                                        >
+                                            {st.title}
+                                        </Text>
+                                    </TouchableOpacity>
+                                ))}
+                            </View>
+                        )}
+                    </Reanimated.View>
+                </GestureDetector>
+            </View>
+            {!isLast && <VeyraDivider style={styles.rowDivider} />}
+        </Reanimated.View>
+    );
+});
 
 export default function HomeScreen() {
     const router = useRouter();
     const { t } = useTranslation();
-    const { reminders, loadReminders, markAsCompleted, snoozeReminder, deleteReminder, deleteReminders, theme, history, loadHistory, onboardingCompleted, isHydrated, detailReminder, setDetailReminder, language } = useStore();
     const insets = useSafeAreaInsets();
-    const { width: windowWidth, height: windowHeight } = useWindowDimensions();
+    const {
+        reminders,
+        loadReminders,
+        markAsCompleted,
+        markRemindersAsCompleted,
+        snoozeReminder,
+        snoozeRemindersBatch,
+        deleteReminder,
+        deleteReminders,
+        history,
+        loadHistory,
+        onboardingCompleted,
+        isHydrated,
+        detailReminder,
+        setDetailReminder,
+        language,
+        toggleSubtask,
+    } = useStore();
+
+    const {
+        events,
+        eventsForSelectedDate,
+        loadAllEvents,
+        loadEventsForDate,
+        deleteEvent,
+    } = useEventsStore();
+
+    const { colors, typography, radii, spacing, accent, isDark, getControlLevelColor } = useVeyraTheme();
+
+    const [agendaFilter, setAgendaFilter] = useState<'all' | 'reminders' | 'events'>('all');
     const [now, setNow] = useState(Date.now());
     const [galleryImages, setGalleryImages] = useState<{ uri: string }[]>([]);
     const [galleryVisible, setGalleryVisible] = useState(false);
@@ -36,46 +892,82 @@ export default function HomeScreen() {
     const [selectedReminders, setSelectedReminders] = useState<string[]>([]);
     const isSelectionMode = selectedReminders.length > 0;
     const [isBulkDeleteConfirmVisible, setIsBulkDeleteConfirmVisible] = useState(false);
+    const [isSnoozeModalVisible, setIsSnoozeModalVisible] = useState(false);
+    const [selectedCalendarDate, setSelectedCalendarDate] = useState<Date | null>(null);
+    const [expandedSubtaskCardIds, setExpandedSubtaskCardIds] = useState<Record<string, boolean>>({});
+    const [searchQuery, setSearchQuery] = useState('');
+    const [isSearching, setIsSearching] = useState(false);
 
-    // --- LÓGICA DE ANIMACIÓN NATIVA (Guía del Usuario) ---
-    const [activeReminder, setActiveReminder] = useState<Reminder | null>(null);
-    const fadeAnim = useRef(new Animated.Value(0)).current;
-    const slideAnim = useRef(new Animated.Value(30)).current;
-    const scaleAnim = useRef(new Animated.Value(0.95)).current;
+    const selectionAnim = useRef(new Animated.Value(0)).current;
+    const completeButtonAnim = useRef(new Animated.Value(1)).current;
 
     useEffect(() => {
-        if (detailReminder) {
-            setActiveReminder(detailReminder);
-            Animated.parallel([
-                Animated.timing(fadeAnim, { toValue: 1, duration: 350, useNativeDriver: true }),
-                Animated.spring(slideAnim, { toValue: 0, tension: 50, friction: 9, useNativeDriver: true }),
-                Animated.spring(scaleAnim, { toValue: 1, tension: 50, friction: 9, useNativeDriver: true })
-            ]).start();
-        } else {
-            Animated.parallel([
-                Animated.timing(fadeAnim, { toValue: 0, duration: 250, useNativeDriver: true }),
-                Animated.timing(slideAnim, { toValue: 20, duration: 250, useNativeDriver: true }),
-                Animated.timing(scaleAnim, { toValue: 0.95, duration: 250, useNativeDriver: true })
-            ]).start(() => {
-                setActiveReminder(null);
-            });
-        }
-    }, [detailReminder]);
+        LayoutAnimation.configureNext({
+            duration: 180,
+            create: {
+                type: LayoutAnimation.Types.easeInEaseOut,
+                property: LayoutAnimation.Properties.opacity,
+            },
+            update: {
+                type: LayoutAnimation.Types.easeInEaseOut,
+            },
+            delete: {
+                type: LayoutAnimation.Types.easeInEaseOut,
+                property: LayoutAnimation.Properties.opacity,
+            },
+        });
+        Animated.timing(selectionAnim, {
+            toValue: isSelectionMode ? 1 : 0,
+            duration: isSelectionMode ? 200 : 150,
+            easing: Easing.out(Easing.cubic),
+            useNativeDriver: true,
+        }).start();
+    }, [isSelectionMode]);
 
-    // --- PALETA SEMÁNTICA (Focus & Alarm) ---
-    const { accent } = useAccentColor();
-    const colors = {
-        bg: theme === 'dark' ? '#0a0a0a' : '#F8FAFC',
-        surface: theme === 'dark' ? '#171717' : '#FFFFFF',
-        textPrimary: theme === 'dark' ? '#EDEDED' : '#0c0a09',
-        textSecondary: theme === 'dark' ? '#A1A1A1' : '#64748B',
-        textMuted: theme === 'dark' ? '#525252' : '#94A3B8',
-        border: theme === 'dark' ? '#262626' : '#E2E8F0',
-        brand: accent,
-        normal: theme === 'dark' ? '#22c55e' : '#10B981',
-        strict: theme === 'dark' ? '#eab308' : '#F59E0B',
-        critical: theme === 'dark' ? '#ef4444' : '#E11D48',
+    const pillOpacity = selectionAnim.interpolate({ inputRange: [0, 1], outputRange: [0, 1], extrapolate: 'clamp' });
+    const pillTranslateY = selectionAnim.interpolate({ inputRange: [0, 1], outputRange: [20, 0], extrapolate: 'clamp' });
+    const pillScale = selectionAnim.interpolate({ inputRange: [0, 1], outputRange: [0.96, 1], extrapolate: 'clamp' });
+
+    const toggleCardSubtasks = (id: string, e?: any) => {
+        if (e && e.stopPropagation) {
+            e.stopPropagation();
+        }
+        setExpandedSubtaskCardIds(prev => ({
+            ...prev,
+            [id]: !prev[id],
+        }));
     };
+
+    const listAnimOpacity = useRef(new Animated.Value(1)).current;
+
+    const mainActiveTab = useStore(state => state.mainActiveTab);
+    const tabCrossfadeProgress = useSharedValue(mainActiveTab === 'notes' ? 1 : 0);
+
+    useEffect(() => {
+        tabCrossfadeProgress.value = withTiming(mainActiveTab === 'notes' ? 1 : 0, {
+            duration: 220,
+            easing: ReanimatedEasing.bezier(0.25, 0.1, 0.25, 1),
+        });
+    }, [mainActiveTab]);
+
+    const remindersCrossfadeStyle = useAnimatedStyle(() => ({
+        opacity: 1 - tabCrossfadeProgress.value,
+    }));
+
+    const notesCrossfadeStyle = useAnimatedStyle(() => ({
+        opacity: tabCrossfadeProgress.value,
+    }));
+
+    useEffect(() => {
+        // Transición suave de contenido sin destello brusco a negro/blanco
+        listAnimOpacity.setValue(0.4);
+        Animated.timing(listAnimOpacity, {
+            toValue: 1,
+            duration: 220,
+            easing: Easing.out(Easing.cubic),
+            useNativeDriver: true,
+        }).start();
+    }, [selectedCalendarDate]);
 
     useEffect(() => {
         if (isHydrated && !onboardingCompleted) {
@@ -84,94 +976,451 @@ export default function HomeScreen() {
     }, [isHydrated, onboardingCompleted]);
 
     useEffect(() => {
-        loadReminders();
+        if (!isHydrated) return;
         loadHistory();
+        loadReminders();
+        loadAllEvents();
+        loadEventsForDate(selectedCalendarDate || new Date());
         const interval = setInterval(() => {
             loadReminders();
+            loadAllEvents();
             setNow(Date.now());
         }, 1000 * 30);
         return () => clearInterval(interval);
-    }, []);
+    }, [isHydrated]);
+
+    useFocusEffect(
+        useCallback(() => {
+            if (!isHydrated) return;
+            const { isRemindersDirty, reminders: currentReminders, loadReminders } = useStore.getState();
+            const { isEventsDirty, events: currentEvents, loadAllEvents, loadEventsForDate } = useEventsStore.getState();
+
+            // Caché inteligente: solo consultar SQLite si los datos están marcados como sucios o en la primera carga
+            if (isRemindersDirty || currentReminders.length === 0) {
+                loadReminders();
+            }
+            if (isEventsDirty || currentEvents.length === 0) {
+                loadAllEvents();
+                loadEventsForDate(selectedCalendarDate || new Date());
+            }
+        }, [selectedCalendarDate, isHydrated])
+    );
 
     const sortedReminders = useMemo(() => {
         return [...reminders].sort((a, b) => a.due_date_ms - b.due_date_ms);
     }, [reminders]);
 
-    const nextNow = useMemo(() => {
-        // El más urgente (vencido o para hoy) que no esté completado
+    const nextNowReminder = useMemo(() => {
         return sortedReminders.find(r => r.status === 'pending') || null;
     }, [sortedReminders]);
 
-    // Modificación para FlashList: Creamos una lista plana de items con tipos
-    const listData = useMemo(() => {
-        const data: any[] = [];
-        const remainingReminders = sortedReminders.filter(r => r.id !== nextNow?.id && r.status === 'pending');
+    const nowMs = now;
+    // Ongoing event right now
+    const liveEvent = useMemo(() => {
+        const today = new Date(nowMs);
+        return events.find(e => {
+            if (!isEventOccurringOnDate(e, today)) return false;
+            const s = new Date(today);
+            const origS = new Date(e.start_time_ms);
+            s.setHours(origS.getHours(), origS.getMinutes(), origS.getSeconds(), origS.getMilliseconds());
+            const end = new Date(today);
+            const origE = new Date(e.end_time_ms);
+            end.setHours(origE.getHours(), origE.getMinutes(), origE.getSeconds(), origE.getMilliseconds());
+            return nowMs >= s.getTime() && nowMs <= end.getTime();
+        }) || null;
+    }, [events, nowMs]);
 
-        const overdue = remainingReminders.filter(r => isPast(r.due_date_ms));
-        const today = remainingReminders.filter(r => isToday(r.due_date_ms) && !isPast(r.due_date_ms));
-        const upcoming = remainingReminders.filter(r => !isToday(r.due_date_ms) && !isPast(r.due_date_ms));
+    // One UI Integrated Daily Briefing Context
+    const locale = language === 'es' ? es : enUS;
+
+    const listData = useMemo(() => {
+        const sections: AgendaSection[] = [];
+
+        // ─── Búsqueda en tiempo real ───
+        if (searchQuery.trim().length > 0) {
+            const query = searchQuery.trim().toLowerCase();
+            const matchingReminders = sortedReminders.filter(r => {
+                const titleMatch = r.title?.toLowerCase().includes(query);
+                const descMatch = r.description?.toLowerCase().includes(query);
+                return (titleMatch || descMatch) && r.status === 'pending';
+            });
+            const matchingEvents = events.filter(e => {
+                const titleMatch = e.title?.toLowerCase().includes(query);
+                const descMatch = e.description?.toLowerCase().includes(query);
+                const locMatch = e.location?.toLowerCase().includes(query);
+                return titleMatch || descMatch || locMatch;
+            });
+
+            const combined: TimelineItem[] = [
+                ...matchingEvents.map(ev => ({ type: 'event' as const, event: ev, time_ms: ev.start_time_ms })),
+                ...matchingReminders.map(r => ({ type: 'reminder' as const, item: r, time_ms: r.due_date_ms })),
+            ].sort((a, b) => a.time_ms - b.time_ms);
+
+            if (combined.length > 0) {
+                sections.push({
+                    key: 'search_results',
+                    title: language === 'es' ? 'Resultados de búsqueda' : 'Search results',
+                    count: combined.length,
+                    data: combined,
+                });
+            }
+
+            return {
+                sections,
+                stats: { completedToday: 0, overdueCount: 0 },
+                overdueCount: 0,
+                isFilteredByDate: false,
+            };
+        }
+
+        if (selectedCalendarDate) {
+            const targetDate = selectedCalendarDate;
+            const dateTitle = format(targetDate, language === 'es' ? "EEEE, d 'de' MMMM" : 'EEEE, MMMM d', { locale });
+
+            const dayEvents: CalendarEvent[] = (agendaFilter !== 'reminders')
+                ? events.filter(e => isEventOccurringOnDate(e, targetDate))
+                : [];
+
+            const dayReminders: Reminder[] = (agendaFilter !== 'events')
+                ? sortedReminders.filter(r => isSameDay(new Date(r.due_date_ms), targetDate) && r.status === 'pending')
+                : [];
+
+            const combined: TimelineItem[] = [
+                ...dayEvents.map(ev => {
+                    const d = new Date(targetDate);
+                    const orig = new Date(ev.start_time_ms);
+                    d.setHours(orig.getHours(), orig.getMinutes(), orig.getSeconds(), orig.getMilliseconds());
+                    return { type: 'event' as const, event: ev, time_ms: d.getTime() };
+                }),
+                ...dayReminders.map(r => ({ type: 'reminder' as const, item: r, time_ms: r.due_date_ms })),
+            ].sort((a, b) => a.time_ms - b.time_ms);
+
+            sections.push({
+                key: 'selected_date',
+                title: dateTitle,
+                count: combined.length,
+                data: combined,
+            });
+
+            return {
+                sections,
+                stats: { completedToday: 0, overdueCount: 0 },
+                overdueCount: 0,
+                isFilteredByDate: true,
+            };
+        }
+
+        // ─── Vista general (selectedCalendarDate === null) ───
+
+        // 1. Tareas Vencidas ("Urgente")
+        const overdue = (agendaFilter !== 'events')
+            ? sortedReminders.filter(r => isPast(r.due_date_ms) && r.status === 'pending')
+            : [];
 
         if (overdue.length > 0) {
-            data.push({ type: 'header', title: t('home.urgent'), color: colors.critical });
-            overdue.forEach(r => data.push({ type: 'reminder', item: r }));
+            sections.push({
+                key: 'overdue',
+                title: t('home.urgent'),
+                count: overdue.length,
+                isOverdue: true,
+                data: overdue.map(r => ({ type: 'reminder' as const, item: r, time_ms: r.due_date_ms })),
+            });
         }
 
-        if (today.length > 0) {
-            data.push({ type: 'header', title: t('home.today'), color: colors.brand });
-            today.forEach(r => data.push({ type: 'reminder', item: r }));
+        // 2. Hoy: Eventos y Tareas intercalados cronológicamente
+        const todayDate = new Date();
+        const todayEvents: CalendarEvent[] = (agendaFilter !== 'reminders')
+            ? events.filter(e => isEventOccurringOnDate(e, todayDate))
+            : [];
+
+        const todayReminders: Reminder[] = (agendaFilter !== 'events')
+            ? sortedReminders.filter(r => isToday(r.due_date_ms) && !isPast(r.due_date_ms) && r.status === 'pending')
+            : [];
+
+        const todayTimeline: TimelineItem[] = [
+            ...todayEvents.map(ev => {
+                const d = new Date(todayDate);
+                const orig = new Date(ev.start_time_ms);
+                d.setHours(orig.getHours(), orig.getMinutes(), orig.getSeconds(), orig.getMilliseconds());
+                return { type: 'event' as const, event: ev, time_ms: d.getTime() };
+            }),
+            ...todayReminders.map(r => ({ type: 'reminder' as const, item: r, time_ms: r.due_date_ms })),
+        ].sort((a, b) => a.time_ms - b.time_ms);
+
+        sections.push({
+            key: 'today',
+            title: t('home.today'),
+            count: todayTimeline.length,
+            data: todayTimeline,
+        });
+
+        // 3. Días futuros agrupados cronológicamente
+        const groupsByDay = new Map<string, { date: Date; items: TimelineItem[] }>();
+
+        if (agendaFilter !== 'reminders') {
+            // Eventos únicos futuros (que no sean hoy)
+            const futureSingleEvents = events.filter(e => (!e.repeat_rule || e.repeat_rule === 'null') && !isToday(new Date(e.start_time_ms)) && !isPast(e.start_time_ms));
+            futureSingleEvents.forEach(ev => {
+                const dateObj = new Date(ev.start_time_ms);
+                const key = format(dateObj, 'yyyy-MM-dd');
+                const group = groupsByDay.get(key) || { date: dateObj, items: [] };
+                group.items.push({ type: 'event', event: ev, time_ms: ev.start_time_ms });
+                groupsByDay.set(key, group);
+            });
+
+            // Eventos recurrentes: proyectar para los próximos 14 días (del día 1 al 14)
+            const recurringEvents = events.filter(e => e.repeat_rule && e.repeat_rule !== 'null');
+            if (recurringEvents.length > 0) {
+                for (let i = 1; i <= 14; i++) {
+                    const futureDay = addDays(todayDate, i);
+                    const key = format(futureDay, 'yyyy-MM-dd');
+                    recurringEvents.forEach(ev => {
+                        if (isEventOccurringOnDate(ev, futureDay)) {
+                            const d = new Date(futureDay);
+                            const orig = new Date(ev.start_time_ms);
+                            d.setHours(orig.getHours(), orig.getMinutes(), orig.getSeconds(), orig.getMilliseconds());
+                            const group = groupsByDay.get(key) || { date: futureDay, items: [] };
+                            group.items.push({ type: 'event', event: ev, time_ms: d.getTime() });
+                            groupsByDay.set(key, group);
+                        }
+                    });
+                }
+            }
         }
 
-        if (upcoming.length > 0) {
-            data.push({ type: 'header', title: t('home.upcoming'), color: colors.textMuted });
-            upcoming.forEach(r => data.push({ type: 'reminder', item: r }));
-        }
+        const futureReminders: Reminder[] = (agendaFilter !== 'events')
+            ? sortedReminders.filter(r => !isToday(r.due_date_ms) && !isPast(r.due_date_ms) && r.status === 'pending')
+            : [];
 
-        // Stats para el header
+        futureReminders.forEach(r => {
+            const dateObj = new Date(r.due_date_ms);
+            const key = format(dateObj, 'yyyy-MM-dd');
+            const group = groupsByDay.get(key) || { date: dateObj, items: [] };
+            group.items.push({ type: 'reminder', item: r, time_ms: r.due_date_ms });
+            groupsByDay.set(key, group);
+        });
+
+        const sortedDayKeys = Array.from(groupsByDay.keys()).sort();
+
+        sortedDayKeys.forEach(key => {
+            const group = groupsByDay.get(key)!;
+            const dayDate = group.date;
+            const sortedDayItems = group.items.sort((a, b) => a.time_ms - b.time_ms);
+
+            let sectionTitle = '';
+            if (isTomorrow(dayDate)) {
+                sectionTitle = language === 'es' ? 'Mañana' : 'Tomorrow';
+            } else {
+                sectionTitle = format(dayDate, language === 'es' ? "EEEE, d 'de' MMMM" : 'EEEE, MMMM d', { locale });
+            }
+
+            sections.push({
+                key,
+                title: sectionTitle,
+                count: sortedDayItems.length,
+                data: sortedDayItems,
+            });
+        });
+
         const completedToday = history.filter(h => isToday(h.last_modified_ms) && h.status === 'completed').length;
         const overdueCount = overdue.length;
 
-        return { data, stats: { completedToday, overdueCount }, overdueCount }; // Return overdueCount separately for easy access
-    }, [sortedReminders, nextNow, now, history]);
+        return { sections, stats: { completedToday, overdueCount }, overdueCount, isFilteredByDate: false };
+    }, [sortedReminders, events, agendaFilter, now, history, t, selectedCalendarDate, locale, language, searchQuery]);
 
-    const hasCriticalActive = useMemo(() => reminders.some(r => r.control_level === 'critical' && r.status === 'pending'), [reminders]);
+    const todayPendingReminders = useMemo(() => {
+        return reminders.filter(r => isToday(r.due_date_ms) && r.status === 'pending');
+    }, [reminders]);
 
-    // --- LÓGICA DE SELECCIÓN ---
-    const toggleSelection = (id: string) => {
-        if (selectedReminders.includes(id)) {
-            setSelectedReminders(prev => prev.filter(rId => rId !== id));
-        } else {
-            setSelectedReminders(prev => [...prev, id]);
+    const todayCompletedList = useMemo(() => {
+        return history.filter(h => isToday(h.last_modified_ms) && h.status === 'completed');
+    }, [history]);
+
+    const totalTodayTasks = todayPendingReminders.length + todayCompletedList.length;
+    const criticalTodayCount = todayPendingReminders.filter(r => r.control_level === 'critical').length;
+    const progressTodayPercent = totalTodayTasks > 0 ? Math.round((todayCompletedList.length / totalTodayTasks) * 100) : 100;
+
+    const tasksFilterCount = useMemo(() => {
+        if (selectedCalendarDate) {
+            return sortedReminders.filter(r => isSameDay(new Date(r.due_date_ms), selectedCalendarDate) && r.status === 'pending').length;
+        }
+        return sortedReminders.filter(r => r.status === 'pending').length;
+    }, [selectedCalendarDate, sortedReminders]);
+
+    const eventsFilterCount = useMemo(() => {
+        if (selectedCalendarDate) {
+            return events.filter(e => isEventOccurringOnDate(e, selectedCalendarDate)).length;
+        }
+        const todayDate = new Date();
+        return events.filter(e => {
+            if (isEventOccurringOnDate(e, todayDate)) return true;
+            if (e.repeat_rule && e.repeat_rule !== 'null') return true;
+            return !isPast(e.start_time_ms);
+        }).length;
+    }, [selectedCalendarDate, events]);
+
+    const allFilterCount = tasksFilterCount + eventsFilterCount;
+
+    const handleShareAgenda = async () => {
+        try {
+            const dateStr = format(now, language === 'es' ? "EEEE, d 'de' MMMM" : 'EEEE, MMMM d', { locale });
+            const allSorted = [...todayPendingReminders].sort((a, b) => a.due_date_ms - b.due_date_ms);
+
+            let message = `${t('briefing.share_title', { defaultValue: 'Agenda del día' })} - ${dateStr}\n`;
+            message += `----------------------------------------\n`;
+
+            if (allSorted.length === 0) {
+                message += `${t('briefing.no_pending_tasks', { defaultValue: 'No hay tareas pendientes para hoy.' })}\n`;
+            } else {
+                allSorted.forEach(r => {
+                    const timeStr = format(new Date(r.due_date_ms), 'HH:mm');
+                    const levelTag = (r.control_level || 'normal').toUpperCase();
+                    message += `• ${timeStr} - ${r.title} [${levelTag}]\n`;
+
+                    if (r.subtasks) {
+                        try {
+                            const subtasksList = JSON.parse(r.subtasks);
+                            if (Array.isArray(subtasksList)) {
+                                subtasksList.forEach((st: any) => {
+                                    const check = st.completed ? '[x]' : '[ ]';
+                                    message += `    ${check} ${st.title}\n`;
+                                });
+                            }
+                        } catch {}
+                    }
+                });
+            }
+
+            message += `----------------------------------------\n`;
+            message += `${t('briefing.share_summary', { count: allSorted.length, completed: todayCompletedList.length })}\n`;
+            message += `Veyra`;
+
+            await Share.share({
+                title: `${t('briefing.share_title', { defaultValue: 'Agenda del día' })} - ${dateStr}`,
+                message,
+            });
+        } catch (error) {
+            console.error('Error sharing agenda:', error);
         }
     };
 
-    const handlePress = (id: string) => {
+    // Selection Handling
+    const toggleSelection = (id: string) => {
+        setSelectedReminders(prev => (prev.includes(id) ? prev.filter(rId => rId !== id) : [...prev, id]));
+    };
+
+    const setCardOrigin = useCardTransitionStore(state => state.setOrigin);
+
+    const handlePress = (id: string, rect?: CardRect) => {
         if (isSelectionMode) {
             toggleSelection(id);
         } else {
-            const reminder = reminders.find(r => r.id === id);
-            if (reminder) setDetailReminder(reminder);
+            if (rect && rect.width > 0 && rect.height > 0) {
+                setCardOrigin(rect, 'reminder', id);
+            }
+            router.push({ pathname: '/reminder/[id]', params: { id } });
         }
     };
 
     const handleLongPress = (id: string) => {
         if (!isSelectionMode) {
+            LayoutAnimation.configureNext({
+                duration: 180,
+                create: { type: LayoutAnimation.Types.easeInEaseOut, property: LayoutAnimation.Properties.opacity },
+                update: { type: LayoutAnimation.Types.easeInEaseOut },
+                delete: { type: LayoutAnimation.Types.easeInEaseOut, property: LayoutAnimation.Properties.opacity },
+            });
             setSelectedReminders([id]);
         } else {
             toggleSelection(id);
         }
     };
 
-    const handleDeleteSelected = () => {
-        setIsBulkDeleteConfirmVisible(true);
+    const pendingReminders = useMemo(() => reminders.filter(r => r.status === 'pending'), [reminders]);
+    const isAllSelected = pendingReminders.length > 0 && selectedReminders.length === pendingReminders.length;
+
+    const toggleSelectAll = () => {
+        if (isAllSelected) {
+            setSelectedReminders([]);
+        } else {
+            setSelectedReminders(pendingReminders.map(r => r.id));
+        }
     };
 
-    const selectAll = () => {
-        const pendingIds = reminders.filter(r => r.status === 'pending').map(r => r.id);
-        setSelectedReminders(pendingIds);
+    const handleCompleteSelected = async () => {
+        Animated.sequence([
+            Animated.timing(completeButtonAnim, { toValue: 0.72, duration: 90, useNativeDriver: true }),
+            Animated.spring(completeButtonAnim, { toValue: 1, friction: 4, tension: 120, useNativeDriver: true }),
+        ]).start();
+
+        const toComplete = [...selectedReminders];
+        setSelectedReminders([]);
+        LayoutAnimation.configureNext({
+            duration: 350,
+            create: { type: LayoutAnimation.Types.easeInEaseOut, property: LayoutAnimation.Properties.opacity },
+            update: { type: LayoutAnimation.Types.spring, springDamping: 0.82 },
+            delete: { type: LayoutAnimation.Types.easeInEaseOut, property: LayoutAnimation.Properties.opacity },
+        });
+        await markRemindersAsCompleted(toComplete);
+    };
+
+    const handleSnoozeSelected = async (minutes: number) => {
+        setIsSnoozeModalVisible(false);
+        const toSnooze = [...selectedReminders];
+        setSelectedReminders([]);
+        LayoutAnimation.configureNext({
+            duration: 350,
+            create: { type: LayoutAnimation.Types.easeInEaseOut, property: LayoutAnimation.Properties.opacity },
+            update: { type: LayoutAnimation.Types.spring, springDamping: 0.82 },
+            delete: { type: LayoutAnimation.Types.easeInEaseOut, property: LayoutAnimation.Properties.opacity },
+        });
+        await snoozeRemindersBatch(toSnooze, minutes);
+    };
+
+    const handleShareSelected = async () => {
+        const selectedList = reminders.filter(r => selectedReminders.includes(r.id));
+        if (selectedList.length === 0) return;
+
+        let message = `${language === 'es' ? 'Recordatorios de Veyra' : 'Veyra Reminders'} (${selectedList.length})\n`;
+        message += `----------------------------------------\n`;
+        selectedList.forEach((r, idx) => {
+            const timeStr = format(new Date(r.due_date_ms), 'dd/MM HH:mm');
+            const levelTag = (r.control_level || 'normal').toUpperCase();
+            message += `${idx + 1}. ${r.title} [${levelTag}] - ${timeStr}\n`;
+            if (r.description) {
+                const plain = extractPlainTextFromPages(r.description);
+                if (plain) message += `   ${plain}\n`;
+            }
+            if (r.subtasks) {
+                try {
+                    const subtasksList = JSON.parse(r.subtasks);
+                    if (Array.isArray(subtasksList)) {
+                        subtasksList.forEach((st: any) => {
+                            const check = st.completed ? '[x]' : '[ ]';
+                            message += `   ${check} ${st.title}\n`;
+                        });
+                    }
+                } catch {}
+            }
+        });
+        message += `----------------------------------------\nVeyra`;
+
+        try {
+            await Share.share({
+                title: language === 'es' ? 'Recordatorios de Veyra' : 'Veyra Reminders',
+                message,
+            });
+        } catch (e) {}
     };
 
     useEffect(() => {
         const backAction = () => {
+            if (isSearching) {
+                LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+                setIsSearching(false);
+                setSearchQuery('');
+                return true;
+            }
             if (isSelectionMode) {
                 setSelectedReminders([]);
                 return true;
@@ -180,7 +1429,7 @@ export default function HomeScreen() {
         };
         const backHandler = BackHandler.addEventListener('hardwareBackPress', backAction);
         return () => backHandler.remove();
-    }, [isSelectionMode]);
+    }, [isSearching, isSelectionMode]);
 
     const getRiskInfo = (dueDate: number) => {
         const diff = differenceInMinutes(dueDate, now);
@@ -192,951 +1441,925 @@ export default function HomeScreen() {
         } else if (absDiff < 1440) {
             const h = Math.floor(absDiff / 60);
             const m = absDiff % 60;
-            // Si hay minutos los mostramos, si no solo la hora
             shortText = m > 0 ? `${h}h ${m}m` : `${h}h`;
         } else {
             const d = Math.floor(absDiff / 1440);
             shortText = `${d}d`;
         }
 
-        if (diff < 0) return {
-            text: shortText,
-            color: colors.critical,
-            full: t('home.overdue_ago', { time: shortText }),
-            isOverdue: true
-        };
+        if (diff < 0) {
+            return {
+                text: shortText,
+                color: isDark ? '#FB7185' : '#E11D48',
+                full: t('home.overdue_ago', { time: shortText }),
+                isOverdue: true,
+            };
+        }
 
-        const color = diff <= 60 ? colors.strict : colors.textSecondary;
+        const color = diff <= 60 ? (isDark ? '#FBBF24' : '#F59E0B') : colors.textSecondary;
         return {
             text: shortText,
-            color: color,
+            color,
             full: t('home.in_time', { time: shortText }),
-            isOverdue: false
+            isOverdue: false,
         };
     };
 
-    const ReminderCard = ({ item }: { item: Reminder }) => {
-        const risk = getRiskInfo(item.due_date_ms);
-        const level = item.control_level;
-        const isSelected = selectedReminders.includes(item.id);
-        const isCritical = level === 'critical';
-        const isStrict = level === 'strict';
+    const getTimeRemainingParts = (dueDate: number) => {
+        const diff = differenceInMinutes(dueDate, now);
+        const absDiff = Math.abs(diff);
+        const isEs = language === 'es';
 
-        const accentColor = isCritical ? colors.critical : (isStrict ? colors.strict : colors.brand);
-        const cardBg = isSelected
-            ? (theme === 'dark' ? '#1E293B' : '#EFF6FF')
-            : (theme === 'dark' ? '#111111' : '#FFFFFF');
-
-        // El usuario quiere que solo los críticos tengan borde
-        const borderCol = isSelected
-            ? (theme === 'dark' ? '#3B82F6' : '#93C5FD')
-            : (isCritical ? accentColor : 'transparent');
-
-        // --- ANIMACIÓN 3: TIC-TAC (MÁS SUTIL Y LENTA) ---
-        const tickAnim = useRef(new Animated.Value(1)).current;
-        useEffect(() => {
-            if (isCritical && !isSelected) {
-                const tick = Animated.loop(
-                    Animated.sequence([
-                        Animated.timing(tickAnim, { toValue: 1.08, duration: 1200, useNativeDriver: true }),
-                        Animated.timing(tickAnim, { toValue: 1, duration: 1200, useNativeDriver: true })
-                    ])
-                );
-                tick.start();
-                return () => tick.stop();
-            } else {
-                tickAnim.setValue(1);
+        if (absDiff < 1) {
+            if (diff < 0) {
+                return {
+                    number: isEs ? 'Recién' : 'Just',
+                    suffix: isEs ? 'vencido' : 'overdue',
+                    isOverdue: true,
+                };
             }
-        }, [isCritical, isSelected]);
+            return {
+                number: isEs ? 'Ahora' : 'Now',
+                suffix: isEs ? 'vence' : 'due',
+                isOverdue: false,
+            };
+        }
 
-        // --- ANIMACIÓN 4: SHIMMER DE BORDE (PULSO DE BRILLO) ---
-        const borderGlowAnim = useRef(new Animated.Value(0.4)).current;
-        useEffect(() => {
-            if (isCritical && !isSelected) {
-                const glow = Animated.loop(
-                    Animated.sequence([
-                        Animated.timing(borderGlowAnim, { toValue: 1, duration: 2000, useNativeDriver: true }),
-                        Animated.timing(borderGlowAnim, { toValue: 0.4, duration: 2000, useNativeDriver: true })
-                    ])
-                );
-                glow.start();
-                return () => glow.stop();
-            }
-        }, [isCritical, isSelected]);
+        let number = '';
+        if (absDiff < 60) {
+            number = `${absDiff}m`;
+        } else if (absDiff < 1440) {
+            const h = Math.floor(absDiff / 60);
+            const m = absDiff % 60;
+            number = m > 0 ? `${h}h ${m}m` : `${h}h`;
+        } else {
+            const d = Math.floor(absDiff / 1440);
+            const h = Math.floor((absDiff % 1440) / 60);
+            number = h > 0 ? `${d}d ${h}h` : `${d}d`;
+        }
 
-        return (
-            <Animated.View
-                style={{
-                    transform: [{ scale: isSelected ? 0.98 : 1 }],
-                    marginBottom: 12, // Un poco más de margen para la sombra
-                }}
-            >
-                <TouchableOpacity
-                    activeOpacity={0.75}
-                    onPress={() => handlePress(item.id)}
-                    onLongPress={() => handleLongPress(item.id)}
-                >
-                    {/* Contenedor de SOMBRA (Sin overflow:hidden) */}
-                    <YStack
-                        borderRadius={20}
-                        elevation={theme === 'dark' ? 0 : (isCritical ? 8 : 4)}
-                        shadowColor={isCritical ? colors.critical : "rgba(0,0,0,0.1)"}
-                        shadowRadius={isCritical ? 20 : 12}
-                        shadowOffset={{ width: 0, height: 6 }}
-                        shadowOpacity={isCritical ? 0.15 : 0.06}
-                        backgroundColor="transparent"
-                    >
-                        {/* Contenedor de CONTENIDO (Con overflow:hidden) */}
-                        <XStack
-                            backgroundColor={cardBg}
-                            borderColor={borderCol}
-                            borderWidth={(isCritical && !isSelected) ? 0 : 1}
-                            borderRadius={20}
-                            paddingVertical="$3"
-                            paddingHorizontal="$4"
-                            alignItems="center"
-                            gap="$3"
-                            opacity={isSelectionMode && !isSelected ? 0.5 : 1}
-                            overflow="hidden"
-                        >
-                            {/* Shimmer de Borde (Glow Overlay) - Único borde para críticos */}
-                            {isCritical && !isSelected && (
-                                <Animated.View
-                                    style={{
-                                        ...StyleSheet.absoluteFillObject,
-                                        borderRadius: 20,
-                                        borderWidth: 2,
-                                        borderColor: colors.critical,
-                                        opacity: borderGlowAnim,
-                                        zIndex: 1,
-                                    }}
-                                />
-                            )}
+        if (diff < 0) {
+            return {
+                number,
+                suffix: isEs ? 'vencido' : 'overdue',
+                isOverdue: true,
+            };
+        }
 
-                            {isSelectionMode ? (
-                                <Circle size={22} bw={2}
-                                    bc={isSelected ? '#3B82F6' : (theme === 'dark' ? '#444' : '#CBD5E1')}
-                                    bg={isSelected ? '#3B82F6' : 'transparent'}
-                                    jc="center" ai="center"
-                                >
-                                    {isSelected && <Check size={13} color="white" strokeWidth={4} />}
-                                </Circle>
-                            ) : (
-                                <View style={{
-                                    width: 8, height: 8, borderRadius: 4,
-                                    backgroundColor: accentColor,
-                                    opacity: isCritical ? 1 : 0.7
-                                }} />
-                            )}
-
-                            <YStack flex={1} gap="$0.5">
-                                <Text color={colors.textPrimary} fontSize="$4" fontWeight="700" numberOfLines={1}>
-                                    {item.title}
-                                </Text>
-                                <XStack alignItems="center" gap="$1.5">
-                                    {item.repeat_rule && (() => {
-                                        try {
-                                            const rule = JSON.parse(item.repeat_rule!);
-                                            return rule.type && rule.type !== 'none' ? (
-                                                <Repeat size={10} color={colors.textMuted} />
-                                            ) : null;
-                                        } catch { return null; }
-                                    })()}
-                                </XStack>
-                            </YStack>
-
-                            <XStack alignItems="center" gap="$2">
-                                <Animated.View style={{ transform: [{ scale: tickAnim }] }}>
-                                    <Text
-                                        color={isCritical ? colors.critical : (isStrict ? colors.strict : colors.brand)}
-                                        fontSize="$3"
-                                        fontWeight="800"
-                                        fontFamily="$mono"
-                                    >
-                                        {risk.text}
-                                    </Text>
-                                </Animated.View>
-
-                                {!isSelectionMode && (
-                                    <TouchableOpacity
-                                        onPress={() => router.push({ pathname: '/create', params: { id: item.id } })}
-                                        style={{ padding: 6 }}
-                                    >
-                                        <Edit3 size={15} color={colors.textMuted} />
-                                    </TouchableOpacity>
-                                )}
-                            </XStack>
-                        </XStack>
-                    </YStack>
-                </TouchableOpacity>
-            </Animated.View>
-        );
+        return {
+            number,
+            suffix: isEs ? 'restante' : 'remaining',
+            isOverdue: false,
+        };
     };
 
-
-    const HeroCard = ({ item }: { item: Reminder }) => {
-        const risk = getRiskInfo(item.due_date_ms);
-        const isSelected = selectedReminders.includes(item.id);
-        const isCritical = item.control_level === 'critical';
-        const isStrict = item.control_level === 'strict';
-
-        const accentColor = isCritical ? colors.critical : (isStrict ? colors.strict : colors.brand);
-        const cardBg = theme === 'dark' ? '#0F0F0F' : '#FFFFFF';
-
-        // --- ANIMACIÓN 3: TIC-TAC (MÁS SUTIL) ---
-        const tickAnim = useRef(new Animated.Value(1)).current;
-        useEffect(() => {
-            if (!isSelectionMode) {
-                const tick = Animated.loop(
-                    Animated.sequence([
-                        Animated.timing(tickAnim, { toValue: 1.06, duration: 1500, useNativeDriver: true }),
-                        Animated.timing(tickAnim, { toValue: 1, duration: 1500, useNativeDriver: true })
-                    ])
-                );
-                tick.start();
-                return () => tick.stop();
-            }
-        }, [isSelectionMode]);
-
-        return (
-            <Animated.View
-                style={{
-                    marginBottom: 32, // Más espacio para la sombra profunda
-                    marginTop: 4,
-                }}
-            >
-                <TouchableOpacity
-                    activeOpacity={0.88}
-                    onPress={() => handlePress(item.id)}
-                    onLongPress={() => handleLongPress(item.id)}
-                >
-                    {/* Contenedor de SOMBRA */}
-                    <YStack
-                        borderRadius={20}
-                        elevation={theme === 'dark' ? 0 : 15}
-                        shadowColor={accentColor}
-                        shadowRadius={40}
-                        shadowOffset={{ width: 0, height: 12 }}
-                        shadowOpacity={theme === 'dark' ? 0.35 : 0.1}
-                        backgroundColor="transparent"
-                    >
-                        {/* Contenedor de CONTENIDO */}
-                        <YStack
-                            backgroundColor={isSelected ? (theme === 'dark' ? '#1E293B' : '#EFF6FF') : cardBg}
-                            borderRadius={20}
-                            borderWidth={1}
-                            borderColor={isSelected ? '#3B82F6' : (theme === 'dark' ? '#1A1A1A' : '#F1F5F9')}
-                            overflow="hidden"
-                            opacity={isSelectionMode && !isSelected ? 0.6 : 1}
-                            position="relative"
-                        >
-                            <View style={{ height: 4, backgroundColor: accentColor, width: '100%' }} />
-
-                            <YStack padding="$5" gap="$3">
-                                <XStack justifyContent="space-between" alignItems="center">
-                                    <XStack alignItems="center" gap="$2">
-                                        {isSelectionMode && (
-                                            <Circle size={18} bw={2} bc={isSelected ? '#3B82F6' : (theme === 'dark' ? '#444' : '#CBD5E1')} bg={isSelected ? '#3B82F6' : 'transparent'} jc="center" ai="center">
-                                                {isSelected && <Check size={10} color="white" strokeWidth={4} />}
-                                            </Circle>
-                                        )}
-                                        <View style={{ backgroundColor: accentColor + '20', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6, borderWidth: 1, borderColor: accentColor + '40' }}>
-                                            <Text color={accentColor} fontSize={10} fontWeight="800" textTransform="uppercase" letterSpacing={1.2}>
-                                                {t('home.next_objective')}
-                                            </Text>
-                                        </View>
-                                        {item.repeat_rule && (() => {
-                                            try {
-                                                const rule = JSON.parse(item.repeat_rule!);
-                                                return rule.type && rule.type !== 'none' ? (
-                                                    <Repeat size={12} color={accentColor} opacity={0.7} />
-                                                ) : null;
-                                            } catch { return null; }
-                                        })()}
-                                    </XStack>
-
-                                    <XStack alignItems="center" gap="$1">
-                                        <Animated.View style={{ transform: [{ scale: tickAnim }], flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                                            <Clock size={11} color={accentColor} />
-                                            <Text color={accentColor} fontSize={12} fontWeight="800" fontFamily="$mono">
-                                                {risk.text}
-                                            </Text>
-                                        </Animated.View>
-                                    </XStack>
-                                </XStack>
-
-                                <H2 color={colors.textPrimary} fontWeight="900" fontSize="$7" lineHeight={36} numberOfLines={2}>
-                                    {item.title}
-                                </H2>
-
-                                {item.description ? (
-                                    <Text
-                                        color={colors.textSecondary}
-                                        fontSize="$3"
-                                        lineHeight={20}
-                                        numberOfLines={3}
-                                        opacity={0.8}
-                                        marginTop="$-2"
-                                    >
-                                        {item.description.replace(/<[^>]*>/g, '')} {/* Strip HTML tags if any */}
-                                    </Text>
-                                ) : null}
-
-                                {/* Miniaturas de Imágenes */}
-                                {(() => {
-                                    if (!item.attachments) return null;
-                                    try {
-                                        const atts = JSON.parse(item.attachments);
-                                        if (!Array.isArray(atts) || atts.length === 0) return null;
-
-                                        const images = atts.filter((att: any) => {
-                                            const uri = typeof att === 'string' ? att : att.uri;
-                                            return uri && (uri.toLowerCase().match(/\.(jpg|jpeg|png|gif|webp|heic)$/i) || uri.startsWith('data:image') || uri.startsWith('file://'));
-                                        });
-
-                                        if (images.length === 0) return null;
-
-                                        return (
-                                            <XStack gap="$2" marginTop="$2" flexWrap="wrap">
-                                                {images.slice(0, 4).map((att: any, idx: number) => {
-                                                    const uri = typeof att === 'string' ? att : att.uri;
-                                                    return (
-                                                        <Image
-                                                            key={idx}
-                                                            source={{ uri }}
-                                                            style={{
-                                                                width: 50,
-                                                                height: 50,
-                                                                borderRadius: 8,
-                                                                backgroundColor: theme === 'dark' ? '#222' : '#eee',
-                                                                borderWidth: 1,
-                                                                borderColor: theme === 'dark' ? '#333' : '#ddd'
-                                                            }}
-                                                        />
-                                                    );
-                                                })}
-                                                {images.length > 4 && (
-                                                    <YStack
-                                                        width={50}
-                                                        height={50}
-                                                        borderRadius={8}
-                                                        backgroundColor={theme === 'dark' ? '#222' : '#eee'}
-                                                        justifyContent="center"
-                                                        alignItems="center"
-                                                        borderWidth={1}
-                                                        borderColor={theme === 'dark' ? '#333' : '#ddd'}
-                                                    >
-                                                        <Text fontSize="$1" fontWeight="800" color={colors.textSecondary}>
-                                                            +{images.length - 4}
-                                                        </Text>
-                                                    </YStack>
-                                                )}
-                                            </XStack>
-                                        );
-                                    } catch { return null; }
-                                })()}
-                            </YStack>
-                        </YStack>
-                    </YStack>
-                </TouchableOpacity>
-            </Animated.View>
-        );
+    const getSeverityConfig = (level?: string) => {
+        switch (level?.toLowerCase()) {
+            case 'strict':
+                return {
+                    label: language === 'es' ? 'Strict' : 'Strict',
+                    color: '#FB923C',
+                    bg: isDark ? '#432316' : '#FFEDD5',
+                    border: isDark ? 'rgba(251, 146, 60, 0.25)' : 'rgba(251, 146, 60, 0.4)',
+                };
+            case 'critical':
+                return {
+                    label: language === 'es' ? 'Critical' : 'Critical',
+                    color: '#FB7185',
+                    bg: isDark ? '#4A1D24' : '#FFE4E6',
+                    border: isDark ? 'rgba(251, 113, 133, 0.25)' : 'rgba(225, 29, 72, 0.4)',
+                };
+            case 'low':
+                return {
+                    label: language === 'es' ? 'Low' : 'Low',
+                    color: '#34D399',
+                    bg: isDark ? '#14382B' : '#D1FAE5',
+                    border: isDark ? 'rgba(52, 211, 153, 0.25)' : 'rgba(5, 150, 105, 0.4)',
+                };
+            default: // normal
+                return {
+                    label: language === 'es' ? 'Normal' : 'Normal',
+                    color: isDark ? '#A1A1AA' : '#64748B',
+                    bg: isDark ? 'rgba(255, 255, 255, 0.06)' : 'rgba(0, 0, 0, 0.05)',
+                    border: isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.08)',
+                };
+        }
     };
 
-    const ListHeader = () => (
-        <YStack>
-            {isSelectionMode ? (
-                <XStack justifyContent="space-between" alignItems="center" mb="$5" backgroundColor="$blue2" p="$2" borderRadius="$4">
-                    <XStack ai="center" gap="$3">
-                        <TouchableOpacity onPress={() => setSelectedReminders([])}>
-                            <X size={20} color="$blue9" />
-                        </TouchableOpacity>
-                        <Text fontWeight="800" color="$blue9">{selectedReminders.length} {t('home.selected')}</Text>
-                    </XStack>
-                    <XStack gap="$2">
-                        <Button size="$2" chromeless onPress={selectAll}>
-                            <Text color="$blue9" fontWeight="700">{t('home.all')}</Text>
-                        </Button>
-                        <TouchableOpacity onPress={handleDeleteSelected}>
-                            <YStack bg="$red3" p="$2" borderRadius="$3">
-                                <Trash2 size={20} color="$red9" />
-                            </YStack>
-                        </TouchableOpacity>
-                    </XStack>
-                </XStack>
-            ) : (
-                <XStack justifyContent="space-between" alignItems="flex-end" mb="$5">
-                    <XStack gap="$4">
-                        <Text fontSize="$2" color={colors.textSecondary} fontWeight="600">{listData.stats.completedToday} {t('home.completed')}</Text>
-                        {listData.stats.overdueCount > 0 && <Text fontSize="$2" color={colors.critical} fontWeight="800">{listData.stats.overdueCount} {t('home.overdue')}</Text>}
-                    </XStack>
-                    <TouchableOpacity onPress={() => router.push('/history')}>
-                        <History size={20} color={colors.brand} />
-                    </TouchableOpacity>
-                </XStack>
-            )}
+    const handlePressRow = useCallback((id: string) => {
+        if (isSelectionMode) {
+            toggleSelection(id);
+        } else {
+            router.push({ pathname: '/reminder/[id]', params: { id } });
+        }
+    }, [isSelectionMode, toggleSelection, router]);
 
-            {nextNow ? <HeroCard item={nextNow} /> :
-                !nextNow ? (
-                    <YStack mb="$6" padding="$6" backgroundColor={colors.surface} borderRadius="$6" borderStyle="dashed" borderWidth={2} borderColor={colors.border} alignItems="center">
-                        <Activity size={32} color={colors.textMuted} mb="$2" />
-                        <Text fontSize="$3" fontWeight="800" color={colors.textSecondary} textTransform="uppercase" letterSpacing={1}>
-                            {t('home.in_calm')}
-                        </Text>
-                    </YStack>
-                ) : null}
-        </YStack>
-    );
+    const handleLongPressRow = useCallback((id: string) => {
+        handleLongPress(id);
+    }, [handleLongPress]);
 
-    const renderItem = ({ item }: any) => {
-        if (item.type === 'header') {
+    const handleToggleCardSubtasks = useCallback((id: string, e?: any) => {
+        toggleCardSubtasks(id, e);
+    }, [toggleCardSubtasks]);
+
+    const handleToggleSubtask = useCallback((reminderId: string, subtaskId: string) => {
+        toggleSubtask(reminderId, subtaskId);
+    }, [toggleSubtask]);
+
+    const handleCompleteDismiss = useCallback((id: string) => {
+        markAsCompleted(id);
+    }, [markAsCompleted]);
+
+    const handleDeleteDismiss = useCallback((id: string) => {
+        deleteReminder(id);
+    }, [deleteReminder]);
+
+    const handlePressEvent = useCallback((id: string) => {
+        router.push({ pathname: '/events/create', params: { id } });
+    }, [router]);
+
+    const handlePressNote = useCallback((noteId: string) => {
+        useStore.getState().setMainActiveTab('notes');
+        router.push({ pathname: '/notes', params: { openNoteId: noteId } });
+    }, [router]);
+
+    const handleEditEvent = useCallback((id: string) => {
+        router.push({ pathname: '/events/create', params: { id } });
+    }, [router]);
+
+    const handleDeleteEventDismiss = useCallback((id: string) => {
+        deleteEvent(id);
+    }, [deleteEvent]);
+
+    // ─── Header Component Memoizado (Live event banner) ─────────────────────────
+    const listHeaderElement = useMemo(() => {
+        if (!liveEvent || searchQuery.trim().length > 0) return null;
+        return (
+            <TouchableOpacity
+                activeOpacity={0.85}
+                onPress={() => router.push({ pathname: '/events/create', params: { id: liveEvent.id } })}
+                style={[
+                    styles.liveEventBanner,
+                    {
+                        backgroundColor: isDark ? 'rgba(59, 130, 246, 0.16)' : '#EFF6FF',
+                        borderColor: isDark ? 'rgba(59, 130, 246, 0.35)' : 'rgba(59, 130, 246, 0.25)',
+                    },
+                ]}
+            >
+                <View style={styles.liveEventPulseDot} />
+                <Text style={[styles.liveEventLabel, { color: '#3B82F6' }]}>
+                    {language === 'es' ? 'EN CURSO' : 'LIVE'}
+                </Text>
+                <Text style={[styles.liveEventTitle, { color: colors.textPrimary }]} numberOfLines={1}>
+                    {liveEvent.title}
+                </Text>
+                <Text style={[styles.liveEventTime, { color: colors.textSecondary }]}>
+                    {format(new Date(liveEvent.start_time_ms), 'HH:mm')} - {format(new Date(liveEvent.end_time_ms), 'HH:mm')}
+                </Text>
+            </TouchableOpacity>
+        );
+    }, [liveEvent, isDark, colors, language, router, searchQuery]);
+
+    // ─── Empty Calm State ───────────────────────────────────────────────────────
+    const listEmptyElement = useMemo(() => {
+        if (searchQuery.trim().length > 0) {
             return (
-                <View mb="$4" mt="$2">
-                    <XStack alignItems="center" mb="$2" gap="$2">
-                        <View width={8} height={8} borderRadius={4} backgroundColor={item.color} />
-                        <Text fontSize="$2" fontWeight="900" color={colors.textSecondary} textTransform="uppercase" letterSpacing={1}>{item.title}</Text>
-                    </XStack>
+                <View style={styles.emptyDateCleanContainer}>
+                    <View
+                        style={[
+                            styles.emptyIconCircle,
+                            {
+                                backgroundColor: isDark ? 'rgba(59, 130, 246, 0.1)' : 'rgba(59, 130, 246, 0.07)',
+                            },
+                        ]}
+                    >
+                        <Search size={20} color={colors.textMuted} />
+                    </View>
+                    <Text style={[styles.emptyDateCleanTitle, { color: colors.textPrimary }]}>
+                        {language === 'es' ? 'No se encontraron resultados' : 'No results found'}
+                    </Text>
+                    <Text style={[styles.emptyDateCleanSubtitle, { color: colors.textMuted }]}>
+                        {language === 'es' ? 'Prueba con otros términos de búsqueda' : 'Try searching with different keywords'}
+                    </Text>
                 </View>
             );
         }
-        return <ReminderCard item={item.item} />;
+        return (
+            <View style={styles.emptyDateCleanContainer}>
+                <View
+                    style={[
+                        styles.emptyIconCircle,
+                        {
+                            backgroundColor: isDark ? 'rgba(59, 130, 246, 0.1)' : 'rgba(59, 130, 246, 0.07)',
+                        },
+                    ]}
+                >
+                    <Sparkles size={20} color={accent.primary} />
+                </View>
+                <Text style={[styles.emptyDateCleanTitle, { color: colors.textPrimary }]}>
+                    {t('home.in_calm')}
+                </Text>
+                <Text style={[styles.emptyDateCleanSubtitle, { color: colors.textMuted }]}>
+                    {t('home.no_attention')}
+                </Text>
+            </View>
+        );
+    }, [colors, t, accent.primary, isDark, searchQuery, language]);
+
+    // ─── Render Section Block (Grouped Surface card with rows) ─────────────────
+    const renderSectionBlock = ({ item: section }: { item: AgendaSection }) => {
+        return (
+            <Reanimated.View
+                key={section.key}
+                layout={LinearTransition.duration(260).easing(ReanimatedEasing.bezier(0.25, 1, 0.5, 1))}
+                style={styles.agendaSectionBlock}
+            >
+                {/* Section Header Row */}
+                <View style={styles.agendaSectionHeaderRow}>
+                    <Text
+                        style={[
+                            styles.agendaSectionTitle,
+                            {
+                                color: section.isOverdue
+                                    ? (isDark ? '#FB7185' : '#E11D48')
+                                    : colors.textSecondary,
+                            },
+                        ]}
+                    >
+                        {section.title}
+                    </Text>
+                    <View
+                        style={[
+                            styles.agendaSectionBadge,
+                            {
+                                backgroundColor: section.isOverdue
+                                    ? (isDark ? 'rgba(251, 113, 133, 0.16)' : 'rgba(225, 29, 72, 0.1)')
+                                    : (isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.05)'),
+                            },
+                        ]}
+                    >
+                        <Text
+                            style={[
+                                styles.agendaSectionBadgeText,
+                                {
+                                    color: section.isOverdue
+                                        ? (isDark ? '#FB7185' : '#E11D48')
+                                        : colors.textMuted,
+                                },
+                            ]}
+                        >
+                            {section.count}
+                        </Text>
+                    </View>
+                </View>
+
+                {/* Unified Surface Card holding all items or clean cardless free-day view */}
+                {section.data.length === 0 ? (
+                    <View style={styles.emptyDateCleanContainer}>
+                        <View
+                            style={[
+                                styles.emptyIconCircle,
+                                {
+                                    backgroundColor: isDark ? 'rgba(59, 130, 246, 0.1)' : 'rgba(59, 130, 246, 0.07)',
+                                },
+                            ]}
+                        >
+                            <Sparkles size={18} color={accent.primary} />
+                        </View>
+                        <Text style={[styles.emptyDateCleanTitle, { color: colors.textPrimary }]}>
+                            {section.key === 'today'
+                                ? (language === 'es' ? 'Todo despejado por hoy' : 'All clear for today')
+                                : (language === 'es' ? 'Sin actividades programadas' : 'No activities scheduled')}
+                        </Text>
+                        <Text style={[styles.emptyDateCleanSubtitle, { color: colors.textMuted }]}>
+                            {section.key === 'today'
+                                ? (language === 'es' ? 'No tienes eventos ni recordatorios pendientes' : 'No pending events or reminders')
+                                : (language === 'es' ? 'No hay eventos ni recordatorios para este día' : 'No events or reminders for this day')}
+                        </Text>
+                        <View style={styles.emptyDateCleanActionsRow}>
+                            <TouchableOpacity
+                                activeOpacity={0.7}
+                                onPress={() => router.push({ pathname: '/create', params: { initialDate: (selectedCalendarDate || new Date()).toISOString() } })}
+                                style={[
+                                    styles.emptyCleanPill,
+                                    {
+                                        backgroundColor: isDark ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.035)',
+                                        borderColor: isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.06)',
+                                    },
+                                ]}
+                            >
+                                <Plus size={12} color={accent.primary} strokeWidth={2.5} />
+                                <Text style={[styles.emptyCleanPillText, { color: colors.textPrimary }]}>
+                                    {language === 'es' ? 'Recordatorio' : 'Reminder'}
+                                </Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                                activeOpacity={0.7}
+                                onPress={() => router.push({ pathname: '/events/create', params: { initialDate: (selectedCalendarDate || new Date()).toISOString() } })}
+                                style={[
+                                    styles.emptyCleanPill,
+                                    {
+                                        backgroundColor: isDark ? 'rgba(59, 130, 246, 0.12)' : 'rgba(59, 130, 246, 0.08)',
+                                        borderColor: isDark ? 'rgba(59, 130, 246, 0.22)' : 'rgba(59, 130, 246, 0.15)',
+                                    },
+                                ]}
+                            >
+                                <Plus size={12} color="#3B82F6" strokeWidth={2.5} />
+                                <Text style={[styles.emptyCleanPillText, { color: '#3B82F6' }]}>
+                                    {language === 'es' ? 'Evento' : 'Event'}
+                                </Text>
+                            </TouchableOpacity>
+                        </View>
+                    </View>
+                ) : (
+                    <VeyraSurface
+                        level={1}
+                        radius="lg"
+                        style={[
+                            styles.agendaGroupedCard,
+                            {
+                                borderColor: section.isOverdue
+                                    ? (isDark ? 'rgba(251, 113, 133, 0.35)' : 'rgba(225, 29, 72, 0.25)')
+                                    : colors.borderSubtle,
+                            },
+                        ]}
+                    >
+                        {section.data.map((timelineItem, idx) => {
+                            if (timelineItem.type === 'event') {
+                                return (
+                                    <AgendaEventRow
+                                        key={`event-${timelineItem.event.id}`}
+                                        event={timelineItem.event}
+                                        isLast={idx === section.data.length - 1}
+                                        now={now}
+                                        language={language}
+                                        isDark={isDark}
+                                        colors={colors}
+                                        onPress={handlePressEvent}
+                                        onPressNote={handlePressNote}
+                                        onEdit={handleEditEvent}
+                                        onDeleteDismiss={handleDeleteEventDismiss}
+                                    />
+                                );
+                            } else {
+                                return (
+                                    <AgendaReminderRow
+                                        key={`reminder-${timelineItem.item.id}`}
+                                        item={timelineItem.item}
+                                        isLast={idx === section.data.length - 1}
+                                        isSelected={selectedReminders.includes(timelineItem.item.id)}
+                                        isSelectionMode={isSelectionMode}
+                                        isSubtasksExpanded={!!expandedSubtaskCardIds[timelineItem.item.id]}
+                                        language={language}
+                                        isDark={isDark}
+                                        colors={colors}
+                                        accent={accent}
+                                        now={now}
+                                        onPressRow={handlePressRow}
+                                        onLongPressRow={handleLongPressRow}
+                                        onToggleCardSubtasks={handleToggleCardSubtasks}
+                                        onToggleSubtask={handleToggleSubtask}
+                                        onCompleteDismiss={handleCompleteDismiss}
+                                        onDeleteDismiss={handleDeleteDismiss}
+                                    />
+                                );
+                            }
+                        })}
+                    </VeyraSurface>
+                )}
+            </Reanimated.View>
+        );
     };
 
-    const ListEmptyComponent = () => (
-        <YStack flex={1} justifyContent="center" alignItems="center" py="$10" opacity={0.6}>
-            <Paragraph color={colors.textSecondary} textAlign="center">{t('home.no_attention')}</Paragraph>
-        </YStack>
-    );
-
     return (
-        <View style={{ flex: 1, backgroundColor: colors.bg }}>
-            <View style={{ flex: 1 }}>
-                <FlashList
-                    data={listData.data}
-                    renderItem={renderItem}
-                    estimatedItemSize={100}
-                    ListHeaderComponent={ListHeader}
-                    ListEmptyComponent={listData.data.length === 0 && !nextNow ? ListEmptyComponent : null}
-                    showsVerticalScrollIndicator={false}
-                    contentContainerStyle={{ paddingBottom: 100, paddingTop: 10, paddingHorizontal: 20 }}
-                />
+        <View style={[styles.screen, { backgroundColor: colors.bg }]}>
+            <View style={{ paddingTop: insets.top, backgroundColor: colors.bg, zIndex: 1000 }}>
+                <TopBar />
             </View>
-
-            {/* Quick Action para posponer vencidos */}
-            {listData.overdueCount > 0 && (
-                <XStack
-                    position="absolute"
-                    bottom={insets.bottom + 95}
-                    alignSelf="center"
-                    zIndex={900}
+            {/* Contenedor central persistente con Crossfade puro */}
+            <View style={{ flex: 1, position: 'relative' }}>
+                <Reanimated.View
+                    style={[StyleSheet.absoluteFill, remindersCrossfadeStyle]}
+                    pointerEvents={mainActiveTab === 'reminders' ? 'auto' : 'none'}
                 >
-                    <Button
-                        size="$2"
-                        backgroundColor={theme === 'dark' ? 'rgba(255, 255, 255, 0.05)' : 'white'}
-                        borderColor={colors.border}
-                        borderWidth={1}
-                        borderRadius="$10"
+                {/* ─── HEADER / BUSCADOR / CALENDARIO DESPLEGABLE ─── */}
+            {isSearching ? (
+                <View style={[styles.searchBarWrapper, { borderBottomColor: colors.borderSubtle, backgroundColor: colors.bg }]}>
+                    <VeyraSurface level={1} radius="md" style={styles.searchExpandedBar}>
+                        <Search size={16} color={accent.primary as any} />
+                        <TextInput
+                            autoFocus
+                            value={searchQuery}
+                            onChangeText={setSearchQuery}
+                            placeholder={language === 'es' ? 'Buscar recordatorios o eventos...' : 'Search reminders or events...'}
+                            placeholderTextColor={colors.textMuted}
+                            style={[
+                                styles.searchExpandedInput,
+                                { color: colors.textPrimary, fontSize: typography.body.fontSize },
+                            ]}
+                            selectionColor={accent.primary}
+                        />
+                        {searchQuery.length > 0 && (
+                            <TouchableOpacity
+                                onPress={() => setSearchQuery('')}
+                                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                                style={styles.searchIconBtn}
+                            >
+                                <X size={15} color={colors.textMuted as any} />
+                            </TouchableOpacity>
+                        )}
+                        <TouchableOpacity
+                            onPress={() => {
+                                LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+                                setIsSearching(false);
+                                setSearchQuery('');
+                            }}
+                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                            style={[
+                                styles.searchCloseBtn,
+                                { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.06)' : 'rgba(0, 0, 0, 0.05)' },
+                            ]}
+                            activeOpacity={0.7}
+                        >
+                            <X size={14} color={colors.textSecondary as any} />
+                        </TouchableOpacity>
+                    </VeyraSurface>
+                </View>
+            ) : isSelectionMode ? (
+                <View style={[styles.viewingAreaContainer, { borderBottomColor: colors.borderSubtle }]}>
+                    <View style={styles.viewingAreaSelectionRow}>
+                        <View>
+                            <Text style={[styles.compactTitle, { color: colors.textPrimary }]}>
+                                {selectedReminders.length} {t('home.selected', { defaultValue: 'seleccionados' })}
+                            </Text>
+                            <Text style={[styles.viewingAreaSubtitle, { color: colors.textSecondary }]}>
+                                {selectedReminders.length === reminders.filter(r => r.status === 'pending').length
+                                    ? (language === 'es' ? 'Todos los recordatorios seleccionados' : 'All reminders selected')
+                                    : (language === 'es' ? 'Toca para seleccionar o desmarcar' : 'Tap to select or deselect')}
+                            </Text>
+                        </View>
+                        <TouchableOpacity
+                            onPress={() => setSelectedReminders([])}
+                            style={[
+                                styles.clearSelectionBtn,
+                                { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.06)' },
+                            ]}
+                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                        >
+                            <X size={16} color={colors.textSecondary} />
+                        </TouchableOpacity>
+                    </View>
+                </View>
+            ) : (
+                <CollapsibleCalendarHeader
+                    selectedDate={selectedCalendarDate}
+                    onSelectDate={setSelectedCalendarDate}
+                    reminders={reminders}
+                    events={events}
+                    language={language}
+                    onPressSearch={() => {
+                        LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+                        setIsSearching(true);
+                    }}
+                    onPressHistory={() => router.push('/history')}
+                    onPressShare={handleShareAgenda}
+                    hasTodayTasks={totalTodayTasks > 0}
+                />
+            )}
+
+            {/* ─── Agenda Filter Pills (Matching Notes screen chips) ─── */}
+            {!isSelectionMode && !isSearching && (
+                <View style={styles.filterPillsContainer}>
+                    <ScrollView
+                        horizontal
+                        showsHorizontalScrollIndicator={false}
+                        contentContainerStyle={styles.filterPillsScrollContent}
+                    >
+                        {/* 1. TODO */}
+                        <TouchableOpacity
+                            activeOpacity={0.7}
+                            onPress={() => {
+                                LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+                                setAgendaFilter('all');
+                            }}
+                            style={[
+                                styles.agendaChip,
+                                {
+                                    backgroundColor: agendaFilter === 'all'
+                                        ? (isDark ? '#262933' : '#E2E8F0')
+                                        : (isDark ? '#1C1F26' : '#FFFFFF'),
+                                    borderColor: agendaFilter === 'all' ? accent.primary : colors.borderSubtle,
+                                },
+                            ]}
+                        >
+                            <Layers
+                                size={13}
+                                color={(agendaFilter === 'all' ? accent.primary : colors.textMuted) as any}
+                            />
+                            <Text
+                                style={[
+                                    styles.agendaChipText,
+                                    {
+                                        color: agendaFilter === 'all' ? colors.textPrimary : colors.textSecondary,
+                                        fontWeight: agendaFilter === 'all' ? '700' : '500',
+                                    },
+                                ]}
+                            >
+                                {language === 'es' ? 'Todo' : 'All'}
+                            </Text>
+                            <Text
+                                style={[
+                                    styles.agendaChipBadge,
+                                    {
+                                        backgroundColor: agendaFilter === 'all'
+                                            ? (isDark ? '#1C1F26' : '#FFFFFF')
+                                            : (isDark ? '#262933' : '#F1F5F9'),
+                                        color: agendaFilter === 'all' ? accent.primary : colors.textMuted,
+                                    },
+                                ]}
+                            >
+                                {allFilterCount}
+                            </Text>
+                        </TouchableOpacity>
+
+                        {/* 2. TAREAS */}
+                        <TouchableOpacity
+                            activeOpacity={0.7}
+                            onPress={() => {
+                                LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+                                setAgendaFilter('reminders');
+                            }}
+                            style={[
+                                styles.agendaChip,
+                                {
+                                    backgroundColor: agendaFilter === 'reminders'
+                                        ? (isDark ? '#262933' : '#E2E8F0')
+                                        : (isDark ? '#1C1F26' : '#FFFFFF'),
+                                    borderColor: agendaFilter === 'reminders' ? accent.primary : colors.borderSubtle,
+                                },
+                            ]}
+                        >
+                            <CheckSquare
+                                size={13}
+                                color={(agendaFilter === 'reminders' ? accent.primary : colors.textMuted) as any}
+                            />
+                            <Text
+                                style={[
+                                    styles.agendaChipText,
+                                    {
+                                        color: agendaFilter === 'reminders' ? colors.textPrimary : colors.textSecondary,
+                                        fontWeight: agendaFilter === 'reminders' ? '700' : '500',
+                                    },
+                                ]}
+                            >
+                                {language === 'es' ? 'Tareas' : 'Tasks'}
+                            </Text>
+                            <Text
+                                style={[
+                                    styles.agendaChipBadge,
+                                    {
+                                        backgroundColor: agendaFilter === 'reminders'
+                                            ? (isDark ? '#1C1F26' : '#FFFFFF')
+                                            : (isDark ? '#262933' : '#F1F5F9'),
+                                        color: agendaFilter === 'reminders' ? accent.primary : colors.textMuted,
+                                    },
+                                ]}
+                            >
+                                {tasksFilterCount}
+                            </Text>
+                        </TouchableOpacity>
+
+                        {/* 3. EVENTOS */}
+                        <TouchableOpacity
+                            activeOpacity={0.7}
+                            onPress={() => {
+                                LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+                                setAgendaFilter('events');
+                            }}
+                            style={[
+                                styles.agendaChip,
+                                {
+                                    backgroundColor: agendaFilter === 'events'
+                                        ? (isDark ? '#1E293B' : '#DBEAFE')
+                                        : (isDark ? '#1C1F26' : '#FFFFFF'),
+                                    borderColor: agendaFilter === 'events' ? '#3B82F6' : colors.borderSubtle,
+                                },
+                            ]}
+                        >
+                            <CalendarIcon
+                                size={13}
+                                color={(agendaFilter === 'events' ? '#3B82F6' : colors.textMuted) as any}
+                            />
+                            <Text
+                                style={[
+                                    styles.agendaChipText,
+                                    {
+                                        color: agendaFilter === 'events' ? colors.textPrimary : colors.textSecondary,
+                                        fontWeight: agendaFilter === 'events' ? '700' : '500',
+                                    },
+                                ]}
+                            >
+                                {language === 'es' ? 'Eventos' : 'Events'}
+                            </Text>
+                            <Text
+                                style={[
+                                    styles.agendaChipBadge,
+                                    {
+                                        backgroundColor: agendaFilter === 'events'
+                                            ? (isDark ? '#0F172A' : '#FFFFFF')
+                                            : (isDark ? '#262933' : '#F1F5F9'),
+                                        color: agendaFilter === 'events' ? '#3B82F6' : colors.textMuted,
+                                    },
+                                ]}
+                            >
+                                {eventsFilterCount}
+                            </Text>
+                        </TouchableOpacity>
+                    </ScrollView>
+                </View>
+            )}
+
+            <Animated.View
+                style={[
+                    styles.listWrapper,
+                    { opacity: listAnimOpacity },
+                ]}
+            >
+                <ScrollView
+                    showsVerticalScrollIndicator={false}
+                    contentContainerStyle={{
+                        paddingBottom: insets.bottom + (isSelectionMode ? 220 : 110),
+                        paddingTop: 8,
+                        paddingHorizontal: 20,
+                    }}
+                >
+                    {listHeaderElement}
+                    {listData.sections.length === 0
+                        ? listEmptyElement
+                        : listData.sections.map((section) => renderSectionBlock({ item: section }))}
+                </ScrollView>
+            </Animated.View>
+
+            {/* Quick Action: Posponer Vencidos (solo en vista normal y sin selección) */}
+            {!isSelectionMode && !selectedCalendarDate && listData.overdueCount > 0 && (
+                <View
+                    style={[
+                        styles.snoozeAllContainer,
+                        { bottom: insets.bottom + 88 },
+                    ]}
+                >
+                    <VeyraButton
+                        variant="secondary"
+                        size="sm"
+                        radius="pill"
+                        label={t('home.snooze_overdue')}
+                        iconLeft={<Zap size={14} color={accent.primary} />}
                         onPress={async () => {
                             const overdue = reminders.filter(r => isPast(r.due_date_ms) && r.status === 'pending');
                             for (const r of overdue) await snoozeReminder(r.id, 10, true);
                         }}
-                        icon={<Zap size={14} color={colors.brand} />}
-                        pressStyle={{ scale: 0.95, opacity: 0.8 }}
-                        elevation={theme === 'dark' ? 0 : 2}
-                        shadowColor={colors.brand}
-                        shadowOpacity={0.15}
-                        shadowRadius={8}
-                    >
-                        <Text color={colors.brand} fontWeight="700" fontSize="$1" letterSpacing={0.5}>
-                            {t('home.snooze_overdue')}
-                        </Text>
-                    </Button>
-                </XStack>
+                    />
+                </View>
             )}
 
-            {/* Modal de confirmación de eliminación masiva */}
-            <AnimatePresence>
-                {isBulkDeleteConfirmVisible && (
-                    <Portal key="bulk-delete-portal">
-                        <YStack
-                            {...StyleSheet.absoluteFillObject}
-                            zIndex={20000}
-                            justifyContent="center"
-                            alignItems="center"
-                            px="$6"
-                            // @ts-ignore
-                            enterStyle={{ opacity: 0 }}
-                            exitStyle={{ opacity: 0 }}
-                            animation="quick"
+            {/* Píldora Flotante Contextual para Recordatorios — One UI Ergonomics */}
+            <Animated.View
+                pointerEvents={isSelectionMode ? 'auto' : 'none'}
+                style={[
+                    styles.floatingSelectionPill,
+                    {
+                        backgroundColor: colors.navBar || (isDark ? '#1B1B1B' : '#FFFFFF'),
+                        borderColor: colors.borderSubtle,
+                        bottom: Math.max(insets.bottom, 10) + 72,
+                        opacity: pillOpacity,
+                        transform: [
+                            { translateY: pillTranslateY },
+                            { scale: pillScale },
+                        ],
+                    },
+                ]}
+            >
+                {/* Cabecera de la píldora: Contador y Seleccionar todos */}
+                <View style={styles.pillHeaderRow}>
+                    <View style={styles.pillCounterContainer}>
+                        <TouchableOpacity
+                            onPress={() => setSelectedReminders([])}
+                            style={[
+                                styles.pillCloseBtn,
+                                { backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)' },
+                            ]}
+                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                            activeOpacity={0.7}
                         >
-                            {/* Blur Background */}
-                            <BlurView
-                                tint={theme === 'dark' ? 'dark' : 'light'}
-                                intensity={20}
-                                experimentalBlurMethod="dimezisBlurView"
-                                style={StyleSheet.absoluteFill}
-                            />
+                            <X size={13} color={colors.textSecondary} />
+                        </TouchableOpacity>
+                        <Text style={[styles.pillTitle, { color: colors.textPrimary }]}>
+                            {selectedReminders.length} {language === 'es' ? (selectedReminders.length === 1 ? 'seleccionado' : 'seleccionados') : 'selected'}
+                        </Text>
+                    </View>
 
-                            {/* Fondo oscurecido */}
-                            <YStack
-                                {...StyleSheet.absoluteFillObject}
-                                backgroundColor={theme === 'dark' ? 'rgba(0,0,0,0.6)' : 'rgba(0,0,0,0.2)'}
-                                onPress={() => setIsBulkDeleteConfirmVisible(false)}
-                            />
+                    <TouchableOpacity
+                        onPress={toggleSelectAll}
+                        style={[
+                            styles.pillSelectAllBtn,
+                            {
+                                backgroundColor: isAllSelected ? accent.primary + '18' : (isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)'),
+                                borderColor: isAllSelected ? accent.primary : colors.borderSubtle,
+                            },
+                        ]}
+                        activeOpacity={0.7}
+                    >
+                        {isAllSelected ? (
+                            <CheckSquare size={13} color={accent.primary} />
+                        ) : (
+                            <Square size={13} color={colors.textSecondary} />
+                        )}
+                        <Text style={[styles.pillSelectAllText, { color: isAllSelected ? accent.primary : colors.textSecondary }]}>
+                            {isAllSelected ? (language === 'es' ? 'Deseleccionar' : 'Deselect') : (language === 'es' ? 'Todos' : 'All')}
+                        </Text>
+                    </TouchableOpacity>
+                </View>
 
-                            {/* Tarjeta del modal */}
-                            <YStack
-                                backgroundColor={colors.surface}
-                                borderRadius="$6"
-                                p="$6"
-                                w="100%"
-                                maxWidth={340}
-                                gap="$5"
-                                elevation={20}
-                                borderWidth={1}
-                                borderColor={colors.border}
-                                // @ts-ignore
-                                enterStyle={{ opacity: 0, scale: 0.9, y: 20 }}
-                                exitStyle={{ opacity: 0, scale: 0.9, y: 20 }}
-                                animation="quick"
-                            >
+                {/* Divisor sutil */}
+                <View style={[styles.pillDivider, { backgroundColor: colors.borderSubtle }]} />
 
-                                {/* Texto */}
-                                <YStack gap="$2" ai="center">
-                                    <Text
-                                        fontSize="$7"
-                                        fontWeight="900"
-                                        color={colors.textPrimary}
-                                        ta="center"
-                                        letterSpacing={-0.5}
-                                    >
-                                        {selectedReminders.length === 1
-                                            ? t('home.delete_confirm', { count: 1 })
-                                            : t('home.delete_confirm_plural', { count: selectedReminders.length })}
-                                    </Text>
-                                    <Text
-                                        fontSize="$4"
-                                        color={colors.textSecondary}
-                                        ta="center"
-                                        lineHeight={20}
-                                    >
-                                        {t('home.delete_desc')}
-                                    </Text>
-                                </YStack>
-
-                                {/* Botones */}
-                                <XStack gap="$3">
-                                    <Button
-                                        flex={1}
-                                        height={50}
-                                        backgroundColor={theme === 'dark' ? colors.border : '#f1f5f9'}
-                                        borderRadius="$10"
-                                        onPress={() => setIsBulkDeleteConfirmVisible(false)}
-                                        pressStyle={{ scale: 0.97, opacity: 0.8 }}
-                                    >
-                                        <Text color={colors.textPrimary} fontWeight="700" fontSize="$4">{t('home.cancel')}</Text>
-                                    </Button>
-                                    <Button
-                                        flex={1}
-                                        height={50}
-                                        backgroundColor={colors.critical}
-                                        borderRadius="$10"
-                                        pressStyle={{ scale: 0.97, opacity: 0.9 }}
-                                        onPress={async () => {
-                                            setIsBulkDeleteConfirmVisible(false);
-                                            await deleteReminders(selectedReminders);
-                                            setSelectedReminders([]);
-                                        }}
-                                    >
-                                        <Text color="white" fontWeight="900" fontSize="$4">{t('home.delete')}</Text>
-                                    </Button>
-                                </XStack>
-                            </YStack>
-                        </YStack>
-                    </Portal>
-                )}
-            </AnimatePresence>
-
-            {/* Modal de Detalle con Animación Nativa Directa (Siguiendo tu Guía) */}
-            <AnimatePresence>
-                {activeReminder && (
-                    <Portal key="native-modal-portal">
+                {/* Acciones principales */}
+                <View style={styles.pillActionsRow}>
+                    {/* 1. Completar */}
+                    <TouchableOpacity
+                        style={styles.pillActionBtn}
+                        onPress={handleCompleteSelected}
+                        activeOpacity={0.7}
+                    >
                         <Animated.View
                             style={[
-                                StyleSheet.absoluteFill,
-                                { zIndex: 10000, opacity: fadeAnim }
+                                styles.pillActionIconCircle,
+                                {
+                                    backgroundColor: isDark ? 'rgba(52, 211, 153, 0.15)' : 'rgba(5, 150, 105, 0.12)',
+                                    transform: [{ scale: completeButtonAnim }],
+                                },
                             ]}
                         >
-                            <BlurView
-                                tint={theme === 'dark' ? 'dark' : 'light'}
-                                intensity={0.2}
-                                experimentalBlurMethod="dimezisBlurView"
-                                style={StyleSheet.absoluteFill}
-                            />
-                            {/* Overlay de color */}
-                            <YStack
-                                backgroundColor={theme === 'dark' ? 'rgba(0,0,0,0.6)' : 'rgba(0,0,0,0.2)'}
-                                {...StyleSheet.absoluteFillObject}
-                            />
-
-                            <TouchableOpacity
-                                activeOpacity={1}
-                                style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 }}
-                                onPress={() => setDetailReminder(null)}
-                            >
-                                <Animated.View
-                                    style={{
-                                        width: '100%',
-                                        maxWidth: 340,
-                                        transform: [
-                                            { translateY: slideAnim },
-                                            { scale: scaleAnim }
-                                        ]
-                                    }}
-                                >
-                                    <YStack
-                                        onPress={(e) => e.stopPropagation()}
-                                        width="100%"
-                                        backgroundColor={colors.surface}
-                                        borderRadius="$5"
-                                        padding="$5"
-                                        gap="$4"
-                                        elevation={15}
-                                    >
-                                        {/* Cabecera del Modal */}
-                                        <YStack gap="$1">
-                                            <XStack justifyContent="space-between" alignItems="flex-start">
-                                                <View
-                                                    backgroundColor={
-                                                        activeReminder.control_level === 'critical' ? colors.critical :
-                                                            activeReminder.control_level === 'strict' ? colors.strict :
-                                                                colors.brand
-                                                    }
-                                                    paddingHorizontal="$2"
-                                                    paddingVertical="$0.5"
-                                                    borderRadius="$2"
-                                                >
-                                                    <Text color="white" fontSize="$1" fontWeight="800" textTransform="uppercase">
-                                                        {activeReminder.control_level}
-                                                    </Text>
-                                                </View>
-                                                <XStack gap="$2">
-                                                    <TouchableOpacity
-                                                        onPress={() => {
-                                                            const id = activeReminder.id;
-                                                            setDetailReminder(null);
-                                                            router.push({ pathname: '/create', params: { id } });
-                                                        }}
-                                                        style={{
-                                                            backgroundColor: theme === 'dark' ? '$gray3' : '$gray4',
-                                                            padding: 8,
-                                                            borderRadius: 20
-                                                        }}
-                                                    >
-                                                        <Edit3 size={18} color={colors.textSecondary} />
-                                                    </TouchableOpacity>
-
-                                                    <TouchableOpacity
-                                                        onPress={() => setIsDeleteConfirmVisible(true)}
-                                                        style={{
-                                                            backgroundColor: theme === 'dark' ? 'rgba(239, 68, 68, 0.15)' : 'rgba(239, 68, 68, 0.1)',
-                                                            padding: 8,
-                                                            borderRadius: 20
-                                                        }}
-                                                    >
-                                                        <Trash2 size={18} color={colors.critical} />
-                                                    </TouchableOpacity>
-
-                                                    <TouchableOpacity
-                                                        onPress={() => setDetailReminder(null)}
-                                                        style={{
-                                                            backgroundColor: theme === 'dark' ? '$gray3' : '$gray4',
-                                                            padding: 8,
-                                                            borderRadius: 20
-                                                        }}
-                                                    >
-                                                        <X size={18} color={colors.textSecondary} />
-                                                    </TouchableOpacity>
-                                                </XStack>
-                                            </XStack>
-
-                                            <H2 fontSize="$7" fontWeight="900" color={colors.textPrimary} mt="$2">
-                                                {activeReminder.title}
-                                            </H2>
-
-                                            {activeReminder.description ? (
-                                                <YStack maxHeight={150} overflow="hidden" mt="$1">
-                                                    <RenderHTML
-                                                        contentWidth={300}
-                                                        source={{ html: activeReminder.description }}
-                                                        baseStyle={{
-                                                            color: colors.textSecondary,
-                                                            fontSize: 14,
-                                                            lineHeight: 18
-                                                        }}
-                                                        tagsStyles={{
-                                                            img: {
-                                                                maxWidth: '100%',
-                                                                height: 'auto',
-                                                                borderRadius: 8,
-                                                                marginTop: 10,
-                                                                marginBottom: 10,
-                                                            }
-                                                        }}
-                                                    />
-                                                </YStack>
-                                            ) : null}
-                                        </YStack>
-
-                                        {/* Sección de Adjuntos en el Modal */}
-                                        {activeReminder.attachments && JSON.parse(activeReminder.attachments).length > 0 && (() => {
-                                            const allAttachments = JSON.parse(activeReminder.attachments!);
-                                            const images = allAttachments.filter((item: any) => {
-                                                const uri = typeof item === 'string' ? item : item.uri;
-                                                return uri.toLowerCase().includes('imagepicker') ||
-                                                    uri.toLowerCase().endsWith('.jpg') ||
-                                                    uri.toLowerCase().endsWith('.png') ||
-                                                    uri.toLowerCase().endsWith('.jpeg') ||
-                                                    uri.startsWith('data:image');
-                                            });
-                                            const otherFiles = allAttachments.filter((item: any) => !images.includes(item));
-
-                                            const openAttachment = async (uri: string) => {
-                                                try {
-                                                    if (Platform.OS === 'android') {
-                                                        const cUri = await FileSystem.getContentUriAsync(uri);
-                                                        await IntentLauncher.startActivityAsync('android.intent.action.VIEW', {
-                                                            data: cUri,
-                                                            flags: 1, // Intent.FLAG_GRANT_READ_URI_PERMISSION
-                                                        });
-                                                    } else {
-                                                        if (await Sharing.isAvailableAsync()) {
-                                                            await Sharing.shareAsync(uri);
-                                                        }
-                                                    }
-                                                } catch (error) {
-                                                    console.error('Error al abrir archivo:', error);
-                                                    // Fallback al menú de compartir si falla el intent directo
-                                                    if (await Sharing.isAvailableAsync()) {
-                                                        await Sharing.shareAsync(uri);
-                                                    }
-                                                }
-                                            };
-
-                                            return (
-                                                <YStack gap="$2" mt="$1">
-                                                    {/* Carrusel de Imágenes */}
-                                                    {images.length > 0 && (
-                                                        <View position="relative">
-                                                            <ScrollView
-                                                                horizontal
-                                                                showsHorizontalScrollIndicator={false}
-                                                                onScroll={(e) => {
-                                                                    const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent;
-                                                                    setShowLeftArrow(contentOffset.x > 10);
-                                                                    setShowRightArrow(contentOffset.x + layoutMeasurement.width < contentSize.width - 10);
-                                                                }}
-                                                                scrollEventThrottle={16}
-                                                                onContentSizeChange={(w, h) => {
-                                                                    // Si el contenido es más ancho que el espacio disponible, mostrar flecha
-                                                                    setShowRightArrow(w > 300); // 300 es el ancho aprox del contenedor modal
-                                                                }}
-                                                                contentContainerStyle={{ gap: 8, paddingRight: 20 }}
-                                                            >
-                                                                {images.map((item: any, idx: number) => {
-                                                                    const uri = typeof item === 'string' ? item : item.uri;
-                                                                    return (
-                                                                        <TouchableOpacity
-                                                                            key={idx}
-                                                                            onPress={() => {
-                                                                                setGalleryImages(images.map((img: any) => ({ uri: typeof img === 'string' ? img : img.uri })));
-                                                                                setGalleryIndex(idx);
-                                                                                setGalleryVisible(true);
-                                                                            }}
-                                                                        >
-                                                                            <View
-                                                                                width={100}
-                                                                                height={100}
-                                                                                borderRadius="$4"
-                                                                                overflow="hidden"
-                                                                                backgroundColor={theme === 'dark' ? '$gray2' : '$gray3'}
-                                                                                borderColor={colors.border}
-                                                                                borderWidth={1}
-                                                                                elevation={5}
-                                                                            >
-                                                                                <Image
-                                                                                    source={{ uri }}
-                                                                                    style={{ width: '100%', height: '100%' }}
-                                                                                    resizeMode="cover"
-                                                                                />
-                                                                            </View>
-                                                                        </TouchableOpacity>
-                                                                    );
-                                                                })}
-                                                            </ScrollView>
-
-                                                            {/* Indicadores de Scroll */}
-                                                            {
-                                                                showLeftArrow && (
-                                                                    <View position="absolute" left={-8} top="35%" zIndex={10} backgroundColor={colors.surface} borderRadius={20} padding={4} elevation={5} borderColor={colors.border} borderWidth={1}>
-                                                                        <ChevronLeft size={16} color={colors.textPrimary} />
-                                                                    </View>
-                                                                )
-                                                            }
-                                                            {
-                                                                showRightArrow && (
-                                                                    <View position="absolute" right={12} top="35%" zIndex={10} backgroundColor={colors.surface} borderRadius={20} padding={4} elevation={5} borderColor={colors.border} borderWidth={1}>
-                                                                        <ChevronRight size={16} color={colors.textPrimary} />
-                                                                    </View>
-                                                                )
-                                                            }
-                                                        </View>
-                                                    )
-                                                    }
-
-                                                    {/* Otros Archivos */}
-                                                    {otherFiles.length > 0 && (
-                                                        <XStack gap="$2" flexWrap="wrap">
-                                                            {otherFiles.map((item: any, idx: number) => {
-                                                                const uri = typeof item === 'string' ? item : item.uri;
-                                                                const name = typeof item === 'string' ? `Archivo ${idx + 1}` : item.name;
-                                                                return (
-                                                                    <TouchableOpacity key={idx} onPress={() => openAttachment(uri)}>
-                                                                        <XStack backgroundColor={theme === 'dark' ? '$gray2' : '$gray3'} padding="$1.5" paddingHorizontal="$2.5" borderRadius="$10" gap="$1.5" alignItems="center">
-                                                                            <FileText size={12} color={colors.textSecondary} />
-                                                                            <Text fontSize="$1" fontWeight="700" color={colors.textSecondary}>{name}</Text>
-                                                                        </XStack>
-                                                                    </TouchableOpacity>
-                                                                );
-                                                            })}
-                                                        </XStack>
-                                                    )}
-                                                </YStack>
-                                            );
-                                        })()}
-
-                                        {/* Información de Tiempo */}
-                                        <XStack gap="$2" alignItems="center">
-                                            <Clock size={16} color={getRiskInfo(activeReminder.due_date_ms).color} />
-                                            <Text color={getRiskInfo(activeReminder.due_date_ms).color} fontWeight="800" fontSize="$4">
-                                                {getRiskInfo(activeReminder.due_date_ms).full}
-                                            </Text>
-                                        </XStack>
-
-                                        {/* Acciones */}
-                                        <XStack gap="$3" mt="$4">
-                                            <Button
-                                                flex={2}
-                                                height={48}
-                                                backgroundColor={colors.textPrimary}
-                                                borderRadius="$10"
-                                                pressStyle={{ scale: 0.97, opacity: 0.9 }}
-                                                onPress={async () => {
-                                                    await markAsCompleted(activeReminder.id);
-                                                    setDetailReminder(null);
-                                                }}
-                                                icon={<Check size={18} color={colors.surface} strokeWidth={3} />}
-                                            >
-                                                <Text
-                                                    color={colors.surface}
-                                                    fontWeight="800"
-                                                    fontSize="$3"
-                                                    letterSpacing={0.5}
-                                                    textTransform="uppercase"
-                                                >
-                                                    {t('common.done')}
-                                                </Text>
-                                            </Button>
-
-                                            <Button
-                                                flex={1}
-                                                height={48}
-                                                backgroundColor="transparent"
-                                                borderColor={colors.border}
-                                                borderWidth={1}
-                                                borderRadius="$10"
-                                                pressStyle={{ scale: 0.97, backgroundColor: colors.border }}
-                                                onPress={async () => {
-                                                    await snoozeReminder(activeReminder.id, 5);
-                                                    setDetailReminder(null);
-                                                }}
-                                                icon={<Zap size={16} color={colors.textSecondary} />}
-                                            >
-                                                <Text color={colors.textSecondary} fontWeight="600" fontSize="$2">5m</Text>
-                                            </Button>
-                                        </XStack>
-
-                                        {/* Overlay de Confirmación de Eliminación */}
-                                        <AnimatePresence>
-                                            {isDeleteConfirmVisible && (
-                                                <View
-                                                    key="delete-confirm-overlay"
-                                                    {...StyleSheet.absoluteFillObject}
-                                                    backgroundColor={colors.surface}
-                                                    borderRadius="$5"
-                                                    zIndex={100}
-                                                    padding="$5"
-                                                    justifyContent="center"
-                                                    alignItems="center"
-                                                    enterStyle={{ opacity: 0, scale: 0.9 }}
-                                                    exitStyle={{ opacity: 0, scale: 0.9 }}
-                                                    animation="quick"
-                                                >
-                                                    <YStack alignItems="center" gap="$4" width="100%">
-                                                        <View
-                                                            backgroundColor={theme === 'dark' ? 'rgba(239, 68, 68, 0.2)' : 'rgba(239, 68, 68, 0.1)'}
-                                                            padding="$4"
-                                                            borderRadius={50}
-                                                        >
-                                                            <Trash2 size={32} color={colors.critical} />
-                                                        </View>
-
-                                                        <YStack alignItems="center" gap="$2">
-                                                            <Text fontSize="$6" fontWeight="900" color={colors.textPrimary} textAlign="center">
-                                                                {t('home.delete_reminder_q')}
-                                                            </Text>
-                                                            <Text fontSize="$3" color={colors.textSecondary} textAlign="center">
-                                                                {t('home.action_irreversible')}
-                                                            </Text>
-                                                        </YStack>
-
-                                                        <XStack gap="$3" width="100%" mt="$2">
-                                                            <Button
-                                                                flex={1}
-                                                                height={45}
-                                                                backgroundColor="transparent"
-                                                                borderColor={colors.border}
-                                                                borderWidth={1}
-                                                                borderRadius="$10"
-                                                                onPress={() => setIsDeleteConfirmVisible(false)}
-                                                            >
-                                                                <Text color={colors.textSecondary} fontWeight="700">{t('home.cancel')}</Text>
-                                                            </Button>
-                                                            <Button
-                                                                flex={1}
-                                                                height={45}
-                                                                backgroundColor={colors.critical}
-                                                                borderRadius="$10"
-                                                                onPress={async () => {
-                                                                    await deleteReminder(activeReminder.id);
-                                                                    setIsDeleteConfirmVisible(false);
-                                                                    setDetailReminder(null);
-                                                                }}
-                                                            >
-                                                                <Text color="white" fontWeight="900">{t('home.delete')}</Text>
-                                                            </Button>
-                                                        </XStack>
-                                                    </YStack>
-                                                </View>
-                                            )}
-                                        </AnimatePresence>
-                                    </YStack>
-                                </Animated.View>
-                            </TouchableOpacity>
+                            <Check size={16} color={isDark ? '#34D399' : '#059669'} />
                         </Animated.View>
-                    </Portal>
-                )}
-            </AnimatePresence>
+                        <Text style={[styles.pillActionLabel, { color: colors.textSecondary }]}>
+                            {language === 'es' ? 'Completar' : 'Complete'}
+                        </Text>
+                    </TouchableOpacity>
+
+                    {/* 2. Posponer */}
+                    <TouchableOpacity
+                        style={styles.pillActionBtn}
+                        onPress={() => setIsSnoozeModalVisible(true)}
+                        activeOpacity={0.7}
+                    >
+                        <View style={[styles.pillActionIconCircle, { backgroundColor: isDark ? 'rgba(251, 191, 36, 0.15)' : 'rgba(245, 158, 11, 0.12)' }]}>
+                            <Clock size={16} color={isDark ? '#FBBF24' : '#F59E0B'} />
+                        </View>
+                        <Text style={[styles.pillActionLabel, { color: colors.textSecondary }]}>
+                            {language === 'es' ? 'Posponer' : 'Snooze'}
+                        </Text>
+                    </TouchableOpacity>
+
+                    {/* 3. Compartir */}
+                    <TouchableOpacity
+                        style={styles.pillActionBtn}
+                        onPress={handleShareSelected}
+                        activeOpacity={0.7}
+                    >
+                        <View style={[styles.pillActionIconCircle, { backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)' }]}>
+                            <Share2 size={16} color={accent.primary} />
+                        </View>
+                        <Text style={[styles.pillActionLabel, { color: colors.textSecondary }]}>
+                            {language === 'es' ? 'Compartir' : 'Share'}
+                        </Text>
+                    </TouchableOpacity>
+
+                    {/* 4. Eliminar */}
+                    <TouchableOpacity
+                        style={styles.pillActionBtn}
+                        onPress={() => setIsBulkDeleteConfirmVisible(true)}
+                        activeOpacity={0.7}
+                    >
+                        <View style={[styles.pillActionIconCircle, { backgroundColor: isDark ? 'rgba(251, 113, 133, 0.15)' : 'rgba(225, 29, 72, 0.12)' }]}>
+                            <Trash2 size={16} color={isDark ? '#FB7185' : '#E11D48'} />
+                        </View>
+                        <Text style={[styles.pillActionLabel, { color: colors.textSecondary }]}>
+                            {language === 'es' ? 'Eliminar' : 'Delete'}
+                        </Text>
+                    </TouchableOpacity>
+                </View>
+                </Animated.View>
+            </Reanimated.View>
+
+            {/* 2. VISTA DE NOTAS */}
+                <Reanimated.View
+                    style={[StyleSheet.absoluteFill, notesCrossfadeStyle]}
+                    pointerEvents={mainActiveTab === 'notes' ? 'auto' : 'none'}
+                >
+                    <NotesScreen hideBars />
+                </Reanimated.View>
+            </View>
+            <BottomTabBar />
+
+            {/* Modal para Posponer Recordatorios Seleccionados */}
+            {isSnoozeModalVisible && (
+                <View style={[StyleSheet.absoluteFill, styles.modalOverlay]}>
+                    <TouchableOpacity
+                        style={[StyleSheet.absoluteFill, { backgroundColor: colors.glassBackdrop }]}
+                        activeOpacity={1}
+                        onPress={() => setIsSnoozeModalVisible(false)}
+                    />
+                    <VeyraSurface
+                        level={2}
+                        radius="lg"
+                        style={styles.bulkDeleteCard}
+                    >
+                        <Text style={[styles.bulkDeleteTitle, { color: colors.textPrimary }]}>
+                            {language === 'es' ? 'Posponer seleccionados' : 'Snooze selected'}
+                        </Text>
+                        <Text style={[styles.bulkDeleteSubtitle, { color: colors.textSecondary }]}>
+                            {language === 'es'
+                                ? `Elige cuánto tiempo deseas posponer ${selectedReminders.length} recordatorio${selectedReminders.length > 1 ? 's' : ''}`
+                                : `Choose how long to snooze ${selectedReminders.length} reminder${selectedReminders.length > 1 ? 's' : ''}`}
+                        </Text>
+                        <View style={{ gap: 8, width: '100%', marginBottom: 12 }}>
+                            <VeyraButton
+                                variant="secondary"
+                                size="md"
+                                label={language === 'es' ? '+10 Minutos' : '+10 Minutes'}
+                                iconLeft={<Clock size={16} color={accent.primary} />}
+                                onPress={() => handleSnoozeSelected(10)}
+                            />
+                            <VeyraButton
+                                variant="secondary"
+                                size="md"
+                                label={language === 'es' ? '+1 Hora' : '+1 Hour'}
+                                iconLeft={<Clock size={16} color={accent.primary} />}
+                                onPress={() => handleSnoozeSelected(60)}
+                            />
+                            <VeyraButton
+                                variant="secondary"
+                                size="md"
+                                label={language === 'es' ? '+1 Día (Mañana)' : '+1 Day (Tomorrow)'}
+                                iconLeft={<Clock size={16} color={accent.primary} />}
+                                onPress={() => handleSnoozeSelected(1440)}
+                            />
+                        </View>
+                        <VeyraButton
+                            variant="ghost"
+                            size="md"
+                            label={t('common.cancel', { defaultValue: 'Cancelar' })}
+                            onPress={() => setIsSnoozeModalVisible(false)}
+                        />
+                    </VeyraSurface>
+                </View>
+            )}
+
+            {/* Bulk Delete Confirm Modal */}
+            {isBulkDeleteConfirmVisible && (
+                <View style={[StyleSheet.absoluteFill, styles.modalOverlay]}>
+                    <TouchableOpacity
+                        style={[StyleSheet.absoluteFill, { backgroundColor: colors.glassBackdrop }]}
+                        activeOpacity={1}
+                        onPress={() => setIsBulkDeleteConfirmVisible(false)}
+                    />
+                    <VeyraSurface
+                        level={2}
+                        radius="lg"
+                        style={styles.bulkDeleteCard}
+                    >
+                        <Text style={[styles.bulkDeleteTitle, { color: colors.textPrimary }]}>
+                            {selectedReminders.length === 1
+                                ? t('home.delete_confirm', { count: 1 })
+                                : t('home.delete_confirm_plural', { count: selectedReminders.length })}
+                        </Text>
+                        <Text style={[styles.bulkDeleteSubtitle, { color: colors.textSecondary }]}>
+                            {t('home.delete_desc')}
+                        </Text>
+                        <View style={styles.bulkDeleteButtonsRow}>
+                            <VeyraButton
+                                variant="secondary"
+                                size="md"
+                                style={{ flex: 1 }}
+                                label={t('home.cancel')}
+                                onPress={() => setIsBulkDeleteConfirmVisible(false)}
+                            />
+                            <VeyraButton
+                                variant="danger"
+                                size="md"
+                                style={{ flex: 1 }}
+                                label={t('home.delete')}
+                                onPress={async () => {
+                                    setIsBulkDeleteConfirmVisible(false);
+                                    await deleteReminders(selectedReminders);
+                                    setSelectedReminders([]);
+                                }}
+                            />
+                        </View>
+                    </VeyraSurface>
+                </View>
+            )}
 
             <ImageViewing
                 images={galleryImages}
@@ -1145,14 +2368,1121 @@ export default function HomeScreen() {
                 onRequestClose={() => setGalleryVisible(false)}
                 swipeToCloseEnabled={true}
                 doubleTapToZoomEnabled={true}
-                FooterComponent={({ imageIndex }) => (
-                    <View style={{ flex: 1, backgroundColor: "rgba(0, 0, 0, 0.5)", alignItems: "center", justifyContent: "center", paddingBottom: 40, paddingTop: 20 }}>
-                        <Text color="white" fontWeight="800" fontSize="$4">
-                            {galleryImages.length > 0 ? `${imageIndex + 1} / ${galleryImages.length}` : ''}
-                        </Text>
-                    </View>
-                )}
             />
-        </View >
+        </View>
     );
 }
+
+const styles = StyleSheet.create({
+    screen: {
+        flex: 1,
+    },
+    viewingAreaContainer: {
+        paddingHorizontal: 24,
+        paddingTop: 2,
+        paddingBottom: 0,
+        borderBottomWidth: StyleSheet.hairlineWidth,
+    },
+    viewingAreaSelectionRow: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        paddingVertical: 10,
+    },
+    clearSelectionBtn: {
+        width: 32,
+        height: 32,
+        borderRadius: 16,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    compactTitle: {
+        fontSize: 20,
+        fontWeight: '800',
+        letterSpacing: -0.4,
+    },
+    viewingAreaSubtitle: {
+        fontSize: 12.5,
+        fontWeight: '500',
+    },
+    compactTabsRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        paddingVertical: 2,
+    },
+    tabsLeftGroup: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 18,
+    },
+    compactTabItem: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+        paddingVertical: 8,
+        position: 'relative',
+    },
+    compactTabItemActive: {},
+    compactTabText: {
+        fontSize: 14.5,
+        letterSpacing: -0.1,
+    },
+    countBadge: {
+        paddingHorizontal: 6,
+        paddingVertical: 1.5,
+        borderRadius: 8,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    countBadgeText: {
+        fontSize: 11,
+        fontWeight: '700',
+    },
+    compactTabIndicator: {
+        position: 'absolute',
+        bottom: 0,
+        left: 0,
+        right: 0,
+        height: 2.5,
+        borderTopLeftRadius: 2,
+        borderTopRightRadius: 2,
+    },
+    headerActionsRight: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+    },
+    headerActionBtn: {
+        width: 32,
+        height: 32,
+        borderRadius: 16,
+        borderWidth: 1,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    calendarViewWrapper: {
+        flex: 1,
+        paddingHorizontal: 24,
+        paddingTop: 12,
+    },
+    listWrapper: {
+        flex: 1,
+    },
+    listHeaderContainer: {
+        marginBottom: 6,
+    },
+    statsRow: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginBottom: 14,
+        paddingHorizontal: 2,
+    },
+    statsLeft: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+    },
+    statBadge: {
+        fontSize: 12,
+        fontWeight: '600',
+    },
+    historyBtn: {
+        padding: 4,
+    },
+    selectionBar: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        paddingHorizontal: 12,
+        paddingVertical: 8,
+        marginBottom: 14,
+    },
+    selectionBarLeft: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+    },
+    selectionBarIconBtn: {
+        padding: 4,
+    },
+    selectionCount: {
+        fontSize: 13,
+        fontWeight: '700',
+    },
+    selectionBarRight: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+    },
+    selectionTopIndicator: {
+        paddingVertical: 6,
+        paddingHorizontal: 4,
+        marginBottom: 8,
+    },
+    selectionTopText: {
+        fontSize: 13,
+        fontWeight: '600',
+    },
+    floatingSelectionPill: {
+        position: 'absolute',
+        left: 20,
+        right: 20,
+        borderRadius: 22,
+        borderWidth: 1,
+        paddingHorizontal: 16,
+        paddingTop: 12,
+        paddingBottom: 12,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 8 },
+        shadowOpacity: 0.22,
+        shadowRadius: 16,
+        elevation: 20,
+        zIndex: 1000,
+    },
+    pillHeaderRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        marginBottom: 8,
+        paddingHorizontal: 2,
+    },
+    pillCounterContainer: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+    },
+    pillCloseBtn: {
+        width: 22,
+        height: 22,
+        borderRadius: 11,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    pillTitle: {
+        fontSize: 13,
+        fontWeight: '700',
+        letterSpacing: -0.2,
+    },
+    pillSelectAllBtn: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 5,
+        paddingVertical: 4,
+        paddingHorizontal: 9,
+        borderRadius: 12,
+        borderWidth: 1,
+    },
+    pillSelectAllText: {
+        fontSize: 11,
+        fontWeight: '600',
+    },
+    pillDivider: {
+        height: StyleSheet.hairlineWidth,
+        marginHorizontal: 4,
+        marginBottom: 8,
+    },
+    pillActionsRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-around',
+    },
+    pillActionBtn: {
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 3,
+        paddingVertical: 2,
+        paddingHorizontal: 8,
+        minWidth: 56,
+    },
+    pillActionIconCircle: {
+        width: 36,
+        height: 36,
+        borderRadius: 18,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    pillActionLabel: {
+        fontSize: 10,
+        fontWeight: '600',
+        letterSpacing: 0.1,
+    },
+    heroWrapper: {
+        marginBottom: 10,
+    },
+    minimalHeroCard: {
+        borderRadius: 16,
+        borderWidth: 1,
+        padding: 14,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.08,
+        shadowRadius: 6,
+        elevation: 2,
+    },
+    heroSelectionBadge: {
+        position: 'absolute',
+        top: 12,
+        right: 12,
+        zIndex: 2,
+    },
+    heroTopRow: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginBottom: 6,
+    },
+    heroTimeBadge: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingHorizontal: 8,
+        paddingVertical: 3,
+        borderRadius: 8,
+    },
+    heroTimeNumber: {
+        fontSize: 13,
+        fontWeight: '700',
+        letterSpacing: -0.2,
+    },
+    heroTimeSuffix: {
+        fontSize: 12,
+        fontWeight: '500',
+    },
+    heroCleanTitle: {
+        fontSize: 15.5,
+        fontWeight: '700',
+        lineHeight: 21,
+        marginBottom: 4,
+    },
+    heroSeverityPill: {
+        paddingHorizontal: 7,
+        paddingVertical: 2,
+        borderRadius: 6,
+        borderWidth: 1,
+    },
+    heroSeverityValue: {
+        fontSize: 11,
+        fontWeight: '700',
+    },
+    heroCleanDesc: {
+        fontSize: 12.5,
+        lineHeight: 17,
+        marginBottom: 6,
+    },
+    heroFooterRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        flexWrap: 'wrap',
+        gap: 8,
+        marginTop: 4,
+    },
+    heroSubtasksBadge: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 5,
+        paddingVertical: 2,
+    },
+    heroSubtasksText: {
+        fontSize: 11.5,
+        fontWeight: '600',
+    },
+    heroAttachmentsRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+    },
+    excelThumbnailBox: {
+        width: 40,
+        height: 40,
+        borderRadius: 10,
+        backgroundColor: '#FFFFFF',
+        alignItems: 'center',
+        justifyContent: 'center',
+        borderWidth: 1,
+        borderColor: 'rgba(0, 0, 0, 0.08)',
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.1,
+        shadowRadius: 2,
+        elevation: 1,
+        overflow: 'hidden',
+    },
+    excelSheetGrid: {
+        position: 'absolute',
+        right: 4,
+        top: 8,
+        width: 16,
+        height: 22,
+        borderWidth: 1,
+        borderColor: '#107C41',
+        backgroundColor: '#F3FAF6',
+        borderRadius: 2,
+        justifyContent: 'space-evenly',
+        paddingHorizontal: 1,
+    },
+    excelGridRow: {
+        height: 1,
+        backgroundColor: '#107C41',
+        opacity: 0.6,
+    },
+    excelXBadge: {
+        position: 'absolute',
+        left: 4,
+        width: 17,
+        height: 18,
+        backgroundColor: '#107C41',
+        borderRadius: 3,
+        alignItems: 'center',
+        justifyContent: 'center',
+        elevation: 1,
+    },
+    excelXText: {
+        color: '#FFFFFF',
+        fontSize: 11,
+        fontWeight: '900',
+    },
+    pdfThumbnailBox: {
+        width: 40,
+        height: 40,
+        borderRadius: 10,
+        backgroundColor: '#FFFFFF',
+        alignItems: 'center',
+        justifyContent: 'center',
+        borderWidth: 1,
+        borderColor: 'rgba(0, 0, 0, 0.08)',
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.1,
+        shadowRadius: 2,
+        elevation: 1,
+    },
+    pdfDocSheet: {
+        width: 23,
+        height: 26,
+        backgroundColor: '#F1F5F9',
+        borderRadius: 3,
+        alignItems: 'center',
+        justifyContent: 'flex-end',
+        paddingBottom: 2,
+        borderWidth: 0.5,
+        borderColor: '#CBD5E1',
+        overflow: 'hidden',
+    },
+    pdfDocFold: {
+        position: 'absolute',
+        top: 0,
+        right: 0,
+        width: 6,
+        height: 6,
+        backgroundColor: '#CBD5E1',
+        borderBottomLeftRadius: 3,
+    },
+    pdfRedTag: {
+        backgroundColor: '#DC2626',
+        borderRadius: 2,
+        paddingHorizontal: 2.5,
+        paddingVertical: 0.5,
+        marginBottom: 2,
+    },
+    pdfTagText: {
+        color: '#FFFFFF',
+        fontSize: 7.5,
+        fontWeight: '900',
+        letterSpacing: 0.2,
+    },
+    imageThumbnailBox: {
+        width: 40,
+        height: 40,
+        borderRadius: 10,
+        backgroundColor: '#FFFFFF',
+        overflow: 'hidden',
+        borderWidth: 1,
+        borderColor: 'rgba(0, 0, 0, 0.08)',
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.1,
+        shadowRadius: 2,
+        elevation: 1,
+    },
+    imageThumbnailImg: {
+        width: '100%',
+        height: '100%',
+    },
+    calmStateContainer: {
+        padding: 24,
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginBottom: 16,
+    },
+    calmTitle: {
+        fontSize: 14,
+        fontWeight: '700',
+        letterSpacing: 0.5,
+        marginBottom: 2,
+    },
+    calmSubtitle: {
+        fontSize: 12,
+        fontWeight: '400',
+    },
+    itemContainer: {
+        marginBottom: 10,
+    },
+    itemContent: {
+        paddingVertical: 14,
+        paddingHorizontal: 16,
+        gap: 10,
+    },
+    cardHeaderRow: {
+        flexDirection: 'row',
+        alignItems: 'flex-start',
+        justifyContent: 'space-between',
+        gap: 12,
+    },
+    cardHeaderLeft: {
+        flexDirection: 'row',
+        alignItems: 'flex-start',
+        gap: 10,
+        flex: 1,
+    },
+    selectionCheck: {
+        width: 18,
+        height: 18,
+        borderRadius: 999,
+        borderWidth: 1.5,
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginTop: 1,
+    },
+    itemTitle: {
+        fontWeight: '600',
+        fontSize: 15,
+        lineHeight: 20,
+        letterSpacing: -0.2,
+        flex: 1,
+    },
+    itemEditBtn: {
+        padding: 4,
+        marginTop: -2,
+    },
+    cardFooterRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        paddingLeft: 18,
+        gap: 8,
+    },
+    cardDateBox: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 5,
+        flexShrink: 1,
+    },
+    itemExactDateText: {
+        fontSize: 12,
+        fontWeight: '700',
+        letterSpacing: -0.1,
+    },
+    itemRiskRelativeText: {
+        fontSize: 11.5,
+        fontWeight: '500',
+    },
+    cardChipsRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 5,
+        flexShrink: 0,
+    },
+    metaChip: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 3.5,
+        paddingHorizontal: 6,
+        paddingVertical: 2.5,
+        borderRadius: 6,
+    },
+    metaChipText: {
+        fontSize: 10.5,
+        fontWeight: '700',
+    },
+    cardSubtasksExpandedBox: {
+        marginTop: 6,
+        paddingTop: 8,
+        borderTopWidth: StyleSheet.hairlineWidth,
+        borderTopColor: 'rgba(150, 150, 150, 0.18)',
+        gap: 6,
+    },
+    cardSubtaskItemRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingVertical: 3,
+        paddingHorizontal: 2,
+    },
+    cardSubtaskCheckbox: {
+        width: 17,
+        height: 17,
+        borderRadius: 4,
+        borderWidth: 1.5,
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginRight: 9,
+    },
+    cardSubtaskItemText: {
+        fontSize: 13,
+        flex: 1,
+        lineHeight: 18,
+    },
+    snoozeAllContainer: {
+        position: 'absolute',
+        alignSelf: 'center',
+        zIndex: 100,
+    },
+    modalOverlay: {
+        zIndex: 1000,
+        justifyContent: 'center',
+        alignItems: 'center',
+        padding: 20,
+    },
+    modalCardContainer: {
+        width: '100%',
+        maxWidth: 360,
+    },
+    modalGlass: {
+        width: '100%',
+    },
+    modalContent: {
+        padding: 20,
+    },
+    modalHeaderRow: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginBottom: 12,
+    },
+    modalHeaderActions: {
+        flexDirection: 'row',
+        gap: 6,
+    },
+    modalTitle: {
+        fontSize: 18,
+        fontWeight: '800',
+        marginBottom: 8,
+    },
+    modalThumbnail: {
+        width: 80,
+        height: 80,
+        borderWidth: 1,
+    },
+    modalTimeRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+        marginTop: 4,
+    },
+    modalTimeText: {
+        fontSize: 13,
+        fontWeight: '700',
+    },
+    modalActionButtonsRow: {
+        flexDirection: 'row',
+        gap: 10,
+    },
+    deleteConfirmContainer: {
+        padding: 20,
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 50,
+        borderRadius: 14,
+    },
+    deleteConfirmIconWrapper: {
+        padding: 12,
+        borderRadius: 999,
+        marginBottom: 12,
+    },
+    deleteConfirmTitle: {
+        fontSize: 16,
+        fontWeight: '800',
+        marginBottom: 4,
+        textAlign: 'center',
+    },
+    deleteConfirmSubtitle: {
+        fontSize: 13,
+        textAlign: 'center',
+        marginBottom: 16,
+    },
+    deleteConfirmButtonsRow: {
+        flexDirection: 'row',
+        gap: 10,
+        width: '100%',
+    },
+    bulkDeleteCard: {
+        width: '100%',
+        maxWidth: 340,
+        padding: 20,
+        zIndex: 1001,
+    },
+    bulkDeleteTitle: {
+        fontSize: 17,
+        fontWeight: '800',
+        textAlign: 'center',
+        marginBottom: 6,
+    },
+    bulkDeleteSubtitle: {
+        fontSize: 13,
+        textAlign: 'center',
+        marginBottom: 18,
+    },
+    bulkDeleteButtonsRow: {
+        flexDirection: 'row',
+        gap: 10,
+    },
+    eventsHeaderRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        marginTop: 14,
+        marginBottom: 8,
+    },
+    quickAddEventBtn: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingHorizontal: 10,
+        paddingVertical: 5,
+        borderRadius: 8,
+        gap: 4,
+    },
+    quickAddEventBtnText: {
+        fontSize: 12,
+        fontWeight: '700',
+    },
+    // ─── Search Bar (Matching Notes Screen) ───
+    searchBarWrapper: {
+        paddingHorizontal: 20,
+        paddingVertical: 6,
+        borderBottomWidth: StyleSheet.hairlineWidth,
+        minHeight: 52,
+        justifyContent: 'center',
+    },
+    searchExpandedBar: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        paddingHorizontal: 12,
+        height: 42,
+    },
+    searchExpandedInput: {
+        flex: 1,
+        height: 38,
+        padding: 0,
+        fontWeight: '500',
+    },
+    searchIconBtn: {
+        padding: 4,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    searchCloseBtn: {
+        width: 28,
+        height: 28,
+        borderRadius: 14,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    // ─── Agenda Filter Pills (Matching Notes Screen Aesthetics) ───
+    filterPillsContainer: {
+        marginBottom: 8,
+        marginTop: 2,
+    },
+    filterPillsScrollContent: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        paddingHorizontal: 24,
+        paddingVertical: 2,
+    },
+    agendaChip: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+        paddingVertical: 6,
+        paddingLeft: 10,
+        paddingRight: 8,
+        borderRadius: 14,
+        borderWidth: 1,
+    },
+    agendaChipText: {
+        fontSize: 12,
+    },
+    agendaChipBadge: {
+        fontSize: 10.5,
+        fontWeight: '700',
+        paddingHorizontal: 6,
+        paddingVertical: 1.5,
+        borderRadius: 8,
+        overflow: 'hidden',
+    },
+
+    // ─── Hero Event Card Styles ───
+    heroEventTopRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        marginBottom: 8,
+    },
+    heroLiveBadge: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+        paddingHorizontal: 8,
+        paddingVertical: 3.5,
+        borderRadius: 8,
+    },
+    heroLiveDot: {
+        width: 6,
+        height: 6,
+        borderRadius: 3,
+        backgroundColor: '#3B82F6',
+    },
+    heroLiveText: {
+        color: '#3B82F6',
+        fontSize: 10,
+        fontWeight: '900',
+        letterSpacing: 0.6,
+    },
+    heroUpcomingBadge: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 4.5,
+        paddingHorizontal: 8,
+        paddingVertical: 3.5,
+        borderRadius: 8,
+    },
+    heroUpcomingText: {
+        fontSize: 11,
+        fontWeight: '600',
+    },
+    heroEventTimeChip: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 4,
+    },
+    heroEventTimeText: {
+        fontSize: 11.5,
+        fontWeight: '700',
+        color: '#3B82F6',
+    },
+    heroEventTitle: {
+        fontSize: 16,
+        fontWeight: '700',
+        lineHeight: 22,
+        letterSpacing: -0.2,
+        marginBottom: 6,
+    },
+    heroEventMetaRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 5,
+        marginBottom: 10,
+    },
+    heroEventMetaText: {
+        fontSize: 12,
+        flex: 1,
+    },
+    heroEventFooter: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        marginTop: 6,
+        paddingTop: 8,
+        borderTopWidth: StyleSheet.hairlineWidth,
+        borderTopColor: 'rgba(150, 150, 150, 0.15)',
+    },
+    heroEventNoteBtn: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 4,
+        paddingHorizontal: 9,
+        paddingVertical: 4.5,
+        borderRadius: 8,
+    },
+    heroEventNoteBtnText: {
+        fontSize: 11,
+        fontWeight: '700',
+        color: '#3B82F6',
+    },
+    heroEventDetailsBtn: {
+        paddingHorizontal: 10,
+        paddingVertical: 4.5,
+        borderRadius: 8,
+    },
+    heroEventDetailsBtnText: {
+        fontSize: 11,
+        fontWeight: '600',
+    },
+
+    // ─── Grouped Section Architecture (Calm, Unified UI) ───
+    agendaSectionBlock: {
+        marginBottom: 20,
+    },
+    agendaSectionHeaderRow: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginBottom: 8,
+        paddingHorizontal: 4,
+    },
+    agendaSectionTitle: {
+        fontSize: 13,
+        fontWeight: '700',
+        letterSpacing: 0.2,
+        textTransform: 'capitalize',
+    },
+    agendaSectionBadge: {
+        paddingHorizontal: 7,
+        paddingVertical: 2,
+        borderRadius: 10,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    agendaSectionBadgeText: {
+        fontSize: 11,
+        fontWeight: '700',
+    },
+    agendaGroupedCard: {
+        borderRadius: 16,
+        overflow: 'hidden',
+        borderWidth: 1,
+    },
+    agendaItemRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingVertical: 12,
+        paddingHorizontal: 14,
+        gap: 12,
+    },
+    rowDivider: {
+        marginHorizontal: 14,
+        opacity: 0.45,
+    },
+    collapsibleWrapper: {
+        width: '100%',
+        overflow: 'hidden',
+    },
+    agendaRowWrapper: {
+        position: 'relative',
+        overflow: 'hidden',
+    },
+    swipeActionBg: {
+        position: 'absolute',
+        top: 0,
+        bottom: 0,
+        left: 0,
+        right: 0,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        paddingHorizontal: 18,
+    },
+    swipeActionContentLeft: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+    },
+    swipeActionContentRight: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+    },
+    swipeActionLabel: {
+        color: '#FFFFFF',
+        fontSize: 13,
+        fontWeight: '700',
+        letterSpacing: 0.2,
+    },
+    swipeFrontRow: {
+        width: '100%',
+    },
+    reminderSidePill: {
+        width: 4,
+        height: 28,
+        borderRadius: 2,
+    },
+    agendaRowContent: {
+        flex: 1,
+        justifyContent: 'center',
+        gap: 3,
+        minWidth: 0,
+    },
+    agendaRowTitleLine: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+    },
+    agendaRowTitle: {
+        fontSize: 14,
+        fontWeight: '600',
+        letterSpacing: -0.1,
+        flexShrink: 1,
+    },
+    criticalDot: {
+        width: 6,
+        height: 6,
+        borderRadius: 3,
+    },
+    agendaRowMetaLine: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        flexWrap: 'wrap',
+        gap: 6,
+    },
+    agendaRowTimeWrap: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 4,
+    },
+    agendaRowTimeText: {
+        fontSize: 11.5,
+        fontWeight: '600',
+    },
+    agendaRowRiskText: {
+        fontSize: 11,
+        fontWeight: '500',
+    },
+    agendaRowLocationWrap: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 3,
+        maxWidth: 130,
+    },
+    agendaRowLocationText: {
+        fontSize: 11,
+    },
+    agendaRowMiniChip: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 3.5,
+        paddingHorizontal: 6,
+        paddingVertical: 2,
+        borderRadius: 6,
+    },
+    agendaRowMiniChipText: {
+        fontSize: 10,
+        fontWeight: '600',
+    },
+    agendaRowActionBtn: {
+        padding: 4,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    agendaRowSubtasksBox: {
+        paddingLeft: 46,
+        paddingRight: 14,
+        paddingVertical: 8,
+        borderTopWidth: StyleSheet.hairlineWidth,
+        gap: 6,
+    },
+    agendaRowSubtaskItem: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        paddingVertical: 2,
+    },
+    agendaRowSubtaskText: {
+        fontSize: 12,
+        flex: 1,
+    },
+    liveBadge: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 4,
+        paddingHorizontal: 6,
+        paddingVertical: 1.5,
+        borderRadius: 6,
+    },
+    liveDot: {
+        width: 5,
+        height: 5,
+        borderRadius: 2.5,
+    },
+    liveBadgeText: {
+        fontSize: 10,
+        fontWeight: '700',
+    },
+    liveEventBanner: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingVertical: 9,
+        paddingHorizontal: 14,
+        borderRadius: 12,
+        borderWidth: 1,
+        marginBottom: 14,
+        gap: 8,
+    },
+    liveEventPulseDot: {
+        width: 8,
+        height: 8,
+        borderRadius: 4,
+        backgroundColor: '#3B82F6',
+    },
+    liveEventLabel: {
+        fontSize: 10.5,
+        fontWeight: '800',
+        letterSpacing: 0.5,
+    },
+    liveEventTitle: {
+        fontSize: 13,
+        fontWeight: '600',
+        flex: 1,
+    },
+    liveEventTime: {
+        fontSize: 11.5,
+        fontWeight: '600',
+    },
+    emptyDateCleanContainer: {
+        paddingVertical: 32,
+        paddingHorizontal: 16,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    emptyIconCircle: {
+        width: 44,
+        height: 44,
+        borderRadius: 22,
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginBottom: 10,
+    },
+    emptyDateCleanTitle: {
+        fontSize: 15,
+        fontWeight: '700',
+        letterSpacing: -0.2,
+        textAlign: 'center',
+    },
+    emptyDateCleanSubtitle: {
+        fontSize: 12.5,
+        marginTop: 4,
+        textAlign: 'center',
+        letterSpacing: 0.1,
+    },
+    emptyDateCleanActionsRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 10,
+        marginTop: 18,
+    },
+    emptyCleanPill: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+        paddingHorizontal: 14,
+        paddingVertical: 7,
+        borderRadius: 20,
+        borderWidth: 1,
+    },
+    emptyCleanPillText: {
+        fontSize: 12,
+        fontWeight: '600',
+        letterSpacing: 0.1,
+    },
+});

@@ -2,13 +2,14 @@ import React, { useState } from 'react';
 import { YStack, XStack, H2, Paragraph, Button, Theme, Text, useTheme, AnimatePresence, View, Circle } from 'tamagui';
 import { useRouter } from 'expo-router';
 import { useStore } from '../src/store/useStore';
-import * as Notifications from 'expo-notifications';
+import { NotificationService } from '../src/services/notificationService';
 import { ControlLevel } from '../src/types/db';
-import { ArrowLeft, Sun, Moon, Zap, Shield, Flame, Bell, Cloud, ChevronRight, ArrowRight } from '@tamagui/lucide-icons';
-import { Dimensions, TouchableOpacity, StyleSheet, Alert } from 'react-native';
+import { ArrowLeft, Sun, Moon, Zap, Shield, Flame, Bell, Cloud, ChevronRight, ArrowRight, ShieldAlert } from '@tamagui/lucide-icons';
+import { Dimensions, TouchableOpacity, StyleSheet, Alert, Platform, ScrollView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { useTranslation } from 'react-i18next';
+import { AlarmPermissionsModal } from '../src/components/settings/AlarmPermissionsModal';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const TOTAL_STEPS = 3;
@@ -191,38 +192,91 @@ const Step1_Control = ({ selected, onSelect }: { selected: string | null; onSele
 };
 
 // ─── PASO 2: Notificaciones ────────────────────────────────────────────────
-const Step2_Permissions = ({ onAction, onSkip, t }: any) => {
+const Step2_Permissions = ({ onAction, onSkip, onOpenAlarmModal, t }: any) => {
     return (
-        <YStack flex={1} px="$7" justifyContent="center" pb="$8" gap="$10">
-            <YStack gap="$3" mb="$4">
+        <ScrollView
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={{ flexGrow: 1, justifyContent: 'center', paddingHorizontal: 28, paddingBottom: 32 }}
+        >
+            <YStack gap="$3" my="$3">
                 {/* Ilustración minimalista */}
                 <View style={styles.bigIconWrap}>
-                    <Bell size={52} color="$color" strokeWidth={1.3} />
+                    <Bell size={48} color="$color" strokeWidth={1.3} />
                 </View>
                 <Text
                     color="$color"
                     fontWeight="800"
-                    fontSize={44}
-                    lineHeight={48}
-                    letterSpacing={-2}
-                    mt="$4"
+                    fontSize={38}
+                    lineHeight={42}
+                    letterSpacing={-1.5}
                 >
                     {t('onboarding.step2.title')}
                 </Text>
-                <Text color="$gray10" fontSize={17} lineHeight={26} fontWeight="400" maxWidth={300}>
+                <Text color="$gray10" fontSize={15} lineHeight={22} fontWeight="400">
                     {t('onboarding.step2.desc')}
                 </Text>
             </YStack>
 
-            <YStack gap="$4" w="100%">
+            {/* Tarjeta de Garantía Android */}
+            {Platform.OS === 'android' && (
+                <TouchableOpacity
+                    activeOpacity={0.85}
+                    onPress={onOpenAlarmModal}
+                    style={styles.androidCard}
+                >
+                    <XStack alignItems="center" justifyContent="space-between">
+                        <XStack alignItems="center" gap="$2">
+                            <ShieldAlert size={18} color="#EF4444" />
+                            <Text color="#EF4444" fontWeight="800" fontSize={12} letterSpacing={0.5}>
+                                {t('onboarding.android_guide.badge')}
+                            </Text>
+                        </XStack>
+                        <ChevronRight size={16} color="$gray9" />
+                    </XStack>
+                    <Text color="$color" fontWeight="700" fontSize={16} mt="$1">
+                        {t('onboarding.android_guide.title')}
+                    </Text>
+                    <Text color="$gray10" fontSize={13} lineHeight={18}>
+                        {t('onboarding.android_guide.desc')}
+                    </Text>
+                    <YStack gap="$1" mt="$1">
+                        <XStack alignItems="center" gap="$2">
+                            <View width={5} height={5} borderRadius={2.5} backgroundColor="#EF4444" />
+                            <Text color="$gray11" fontSize={12}>{t('onboarding.android_guide.fullscreen')}</Text>
+                        </XStack>
+                        <XStack alignItems="center" gap="$2">
+                            <View width={5} height={5} borderRadius={2.5} backgroundColor="#EF4444" />
+                            <Text color="$gray11" fontSize={12}>{t('onboarding.android_guide.battery')}</Text>
+                        </XStack>
+                        <XStack alignItems="center" gap="$2">
+                            <View width={5} height={5} borderRadius={2.5} backgroundColor="#EF4444" />
+                            <Text color="$gray11" fontSize={12}>{t('onboarding.android_guide.exact')}</Text>
+                        </XStack>
+                    </YStack>
+                    <Button
+                        size="$3"
+                        borderRadius={12}
+                        backgroundColor="$color"
+                        pressStyle={{ opacity: 0.8 }}
+                        onPress={onOpenAlarmModal}
+                        mt="$2"
+                    >
+                        <Text color="$background" fontWeight="700" fontSize={13}>
+                            {t('onboarding.android_guide.configure_btn')}
+                        </Text>
+                    </Button>
+                </TouchableOpacity>
+            )}
+
+            <YStack gap="$3" w="100%" mt="$3">
                 <Button
-                    height={60}
+                    height={56}
                     borderRadius={18}
                     backgroundColor="$color"
                     pressStyle={{ opacity: 0.9, scale: 0.98 }}
                     onPress={onAction}
                 >
-                    <Text color="$background" fontWeight="800" fontSize={17}>
+                    <Text color="$background" fontWeight="800" fontSize={16}>
                         {t('onboarding.step2.enable_btn')}
                     </Text>
                 </Button>
@@ -232,10 +286,10 @@ const Step2_Permissions = ({ onAction, onSkip, t }: any) => {
                     pressStyle={{ opacity: 0.4 }}
                     alignSelf="center"
                 >
-                    <Text color="$gray9" fontWeight="600" fontSize={15}>{t('onboarding.step2.now_not_btn')}</Text>
+                    <Text color="$gray9" fontWeight="600" fontSize={14}>{t('onboarding.step2.now_not_btn')}</Text>
                 </Button>
             </YStack>
-        </YStack>
+        </ScrollView>
     );
 };
 
@@ -262,10 +316,19 @@ const styles = StyleSheet.create({
         backgroundColor: '$background0',
     },
     bigIconWrap: {
-        width: 80,
-        height: 80,
+        width: 64,
+        height: 64,
         justifyContent: 'center',
         alignItems: 'center',
+    },
+    androidCard: {
+        padding: 14,
+        borderRadius: 16,
+        borderWidth: 1.5,
+        borderColor: 'rgba(239, 68, 68, 0.3)',
+        backgroundColor: 'rgba(239, 68, 68, 0.05)',
+        gap: 6,
+        marginVertical: 4,
     },
 });
 
@@ -282,6 +345,7 @@ export default function OnboardingScreen() {
     const [onboardingStep, setOnboardingStep] = useState(0);
     const [direction, setDirection] = useState(1);
     const [selectedControlLevel, setSelectedControlLevel] = useState<string | null>(null);
+    const [showAlarmModal, setShowAlarmModal] = useState(false);
     const tamaguiTheme = useTheme();
     const { t } = useTranslation();
 
@@ -300,9 +364,9 @@ export default function OnboardingScreen() {
     };
 
     const handlePermissions = async () => {
-        const { status } = await Notifications.requestPermissionsAsync();
+        const granted = await NotificationService.requestPermissions();
 
-        if (status === 'granted') {
+        if (granted) {
             handleFinish();
         } else {
             Alert.alert(
@@ -380,6 +444,7 @@ export default function OnboardingScreen() {
                                 <Step2_Permissions
                                     onAction={handlePermissions}
                                     onSkip={handleFinish}
+                                    onOpenAlarmModal={() => setShowAlarmModal(true)}
                                     t={t}
                                 />
                             )}
@@ -445,6 +510,13 @@ export default function OnboardingScreen() {
                         </Button>
                     </XStack>
                 </YStack>
+
+                {Platform.OS === 'android' && (
+                    <AlarmPermissionsModal
+                        visible={showAlarmModal}
+                        onClose={() => setShowAlarmModal(false)}
+                    />
+                )}
             </SafeAreaView>
         </Theme>
     );

@@ -1,0 +1,183 @@
+diff --git a/node_modules/expo-notifications/android/src/main/java/expo/modules/notifications/notifications/presentation/builders/ExpoNotificationBuilder.kt b/node_modules/expo-notifications/android/src/main/java/expo/modules/notifications/notifications/presentation/builders/ExpoNotificationBuilder.kt
+index 610d303..d440a97 100644
+--- a/node_modules/expo-notifications/android/src/main/java/expo/modules/notifications/notifications/presentation/builders/ExpoNotificationBuilder.kt
++++ b/node_modules/expo-notifications/android/src/main/java/expo/modules/notifications/notifications/presentation/builders/ExpoNotificationBuilder.kt
+@@ -139,13 +139,33 @@ open class ExpoNotificationBuilder(
+ 
+     val defaultAction =
+       NotificationAction(NotificationResponse.DEFAULT_ACTION_IDENTIFIER, null, true)
+-    builder.setContentIntent(
+-      createNotificationResponseIntent(
++    val contentIntent = createNotificationResponseIntent(
++      context,
++      notification,
++      defaultAction
++    )
++    builder.setContentIntent(contentIntent)
++
++    if (content.isSticky || priority >= NotificationCompat.PRIORITY_MAX) {
++      val reminderId = if (content.body?.has("reminderId") == true) content.body?.optString("reminderId") else null
++      val alarmIntent = android.content.Intent().apply {
++        setClassName(context.packageName, "com.ralo.veyra.CriticalAlarmActivity")
++        flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP
++        reminderId?.let { putExtra("reminderId", it) }
++        putExtra("title", content.title)
++        putExtra("controlLevel", if (priority >= NotificationCompat.PRIORITY_MAX) "critical" else "strict")
++      }
++
++      val fsiPendingIntent = android.app.PendingIntent.getActivity(
+         context,
+-        notification,
+-        defaultAction
++        reminderId?.hashCode() ?: notification.notificationRequest.identifier.hashCode(),
++        alarmIntent,
++        android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
+       )
+-    )
++      builder.setFullScreenIntent(fsiPendingIntent, true)
++      builder.setCategory(NotificationCompat.CATEGORY_ALARM)
++      builder.setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
++    }
+ 
+     if (notificationContent.containsImage()) {
+       val bitmap = notificationContent.getImage(context)
+diff --git a/node_modules/expo-notifications/android/src/main/java/expo/modules/notifications/service/NotificationsService.kt b/node_modules/expo-notifications/android/src/main/java/expo/modules/notifications/service/NotificationsService.kt
+index 74554be..a2c111f 100644
+--- a/node_modules/expo-notifications/android/src/main/java/expo/modules/notifications/service/NotificationsService.kt
++++ b/node_modules/expo-notifications/android/src/main/java/expo/modules/notifications/service/NotificationsService.kt
+@@ -631,10 +631,25 @@ open class NotificationsService : BroadcastReceiver() {
+    * */
+   override fun onReceive(context: Context, intent: Intent?) {
+     val pendingIntent = goAsync()
++    val powerManager = context.getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager
++    val wakeLock = powerManager?.newWakeLock(
++      android.os.PowerManager.PARTIAL_WAKE_LOCK,
++      "veyra:notification_receiver_wakelock"
++    )?.apply {
++      setReferenceCounted(false)
++      try {
++        acquire(15000)
++      } catch (_: Exception) {}
++    }
+     thread {
+       try {
+         intent?.run { handleIntent(context, intent) }
+       } finally {
++        try {
++          if (wakeLock?.isHeld == true) {
++            wakeLock.release()
++          }
++        } catch (_: Exception) {}
+         pendingIntent.finish()
+       }
+     }
+diff --git a/node_modules/expo-notifications/android/src/main/java/expo/modules/notifications/service/delegates/ExpoHandlingDelegate.kt b/node_modules/expo-notifications/android/src/main/java/expo/modules/notifications/service/delegates/ExpoHandlingDelegate.kt
+index f1e7e36..4531a37 100644
+--- a/node_modules/expo-notifications/android/src/main/java/expo/modules/notifications/service/delegates/ExpoHandlingDelegate.kt
++++ b/node_modules/expo-notifications/android/src/main/java/expo/modules/notifications/service/delegates/ExpoHandlingDelegate.kt
+@@ -134,7 +134,7 @@ class ExpoHandlingDelegate(protected val context: Context) : HandlingDelegate {
+       // https://docs.expo.dev/push-notifications/what-you-need-to-know/#headless-background-notifications
+       // this call can not be triggered by expo push service, only when using FCM directly.
+       // We keep this because we used to document this as a valid use case.
+-      NotificationsService.present(context, notification)
++      ExpoPresentationDelegate(context).presentNotification(notification, null)
+     }
+   }
+ 
+diff --git a/node_modules/expo-notifications/android/src/main/java/expo/modules/notifications/service/delegates/ExpoPresentationDelegate.kt b/node_modules/expo-notifications/android/src/main/java/expo/modules/notifications/service/delegates/ExpoPresentationDelegate.kt
+index 38f6fba..3870b5b 100644
+--- a/node_modules/expo-notifications/android/src/main/java/expo/modules/notifications/service/delegates/ExpoPresentationDelegate.kt
++++ b/node_modules/expo-notifications/android/src/main/java/expo/modules/notifications/service/delegates/ExpoPresentationDelegate.kt
+@@ -24,6 +24,7 @@ import expo.modules.notifications.service.interfaces.PresentationDelegate
+ import kotlinx.coroutines.CoroutineScope
+ import kotlinx.coroutines.Dispatchers
+ import kotlinx.coroutines.launch
++import kotlinx.coroutines.runBlocking
+ import org.json.JSONException
+ import org.json.JSONObject
+ import java.util.Date
+@@ -102,7 +103,7 @@ open class ExpoPresentationDelegate(
+       }
+       return
+     }
+-    CoroutineScope(Dispatchers.IO).launch {
++    runBlocking(Dispatchers.IO) {
+       val androidNotification = createNotification(notification, behavior)
+ 
+       NotificationManagerCompat.from(context).notify(
+diff --git a/node_modules/expo-notifications/android/src/main/java/expo/modules/notifications/service/delegates/ExpoSchedulingDelegate.kt b/node_modules/expo-notifications/android/src/main/java/expo/modules/notifications/service/delegates/ExpoSchedulingDelegate.kt
+index eddd142..d1f0565 100644
+--- a/node_modules/expo-notifications/android/src/main/java/expo/modules/notifications/service/delegates/ExpoSchedulingDelegate.kt
++++ b/node_modules/expo-notifications/android/src/main/java/expo/modules/notifications/service/delegates/ExpoSchedulingDelegate.kt
+@@ -72,17 +72,18 @@ class ExpoSchedulingDelegate(protected val context: Context) : SchedulingDelegat
+   override fun triggerNotification(identifier: String) {
+     try {
+       val notificationRequest: NotificationRequest = store.getNotificationRequest(identifier)!!
+-      NotificationsService.receive(context, Notification(notificationRequest))
++      val notification = Notification(notificationRequest)
++      val handlingDelegate = ExpoHandlingDelegate(context)
++
++      if (handlingDelegate.isAppInForeground()) {
++        handlingDelegate.handleNotification(notification)
++      } else {
++        val presentationDelegate = ExpoPresentationDelegate(context)
++        presentationDelegate.presentNotification(notification, null)
++      }
++
+       NotificationsService.schedule(context, notificationRequest)
+-    } catch (e: ClassNotFoundException) {
+-      Log.e("expo-notifications", "An exception occurred while triggering notification " + identifier + ", removing. " + e.message)
+-      e.printStackTrace()
+-      NotificationsService.removeScheduledNotification(context, identifier)
+-    } catch (e: InvalidClassException) {
+-      Log.e("expo-notifications", "An exception occurred while triggering notification " + identifier + ", removing. " + e.message)
+-      e.printStackTrace()
+-      NotificationsService.removeScheduledNotification(context, identifier)
+-    } catch (e: NullPointerException) {
++    } catch (e: Exception) {
+       Log.e("expo-notifications", "An exception occurred while triggering notification " + identifier + ", removing. " + e.message)
+       e.printStackTrace()
+       NotificationsService.removeScheduledNotification(context, identifier)
+diff --git a/node_modules/expo-notifications/build/TopicSubscriptionModule.android.js b/node_modules/expo-notifications/build/TopicSubscriptionModule.android.js
+index 644a8bb..94c6706 100644
+--- a/node_modules/expo-notifications/build/TopicSubscriptionModule.android.js
++++ b/node_modules/expo-notifications/build/TopicSubscriptionModule.android.js
+@@ -1,3 +1,14 @@
+ import { requireNativeModule } from 'expo-modules-core';
+-export default requireNativeModule('ExpoTopicSubscriptionModule');
++let module;
++try {
++    module = requireNativeModule('ExpoTopicSubscriptionModule');
++} catch (e) {
++    module = {
++        addListener: () => {},
++        removeListeners: () => {},
++        subscribeToTopicAsync: () => Promise.resolve(null),
++        unsubscribeFromTopicAsync: () => Promise.resolve(null),
++    };
++}
++export default module;
+ //# sourceMappingURL=TopicSubscriptionModule.android.js.map
+\ No newline at end of file
+diff --git a/node_modules/expo-notifications/build/warnOfExpoGoPushUsage.js b/node_modules/expo-notifications/build/warnOfExpoGoPushUsage.js
+index 8260405..f2fcfc6 100644
+--- a/node_modules/expo-notifications/build/warnOfExpoGoPushUsage.js
++++ b/node_modules/expo-notifications/build/warnOfExpoGoPushUsage.js
+@@ -3,14 +3,9 @@ import { Platform } from 'expo-modules-core';
+ let didWarn = false;
+ export const warnOfExpoGoPushUsage = () => {
+     if (isRunningInExpoGo() && !didWarn) {
++        didWarn = true;
+         const message = `expo-notifications: Android Push notifications (remote notifications) functionality provided by expo-notifications was removed from Expo Go with the release of SDK 53. Use a development build instead of Expo Go. Learn more at https://docs.expo.dev/develop/development-builds/introduction/.`;
+-        if (Platform.OS === 'android') {
+-            throw new Error(message);
+-        }
+-        else if (__DEV__) {
+-            didWarn = true;
+-            console.warn(message);
+-        }
++        console.warn(message);
+     }
+ };
+ //# sourceMappingURL=warnOfExpoGoPushUsage.js.map
+\ No newline at end of file

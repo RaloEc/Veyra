@@ -2,36 +2,24 @@ import React, { useState } from 'react';
 import { YStack, XStack, Text, View, Spinner } from 'tamagui';
 import { useRouter } from 'expo-router';
 import { supabase } from '../src/lib/supabase';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { useStore } from '../src/store/useStore';
 import * as Linking from 'expo-linking';
 import { Mail, Lock, ArrowLeft, Eye, EyeOff } from '@tamagui/lucide-icons';
 import { Alert, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, ScrollView } from 'react-native';
 import { useTranslation } from 'react-i18next';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useVeyraTheme } from '../src/theme/useVeyraTheme';
 
 export default function RegisterScreen() {
     const router = useRouter();
-    const { theme } = useStore();
+    const insets = useSafeAreaInsets();
+    const { colors, accent, isDark } = useVeyraTheme();
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [showPassword, setShowPassword] = useState(false);
     const { t } = useTranslation();
-
-    const isDark = theme === 'dark';
-
-    const colors = {
-        bg: isDark ? '#0a0a0a' : '#F8FAFC',
-        textPrimary: isDark ? '#EDEDED' : '#0c0a09',
-        textSecondary: isDark ? '#A1A1A1' : '#64748B',
-        textMuted: isDark ? '#737373' : '#94A3B8',
-        border: isDark ? '#262626' : '#E2E8F0',
-        surface: isDark ? '#171717' : '#FFFFFF',
-        inputBg: isDark ? '#1f1f1f' : '#f1f5f9',
-        accent: '#3b82f6',
-        error: '#ef4444',
-    };
 
     async function signUpWithEmail() {
         if (!email.trim() || !password.trim()) {
@@ -42,24 +30,31 @@ export default function RegisterScreen() {
             setError(t('auth.password_too_short'));
             return;
         }
+
         setLoading(true);
         setError(null);
-        const { data, error } = await supabase.auth.signUp({
+
+        const emailRedirectTo = Linking.createURL('/onboarding');
+        const { data, error: authError } = await supabase.auth.signUp({
             email: email.trim(),
-            password: password,
+            password,
             options: {
-                emailRedirectTo: Linking.createURL('/login'),
+                emailRedirectTo,
             },
         });
 
-        if (error) {
-            setError(error.message);
-            setLoading(false);
-        } else {
-            if (!data.session) {
-                Alert.alert(t('auth.verify_email_title'), t('auth.verify_email_msg'));
-                router.replace('/login');
+        setLoading(false);
+
+        if (authError) {
+            setError(authError.message);
+        } else if (data?.user) {
+            if (data?.session) {
+                router.replace('/onboarding');
             } else {
+                Alert.alert(
+                    t('auth.verify_email_title'),
+                    t('auth.verify_email_desc')
+                );
                 router.replace('/onboarding');
             }
         }
@@ -67,13 +62,13 @@ export default function RegisterScreen() {
 
     return (
         <View style={{ flex: 1, backgroundColor: colors.bg }}>
-            <SafeAreaView style={{ flex: 1 }}>
+            <SafeAreaView style={{ flex: 1 }} edges={['top', 'left', 'right']}>
                 <KeyboardAvoidingView
                     style={{ flex: 1 }}
                     behavior={Platform.OS === 'ios' ? 'padding' : undefined}
                 >
                     <ScrollView
-                        contentContainerStyle={{ flexGrow: 1 }}
+                        contentContainerStyle={{ flexGrow: 1, justifyContent: 'space-between' }}
                         keyboardShouldPersistTaps="handled"
                         showsVerticalScrollIndicator={false}
                     >
@@ -88,7 +83,7 @@ export default function RegisterScreen() {
                                     borderRadius: 12,
                                     backgroundColor: colors.surface,
                                     borderWidth: 1,
-                                    borderColor: colors.border,
+                                    borderColor: colors.borderSubtle,
                                     alignItems: 'center',
                                     justifyContent: 'center',
                                 }}
@@ -137,10 +132,10 @@ export default function RegisterScreen() {
                                     </XStack>
                                     <View
                                         style={{
-                                            backgroundColor: colors.inputBg,
+                                            backgroundColor: colors.surface,
                                             borderRadius: 14,
                                             borderWidth: 1.5,
-                                            borderColor: colors.border,
+                                            borderColor: colors.borderSubtle,
                                             paddingHorizontal: 16,
                                             paddingVertical: Platform.OS === 'ios' ? 16 : 4,
                                         }}
@@ -178,10 +173,10 @@ export default function RegisterScreen() {
                                     </XStack>
                                     <View
                                         style={{
-                                            backgroundColor: colors.inputBg,
+                                            backgroundColor: colors.surface,
                                             borderRadius: 14,
                                             borderWidth: 1.5,
-                                            borderColor: colors.border,
+                                            borderColor: colors.borderSubtle,
                                             paddingHorizontal: 16,
                                             paddingVertical: Platform.OS === 'ios' ? 16 : 4,
                                             flexDirection: 'row',
@@ -237,7 +232,7 @@ export default function RegisterScreen() {
                                         }}
                                     >
                                         <Text
-                                            color={colors.error as any}
+                                            color="#EF4444"
                                             fontSize="$3"
                                             fontWeight="600"
                                             ta="center"
@@ -246,42 +241,42 @@ export default function RegisterScreen() {
                                         </Text>
                                     </View>
                                 )}
-
-                                {/* Botón de Registro */}
-                                <TouchableOpacity
-                                    onPress={signUpWithEmail}
-                                    disabled={loading}
-                                    activeOpacity={0.85}
-                                    style={{
-                                        backgroundColor: colors.textPrimary,
-                                        borderRadius: 14,
-                                        paddingVertical: 18,
-                                        alignItems: 'center',
-                                        justifyContent: 'center',
-                                        opacity: loading ? 0.7 : 1,
-                                        marginTop: 4,
-                                    }}
-                                >
-                                    {loading ? (
-                                        <Spinner color={colors.bg as any} />
-                                    ) : (
-                                        <Text
-                                            color={colors.bg as any}
-                                            fontWeight="900"
-                                            fontSize="$4"
-                                            textTransform="uppercase"
-                                            letterSpacing={1}
-                                        >
-                                            {t('auth.register_btn')}
-                                        </Text>
-                                    )}
-                                </TouchableOpacity>
                             </YStack>
                         </YStack>
 
-                        {/* Footer - Enlace a login */}
-                        <YStack px="$5" pb="$6" pt="$4" ai="center">
-                            <XStack gap="$2" ai="center">
+                        {/* Zona inferior de interacción ergonómica One UI */}
+                        <YStack px="$5" pt="$4" pb={Math.max(insets.bottom, 16)} gap="$4">
+                            {/* Botón de Registro */}
+                            <TouchableOpacity
+                                onPress={signUpWithEmail}
+                                disabled={loading}
+                                activeOpacity={0.85}
+                                style={{
+                                    backgroundColor: colors.textPrimary,
+                                    borderRadius: 14,
+                                    paddingVertical: 18,
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    opacity: loading ? 0.7 : 1,
+                                }}
+                            >
+                                {loading ? (
+                                    <Spinner color={colors.bg as any} />
+                                ) : (
+                                    <Text
+                                        color={colors.bg as any}
+                                        fontWeight="900"
+                                        fontSize="$4"
+                                        textTransform="uppercase"
+                                        letterSpacing={1}
+                                    >
+                                        {t('auth.register_btn')}
+                                    </Text>
+                                )}
+                            </TouchableOpacity>
+
+                            {/* Footer - Enlace a login */}
+                            <XStack gap="$2" ai="center" jc="center">
                                 <Text
                                     fontSize="$3"
                                     fontWeight="500"
