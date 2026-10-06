@@ -1,0 +1,614 @@
+diff --git a/node_modules/expo-dynamic-image-crop/lib/ImageCropOverlay.js b/node_modules/expo-dynamic-image-crop/lib/ImageCropOverlay.js
+index dfead19..2284c75 100644
+--- a/node_modules/expo-dynamic-image-crop/lib/ImageCropOverlay.js
++++ b/node_modules/expo-dynamic-image-crop/lib/ImageCropOverlay.js
+@@ -1,5 +1,5 @@
+ import { jsx as _jsx } from "react/jsx-runtime";
+-import { useContext, useEffect, useState } from "react";
++import { useContext, useEffect, useState, useRef } from "react";
+ import { Animated, StyleSheet, View } from "react-native";
+ import { GestureHandlerRootView, PanGestureHandler, State, } from "react-native-gesture-handler";
+ import { EditorContext } from "./context/editor";
+@@ -9,7 +9,9 @@ const verticalSections = ["left", "middle", "right"];
+ const ImageCropOverlay = () => {
+     const [selectedFrameSection, setSelectedFrameSection] = useState("");
+     const [isDragging, setIsDragging] = useState(false);
+-    const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
++    const selectedSectionRef = useRef("");
++    const isDraggingRef = useRef(false);
++
+     const cropSize = useEditorStore((s) => s.cropSize);
+     const setCropSize = useEditorStore((s) => s.setCropSize);
+     const imageBounds = useEditorStore((s) => s.imageBounds);
+@@ -17,6 +19,14 @@ const ImageCropOverlay = () => {
+     const setAccumulatedPan = useEditorStore((s) => s.setAccumulatedPan);
+     const { gridOverlayColor, coverMarker, overlayCropColor } = useEditorStore((s) => s.editorOptions);
+     const { fixedAspectRatio, minimumCropDimensions, dynamicCrop } = useContext(EditorContext);
++
++    const accumulatedPanRef = useRef(accumulatedPan);
++    accumulatedPanRef.current = accumulatedPan;
++    const cropSizeRef = useRef(cropSize);
++    cropSizeRef.current = cropSize;
++    const imageBoundsRef = useRef(imageBounds);
++    imageBoundsRef.current = imageBounds;
++
+     const [animatedCropSize] = useState({
+         width: new Animated.Value(cropSize.width),
+         height: new Animated.Value(cropSize.height),
+@@ -25,6 +35,16 @@ const ImageCropOverlay = () => {
+         x: new Animated.Value(0),
+         y: new Animated.Value(0),
+     });
++    const [panPosition] = useState({
++        x: new Animated.Value(accumulatedPan.x),
++        y: new Animated.Value(accumulatedPan.y),
++    });
++
++    useEffect(() => {
++        panPosition.x.setValue(accumulatedPan.x);
++        panPosition.y.setValue(accumulatedPan.y);
++    }, [accumulatedPan]);
++
+     useEffect(() => {
+         checkCropBounds({
+             translationX: 0,
+@@ -33,24 +53,23 @@ const ImageCropOverlay = () => {
+         animatedCropSize.height.setValue(cropSize.height);
+         animatedCropSize.width.setValue(cropSize.width);
+     }, [cropSize]);
++
+     useEffect(() => {
+-        // Reset animated position when accumulatedPan changes (after drag ends)
+         if (!isDragging) {
+             animatedPosition.x.setValue(0);
+             animatedPosition.y.setValue(0);
+         }
+     }, [accumulatedPan, isDragging]);
++
+     useEffect(() => {
+         const newSize = { width: 0, height: 0 };
+         const { width, height } = imageBounds;
+         if (dynamicCrop) {
+-            // For dynamic crop, start with a reasonable default size (80% of smaller dimension)
+             const smallerDimension = Math.min(width, height);
+             newSize.width = smallerDimension * 0.8;
+             newSize.height = smallerDimension * 0.8;
+         }
+         else {
+-            // Original fixed aspect ratio logic
+             const imageAspectRatio = width / height;
+             if (fixedAspectRatio < imageAspectRatio) {
+                 newSize.height = height * 0.8;
+@@ -62,7 +81,6 @@ const ImageCropOverlay = () => {
+             }
+         }
+         setCropSize(newSize);
+-        // Center the crop area within the image bounds
+         const centeredX = imageBounds.x + (imageBounds.width - newSize.width) / 2;
+         const centeredY = imageBounds.y + (imageBounds.height - newSize.height) / 2;
+         setAccumulatedPan({
+@@ -70,145 +88,170 @@ const ImageCropOverlay = () => {
+             y: centeredY,
+         });
+     }, [imageBounds, dynamicCrop]);
+-    const isMovingSection = () => selectedFrameSection === "topmiddle" ||
+-        selectedFrameSection === "middleleft" ||
+-        selectedFrameSection === "middleright" ||
+-        selectedFrameSection === "middlemiddle" ||
+-        selectedFrameSection === "bottommiddle";
+-    const isLeft = selectedFrameSection.endsWith("left");
+-    const isRight = selectedFrameSection.endsWith("right");
+-    const isTop = selectedFrameSection.startsWith("top");
+-    const isBottom = selectedFrameSection.startsWith("bottom");
++
++    const getSection = () => selectedSectionRef.current || selectedFrameSection || "";
++    const isMovingSection = (sec = getSection()) =>
++        sec === "topmiddle" ||
++        sec === "middleleft" ||
++        sec === "middleright" ||
++        sec === "middlemiddle" ||
++        sec === "bottommiddle";
++    const isLeft = (sec = getSection()) => sec.endsWith("left");
++    const isRight = (sec = getSection()) => sec.endsWith("right");
++    const isTop = (sec = getSection()) => sec.startsWith("top");
++    const isBottom = (sec = getSection()) => sec.startsWith("bottom");
++
++    const getSectionFromCoords = (x, y) => {
++        const { width: initialWidth, height: initialHeight } = cropSizeRef.current;
++        if (!initialWidth || !initialHeight) return "middlemiddle";
++        const xClamped = Math.max(0, Math.min(initialWidth, x));
++        const yClamped = Math.max(0, Math.min(initialHeight, y));
++        let position = "";
++        if (yClamped / initialHeight < 0.333) {
++            position += "top";
++        }
++        else if (yClamped / initialHeight < 0.667) {
++            position += "middle";
++        }
++        else {
++            position += "bottom";
++        }
++        if (xClamped / initialWidth < 0.333) {
++            position += "left";
++        }
++        else if (xClamped / initialWidth < 0.667) {
++            position += "middle";
++        }
++        else {
++            position += "right";
++        }
++        return position;
++    };
++
+     const onOverlayMove = ({ nativeEvent }) => {
+-        if (selectedFrameSection !== "") {
+-            if (isMovingSection()) {
+-                setDragOffset({
+-                    x: nativeEvent.translationX,
+-                    y: nativeEvent.translationY,
+-                });
+-            }
+-            else {
+-                const { x, y } = getTargetCropFrameBounds(nativeEvent);
+-                // Update animated size
+-                animatedCropSize.width.setValue(cropSize.width + x);
+-                animatedCropSize.height.setValue(cropSize.height + y);
+-                // Update animated position for left/top handles
+-                let positionOffsetX = 0;
+-                let positionOffsetY = 0;
+-                if (isLeft) {
+-                    positionOffsetX = -x; // Move opposite to width change
+-                }
+-                if (isTop) {
+-                    positionOffsetY = -y; // Move opposite to height change
+-                }
+-                animatedPosition.x.setValue(positionOffsetX);
+-                animatedPosition.y.setValue(positionOffsetY);
+-            }
++        let sec = selectedSectionRef.current;
++        if (!sec) {
++            sec = getSectionFromCoords(nativeEvent.x, nativeEvent.y);
++            selectedSectionRef.current = sec;
++            setSelectedFrameSection(sec);
++        }
++
++        if (isMovingSection(sec)) {
++            animatedPosition.x.setValue(nativeEvent.translationX);
++            animatedPosition.y.setValue(nativeEvent.translationY);
+         }
+         else {
+-            const { x, y } = nativeEvent;
+-            const { width: initialWidth, height: initialHeight } = cropSize;
+-            let position = "";
+-            if (y / initialHeight < 0.333) {
+-                position = position + "top";
+-            }
+-            else if (y / initialHeight < 0.667) {
+-                position = position + "middle";
+-            }
+-            else {
+-                position = position + "bottom";
+-            }
+-            if (x / initialWidth < 0.333) {
+-                position = position + "left";
+-            }
+-            else if (x / initialWidth < 0.667) {
+-                position = position + "middle";
+-            }
+-            else {
+-                position = position + "right";
+-            }
+-            setSelectedFrameSection(position);
++            const { x, y } = getTargetCropFrameBounds(nativeEvent, sec);
++            animatedCropSize.width.setValue(cropSizeRef.current.width + x);
++            animatedCropSize.height.setValue(cropSizeRef.current.height + y);
++            let positionOffsetX = 0;
++            let positionOffsetY = 0;
++            if (isLeft(sec)) {
++                positionOffsetX = -x;
++            }
++            if (isTop(sec)) {
++                positionOffsetY = -y;
++            }
++            animatedPosition.x.setValue(positionOffsetX);
++            animatedPosition.y.setValue(positionOffsetY);
+         }
+     };
+-    const getTargetCropFrameBounds = ({ translationX, translationY, }) => {
++
++    const getTargetCropFrameBounds = ({ translationX, translationY }, sec = getSection()) => {
+         let x = 0;
+         let y = 0;
++        const left = isLeft(sec);
++        const right = isRight(sec);
++        const top = isTop(sec);
++        const bottom = isBottom(sec);
++
+         if (dynamicCrop) {
+-            // For dynamic crop, allow independent width and height adjustment
+-            if (isLeft || isRight) {
+-                x = (isLeft ? -1 : 1) * translationX;
++            if (left || right) {
++                x = (left ? -1 : 1) * translationX;
+             }
+-            if (isTop || isBottom) {
+-                y = (isTop ? -1 : 1) * translationY;
++            if (top || bottom) {
++                y = (top ? -1 : 1) * translationY;
+             }
+-            // For corner handles, allow both directions
+-            if ((isLeft || isRight) && (isTop || isBottom)) {
+-                x = (isLeft ? -1 : 1) * translationX;
+-                y = (isTop ? -1 : 1) * translationY;
++            if ((left || right) && (top || bottom)) {
++                x = (left ? -1 : 1) * translationX;
++                y = (top ? -1 : 1) * translationY;
+             }
+         }
+         else {
+-            // Fixed aspect ratio logic - improved corner handling
+-            const isCorner = (isLeft || isRight) && (isTop || isBottom);
++            const isCorner = (left || right) && (top || bottom);
+             if (isCorner) {
+-                // For corners, use the larger translation to maintain aspect ratio
+                 const absX = Math.abs(translationX);
+                 const absY = Math.abs(translationY);
+                 if (absX > absY) {
+-                    x = (isLeft ? -1 : 1) * translationX;
++                    x = (left ? -1 : 1) * translationX;
+                     y = x / fixedAspectRatio;
+                 }
+                 else {
+-                    y = (isTop ? -1 : 1) * translationY;
++                    y = (top ? -1 : 1) * translationY;
+                     x = y * fixedAspectRatio;
+                 }
+             }
+-            else if (isLeft || isRight) {
+-                // Side edges
+-                x = (isLeft ? -1 : 1) * translationX;
++            else if (left || right) {
++                x = (left ? -1 : 1) * translationX;
+                 y = x / fixedAspectRatio;
+             }
+-            else if (isTop || isBottom) {
+-                // Top/bottom edges
+-                y = (isTop ? -1 : 1) * translationY;
++            else if (top || bottom) {
++                y = (top ? -1 : 1) * translationY;
+                 x = y * fixedAspectRatio;
+             }
+         }
+         return { x, y };
+     };
++
+     const onOverlayRelease = (nativeEvent) => {
+-        if (isMovingSection()) {
+-            let newX = accumulatedPan.x + dragOffset.x;
+-            let newY = accumulatedPan.y + dragOffset.y;
+-            // Clamp to bounds
+-            if (newX <= imageBounds.x) {
+-                newX = imageBounds.x;
+-            }
+-            else if (newX + cropSize.width > imageBounds.width + imageBounds.x) {
+-                newX = imageBounds.x + imageBounds.width - cropSize.width;
+-            }
+-            if (newY <= imageBounds.y) {
+-                newY = imageBounds.y;
+-            }
+-            else if (newY + cropSize.height > imageBounds.height + imageBounds.y) {
+-                newY = imageBounds.y + imageBounds.height - cropSize.height;
++        const sec = getSection();
++        const curCropSize = cropSizeRef.current;
++        const curPan = accumulatedPanRef.current;
++        const curBounds = imageBoundsRef.current;
++
++        if (isMovingSection(sec)) {
++            const transX = nativeEvent.translationX || 0;
++            const transY = nativeEvent.translationY || 0;
++            let newX = curPan.x + transX;
++            let newY = curPan.y + transY;
++            if (newX <= curBounds.x) {
++                newX = curBounds.x;
++            }
++            else if (newX + curCropSize.width > curBounds.width + curBounds.x) {
++                newX = curBounds.x + curBounds.width - curCropSize.width;
++            }
++            if (newY <= curBounds.y) {
++                newY = curBounds.y;
++            }
++            else if (newY + curCropSize.height > curBounds.height + curBounds.y) {
++                newY = curBounds.y + curBounds.height - curCropSize.height;
+             }
+             setAccumulatedPan({ x: newX, y: newY });
+-            setDragOffset({ x: 0, y: 0 });
+         }
+         else {
+-            checkResizeBounds(nativeEvent);
++            checkResizeBounds(nativeEvent, sec);
+         }
++        animatedPosition.x.setValue(0);
++        animatedPosition.y.setValue(0);
++        selectedSectionRef.current = "";
+         setSelectedFrameSection("");
+     };
+-    const onHandlerStateChange = ({ nativeEvent, }) => {
+-        if (nativeEvent.state === State.BEGAN)
++
++    const onHandlerStateChange = ({ nativeEvent }) => {
++        if (nativeEvent.state === State.BEGAN) {
++            isDraggingRef.current = true;
+             setIsDragging(true);
+-        if (nativeEvent.state === State.END) {
++            const initialSection = getSectionFromCoords(nativeEvent.x, nativeEvent.y);
++            selectedSectionRef.current = initialSection;
++            setSelectedFrameSection(initialSection);
++        }
++        if (nativeEvent.state === State.END || nativeEvent.state === State.CANCELLED || nativeEvent.state === State.FAILED) {
+             onOverlayRelease(nativeEvent);
++            isDraggingRef.current = false;
+             setIsDragging(false);
+         }
+     };
++
+     const checkCropBounds = ({ translationX, translationY }) => {
+         let accDx = accumulatedPan.x + translationX;
+         if (accDx <= imageBounds.x) {
+@@ -226,172 +269,158 @@ const ImageCropOverlay = () => {
+         }
+         setAccumulatedPan({ x: accDx, y: accDy });
+     };
+-    const checkResizeBounds = ({ translationX, translationY }) => {
+-        let { width: maxWidth, height: maxHeight } = imageBounds;
++
++    const checkResizeBounds = ({ translationX, translationY }, sec = getSection()) => {
++        const curCropSize = cropSizeRef.current;
++        const curPan = accumulatedPanRef.current;
++        const curBounds = imageBoundsRef.current;
++        let { width: maxWidth, height: maxHeight } = curBounds;
+         const { width: minWidth, height: minHeight } = minimumCropDimensions;
++        const left = isLeft(sec);
++        const top = isTop(sec);
++
+         if (dynamicCrop) {
+-            // For dynamic crop, handle width and height independently
+-            const { x, y } = getTargetCropFrameBounds({ translationX, translationY });
+-            // Calculate new dimensions
+-            let newWidth = cropSize.width + x;
+-            let newHeight = cropSize.height + y;
+-            // Calculate new position - account for current animated offset
+-            let newX = accumulatedPan.x;
+-            let newY = accumulatedPan.y;
+-            // For left edges/corners: when width increases, position stays same
+-            // When width decreases, position moves right by the difference
+-            if (isLeft) {
+-                newX = accumulatedPan.x - x; // Move opposite to width change
+-            }
+-            // For top edges/corners: when height increases, position stays same
+-            // When height decreases, position moves down by the difference
+-            if (isTop) {
+-                newY = accumulatedPan.y - y; // Move opposite to height change
+-            }
+-            // Apply minimum size constraints first
++            const { x, y } = getTargetCropFrameBounds({ translationX, translationY }, sec);
++            let newWidth = curCropSize.width + x;
++            let newHeight = curCropSize.height + y;
++            let newX = curPan.x;
++            let newY = curPan.y;
++            if (left) {
++                newX = curPan.x - x;
++            }
++            if (top) {
++                newY = curPan.y - y;
++            }
+             if (newWidth < minWidth) {
+-                if (isLeft) {
+-                    // If we're dragging left and hit minimum, adjust position back
++                if (left) {
+                     newX = newX + (newWidth - minWidth);
+                 }
+                 newWidth = minWidth;
+             }
+             if (newHeight < minHeight) {
+-                if (isTop) {
+-                    // If we're dragging top and hit minimum, adjust position back
++                if (top) {
+                     newY = newY + (newHeight - minHeight);
+                 }
+                 newHeight = minHeight;
+             }
+-            // Apply boundary constraints
+-            // Left boundary
+-            if (newX < imageBounds.x) {
+-                if (isLeft) {
+-                    newWidth = newWidth - (imageBounds.x - newX);
++            if (newX < curBounds.x) {
++                if (left) {
++                    newWidth = newWidth - (curBounds.x - newX);
+                 }
+-                newX = imageBounds.x;
++                newX = curBounds.x;
+             }
+-            // Top boundary
+-            if (newY < imageBounds.y) {
+-                if (isTop) {
+-                    newHeight = newHeight - (imageBounds.y - newY);
++            if (newY < curBounds.y) {
++                if (top) {
++                    newHeight = newHeight - (curBounds.y - newY);
+                 }
+-                newY = imageBounds.y;
++                newY = curBounds.y;
+             }
+-            // Right boundary
+-            if (newX + newWidth > imageBounds.x + imageBounds.width) {
+-                newWidth = imageBounds.x + imageBounds.width - newX;
++            if (newX + newWidth > curBounds.x + curBounds.width) {
++                newWidth = curBounds.x + curBounds.width - newX;
+             }
+-            // Bottom boundary
+-            if (newY + newHeight > imageBounds.y + imageBounds.height) {
+-                newHeight = imageBounds.y + imageBounds.height - newY;
++            if (newY + newHeight > curBounds.y + curBounds.height) {
++                newHeight = curBounds.y + curBounds.height - newY;
+             }
+-            // Update state and reset animated values smoothly
+             setCropSize({ height: newHeight, width: newWidth });
+             setAccumulatedPan({ x: newX, y: newY });
+         }
+         else {
+-            // Fixed aspect ratio logic
+             const height = maxWidth / fixedAspectRatio;
+             if (maxHeight > height)
+                 maxHeight = height;
+             const width = maxHeight * fixedAspectRatio;
+             if (maxWidth > width)
+                 maxWidth = width;
+-            const { x, y } = getTargetCropFrameBounds({ translationX, translationY });
+-            let newWidth = cropSize.width + x;
+-            let newHeight = cropSize.height + y;
+-            // Maintain aspect ratio
++            const { x, y } = getTargetCropFrameBounds({ translationX, translationY }, sec);
++            let newWidth = curCropSize.width + x;
++            let newHeight = curCropSize.height + y;
+             if (Math.abs(x) > Math.abs(y)) {
+                 newHeight = newWidth / fixedAspectRatio;
+             }
+             else {
+                 newWidth = newHeight * fixedAspectRatio;
+             }
+-            // Calculate position adjustments
+-            let newX = accumulatedPan.x;
+-            let newY = accumulatedPan.y;
+-            if (isLeft) {
+-                newX = accumulatedPan.x - (newWidth - cropSize.width);
++            let newX = curPan.x;
++            let newY = curPan.y;
++            if (left) {
++                newX = curPan.x - (newWidth - curCropSize.width);
+             }
+-            if (isTop) {
+-                newY = accumulatedPan.y - (newHeight - cropSize.height);
++            if (top) {
++                newY = curPan.y - (newHeight - curCropSize.height);
+             }
+-            // Apply size constraints
+             if (newWidth > maxWidth) {
+                 const ratio = maxWidth / newWidth;
+                 newWidth = maxWidth;
+                 newHeight = newHeight * ratio;
+-                if (isLeft) {
+-                    newX = accumulatedPan.x - (newWidth - cropSize.width);
++                if (left) {
++                    newX = curPan.x - (newWidth - curCropSize.width);
+                 }
+-                if (isTop) {
+-                    newY = accumulatedPan.y - (newHeight - cropSize.height);
++                if (top) {
++                    newY = curPan.y - (newHeight - curCropSize.height);
+                 }
+             }
+             if (newHeight > maxHeight) {
+                 const ratio = maxHeight / newHeight;
+                 newHeight = maxHeight;
+                 newWidth = newWidth * ratio;
+-                if (isLeft) {
+-                    newX = accumulatedPan.x - (newWidth - cropSize.width);
++                if (left) {
++                    newX = curPan.x - (newWidth - curCropSize.width);
+                 }
+-                if (isTop) {
+-                    newY = accumulatedPan.y - (newHeight - cropSize.height);
++                if (top) {
++                    newY = curPan.y - (newHeight - curCropSize.height);
+                 }
+             }
+             if (newWidth < minWidth) {
+                 const ratio = minWidth / newWidth;
+                 newWidth = minWidth;
+                 newHeight = newHeight * ratio;
+-                if (isLeft) {
+-                    newX = accumulatedPan.x - (newWidth - cropSize.width);
++                if (left) {
++                    newX = curPan.x - (newWidth - curCropSize.width);
+                 }
+-                if (isTop) {
+-                    newY = accumulatedPan.y - (newHeight - cropSize.height);
++                if (top) {
++                    newY = curPan.y - (newHeight - curCropSize.height);
+                 }
+             }
+             if (newHeight < minHeight) {
+                 const ratio = minHeight / newHeight;
+                 newHeight = minHeight;
+                 newWidth = newWidth * ratio;
+-                if (isLeft) {
+-                    newX = accumulatedPan.x - (newWidth - cropSize.width);
++                if (left) {
++                    newX = curPan.x - (newWidth - curCropSize.width);
+                 }
+-                if (isTop) {
+-                    newY = accumulatedPan.y - (newHeight - cropSize.height);
++                if (top) {
++                    newY = curPan.y - (newHeight - curCropSize.height);
+                 }
+             }
+-            // Apply boundary constraints
+-            if (newX < imageBounds.x) {
+-                const diff = imageBounds.x - newX;
+-                newX = imageBounds.x;
+-                if (isLeft) {
++            if (newX < curBounds.x) {
++                const diff = curBounds.x - newX;
++                newX = curBounds.x;
++                if (left) {
+                     newWidth = newWidth - diff;
+                     newHeight = newWidth / fixedAspectRatio;
+                 }
+             }
+-            if (newY < imageBounds.y) {
+-                const diff = imageBounds.y - newY;
+-                newY = imageBounds.y;
+-                if (isTop) {
++            if (newY < curBounds.y) {
++                const diff = curBounds.y - newY;
++                newY = curBounds.y;
++                if (top) {
+                     newHeight = newHeight - diff;
+                     newWidth = newHeight * fixedAspectRatio;
+                 }
+             }
+-            if (newX + newWidth > imageBounds.x + imageBounds.width) {
+-                newWidth = imageBounds.x + imageBounds.width - newX;
++            if (newX + newWidth > curBounds.x + curBounds.width) {
++                newWidth = curBounds.x + curBounds.width - newX;
+                 newHeight = newWidth / fixedAspectRatio;
+             }
+-            if (newY + newHeight > imageBounds.y + imageBounds.height) {
+-                newHeight = imageBounds.y + imageBounds.height - newY;
++            if (newY + newHeight > curBounds.y + curBounds.height) {
++                newHeight = curBounds.y + curBounds.height - newY;
+                 newWidth = newHeight * fixedAspectRatio;
+             }
+-            // Update state and reset animated values smoothly
+             setCropSize({ height: newHeight, width: newWidth });
+             setAccumulatedPan({ x: newX, y: newY });
+         }
+     };
++
+     return (_jsx(View, { style: styles.container, children: _jsx(GestureHandlerRootView, { style: { flex: 1 }, children: _jsx(PanGestureHandler, { onGestureEvent: onOverlayMove, onHandlerStateChange: (e) => onHandlerStateChange(e), children: _jsx(Animated.View, { style: [
+                         styles.overlay,
+                         {
+@@ -402,10 +431,10 @@ const ImageCropOverlay = () => {
+                         {
+                             transform: [
+                                 {
+-                                    translateX: Animated.add(accumulatedPan.x + dragOffset.x, animatedPosition.x),
++                                    translateX: Animated.add(panPosition.x, animatedPosition.x),
+                                 },
+                                 {
+-                                    translateY: Animated.add(accumulatedPan.y + dragOffset.y, animatedPosition.y),
++                                    translateY: Animated.add(panPosition.y, animatedPosition.y),
+                                 },
+                             ],
+                         },

@@ -13,7 +13,7 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useTranslation } from 'react-i18next';
-import { Mail, Lock, ChevronLeft, Eye, EyeOff, KeyRound, CheckCircle2 } from '@tamagui/lucide-icons';
+import { Mail, Lock, ChevronLeft, Eye, EyeOff, KeyRound, CheckCircle2, Shield } from '@tamagui/lucide-icons';
 
 import { supabase } from '../src/lib/supabase';
 import { useVeyraTheme } from '../src/theme/useVeyraTheme';
@@ -136,8 +136,8 @@ export default function ForgotPasswordScreen() {
 
     return (
         <SafeAreaView style={[styles.screen, { backgroundColor: colors.bg }]} edges={['top', 'right', 'left']}>
-            {/* Header */}
-            <View style={[styles.header, { borderBottomColor: colors.borderSubtle }]}>
+            {/* Header minimalista */}
+            <View style={styles.header}>
                 <VeyraIconButton
                     variant="ghost"
                     size="sm"
@@ -151,7 +151,6 @@ export default function ForgotPasswordScreen() {
                         }
                     }}
                 />
-                <View style={{ flex: 1 }} />
             </View>
 
             <KeyboardAvoidingView
@@ -164,8 +163,17 @@ export default function ForgotPasswordScreen() {
                     showsVerticalScrollIndicator={false}
                 >
                     <View style={styles.formContainer}>
-                        {/* Title group */}
+                        {/* Title group con branding de Veyra */}
                         <View style={styles.titleGroup}>
+                            <View style={styles.brandRow}>
+                                <View style={[styles.brandBadge, { backgroundColor: `${accent.primary}18`, borderColor: `${accent.primary}35` }]}>
+                                    <Shield size={12} color={accent.primary} />
+                                    <Text style={[styles.brandBadgeText, { color: accent.primary }]}>
+                                        VEYRA
+                                    </Text>
+                                </View>
+                            </View>
+
                             <Text style={[styles.heading, { color: colors.textPrimary, fontSize: typography.h1.fontSize }]}>
                                 {step === 'request' ? t('auth.forgot_password_title') : t('auth.otp_step_title')}
                             </Text>
@@ -430,7 +438,7 @@ export default function ForgotPasswordScreen() {
                                 onPress={() => router.replace('/login')}
                                 activeOpacity={0.7}
                             >
-                                <Text style={[styles.footerLink, { color: colors.textSecondary, fontSize: typography.caption.fontSize }]}>
+                                <Text style={[styles.footerLink, { color: accent.primary, fontSize: typography.caption.fontSize }]}>
                                     {t('auth.go_to_login')}
                                 </Text>
                             </TouchableOpacity>
@@ -449,19 +457,37 @@ const styles = StyleSheet.create({
     header: {
         paddingHorizontal: 16,
         paddingVertical: 8,
-        borderBottomWidth: 1,
     },
     scrollContent: {
         flexGrow: 1,
         justifyContent: 'space-between',
         paddingHorizontal: 24,
-        paddingTop: 24,
+        paddingTop: 12,
     },
     formContainer: {
         gap: 24,
     },
     titleGroup: {
         gap: 8,
+    },
+    brandRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginBottom: 4,
+    },
+    brandBadge: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+        paddingHorizontal: 10,
+        paddingVertical: 5,
+        borderRadius: 20,
+        borderWidth: 1,
+    },
+    brandBadgeText: {
+        fontSize: 11,
+        fontWeight: '800',
+        letterSpacing: 1.2,
     },
     heading: {
         fontWeight: '900',

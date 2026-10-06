@@ -35,14 +35,13 @@ import Animated, {
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 
 const smoothLayoutAnimation = {
-    duration: 350,
+    duration: 250,
     create: {
         type: LayoutAnimation.Types.easeInEaseOut,
         property: LayoutAnimation.Properties.opacity,
     },
     update: {
-        type: LayoutAnimation.Types.spring,
-        springDamping: 0.82,
+        type: LayoutAnimation.Types.easeInEaseOut,
     },
     delete: {
         type: LayoutAnimation.Types.easeInEaseOut,
@@ -77,6 +76,7 @@ import {
     ChevronLeft,
     MoreVertical,
     Edit3,
+    Users,
 } from '@tamagui/lucide-icons';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { format, isToday, isYesterday, isThisWeek, isThisMonth, isThisYear } from 'date-fns';
@@ -85,6 +85,7 @@ import { es, enUS } from 'date-fns/locale';
 import { useStore } from '../../src/store/useStore';
 import { useNotesStore } from '../../src/store/useNotesStore';
 import { useFoldersStore } from '../../src/store/useFoldersStore';
+import { useSelectionStore } from '../../src/store/useSelectionStore';
 import { useVeyraTheme } from '../../src/theme/useVeyraTheme';
 import { VeyraSurface } from '../../src/components/ui/VeyraSurface';
 import { VeyraButton } from '../../src/components/ui/VeyraButton';
@@ -92,13 +93,36 @@ import { VeyraIconButton } from '../../src/components/ui/VeyraIconButton';
 import { VeyraDivider } from '../../src/components/ui/VeyraDivider';
 import { Note, Folder } from '../../src/types/db';
 import { extractPlainTextFromPages } from '../../src/utils/pageUtils';
-import { FolderIconRenderer } from '../../src/components/notes/FolderIconRenderer';
+import { FolderIconRenderer, FOLDER_COLORS } from '../../src/components/notes/FolderIconRenderer';
 import { FolderModal } from '../../src/components/notes/FolderModal';
 import { MoveToFolderModal } from '../../src/components/notes/MoveToFolderModal';
 import { FolderCardGrid } from '../../src/components/notes/FolderCardGrid';
+import { FolderBreadcrumb } from '../../src/components/notes/FolderBreadcrumb';
 import { useCardTransitionStore, CardRect } from '../../src/store/cardTransitionStore';
 import { TopBar } from '../../src/components/TopBar';
 import { BottomTabBar } from '../../src/components/layout/BottomTabBar';
+import { ShareModal } from '../../src/components/collaboration/ShareModal';
+import { CollaboratorsAvatars } from '../../src/components/collaboration/CollaboratorsAvatars';
+
+/**
+ * Normaliza cualquier formato de color o nombre ('purple', 'blue') a HEX de 6 caracteres seguro.
+ */
+function normalizeHex(colorStr?: string | null, fallback = '#8B5CF6'): string {
+    if (!colorStr || typeof colorStr !== 'string') return fallback;
+    const trimmed = colorStr.trim();
+    if (trimmed.startsWith('#')) {
+        if (trimmed.length === 4) {
+            return `#${trimmed[1]}${trimmed[1]}${trimmed[2]}${trimmed[2]}${trimmed[3]}${trimmed[3]}`;
+        }
+        if (trimmed.length === 7) return trimmed;
+        if (trimmed.length === 9) return trimmed.slice(0, 7);
+    }
+    const match = FOLDER_COLORS.find(
+        (c) => c.key.toLowerCase() === trimmed.toLowerCase() || c.color.toLowerCase() === trimmed.toLowerCase()
+    );
+    if (match) return match.color;
+    return fallback;
+}
 
 interface NoteSection {
     key: string;
@@ -417,7 +441,7 @@ const NoteItemRow = React.memo(function NoteItemRow({
                                 {/* Fila Meta: Fecha / Hora + Fijada + Carpeta + Adjuntos */}
                                 <View style={styles.noteMetaRow}>
                                     <Text style={[styles.noteDate, { color: colors.textMuted }]}>
-                                        {formatNoteDate(item.updated_at_ms || item.created_at_ms)}
+                                        {formatNoteDate(item.created_at_ms || item.updated_at_ms)}
                                     </Text>
 
                                     {item.is_pinned === 1 && sectionKey !== 'pinned' && (
@@ -450,6 +474,26 @@ const NoteItemRow = React.memo(function NoteItemRow({
                                                 numberOfLines={1}
                                             >
                                                 {folderInfo.name}
+                                            </Text>
+                                        </View>
+                                    )}
+
+                                    {(item.is_shared === 1 || item.shared_owner_id) && (
+                                        <View
+                                            style={[
+                                                styles.folderInlineBadge,
+                                                {
+                                                    backgroundColor: `${accent.primary}${isDark ? '25' : '15'}`,
+                                                    borderColor: `${accent.primary}30`,
+                                                },
+                                            ]}
+                                        >
+                                            <Users size={10} color={accent.primary as any} strokeWidth={2} />
+                                            <Text
+                                                style={[styles.folderInlineText, { color: accent.primary }]}
+                                                numberOfLines={1}
+                                            >
+                                                {language === 'es' ? 'Compartida' : 'Shared'}
                                             </Text>
                                         </View>
                                     )}
@@ -527,6 +571,7 @@ export default function NotesScreen({ hideBars = false }: { hideBars?: boolean }
         }
     }, [hideBars, router]);
     const language = useStore(state => state.language);
+    const triggerSync = useStore(state => state.triggerSync);
     const notes = useNotesStore(state => state.notes);
     const loadNotes = useNotesStore(state => state.loadNotes);
     const deleteNote = useNotesStore(state => state.deleteNote);
@@ -547,6 +592,13 @@ export default function NotesScreen({ hideBars = false }: { hideBars?: boolean }
     const activeFolderId = useFoldersStore(state => state.activeFolderId);
     const setActiveFolderId = useFoldersStore(state => state.setActiveFolderId);
     const setSelectedFolderIdsStore = useFoldersStore(state => state.setSelectedFolderIds);
+    const folderStack = useFoldersStore(state => state.folderStack);
+    const pushFolder = useFoldersStore(state => state.pushFolder);
+    const popFolder = useFoldersStore(state => state.popFolder);
+    const resetFolderStack = useFoldersStore(state => state.resetFolderStack);
+    const setFolderStack = useFoldersStore(state => state.setFolderStack);
+
+    const [modalParentFolder, setModalParentFolder] = useState<Folder | null>(null);
 
     const insets = useSafeAreaInsets();
     const { width: windowWidth, height: windowHeight } = useWindowDimensions();
@@ -561,20 +613,20 @@ export default function NotesScreen({ hideBars = false }: { hideBars?: boolean }
     const isSelectionMode = selectedNotes.length > 0;
     const isFolderSelectionMode = selectedFolderIds.length > 0;
 
-    // Origin rect of clicked folder card for physical morphing
-    // useRef preserves the rect during close animation without triggering re-renders
+    // Origin rect of clicked folder card or pill for physical morphing
     const screenContainerRef = useRef<View>(null);
     const screenOffsetRef = useRef<{ x: number; y: number }>({ x: 0, y: insets.top + 46 });
-    const originCardRectRef = useRef<{ x: number; y: number; width: number; height: number }>({ x: 20, y: 50, width: windowWidth - 40, height: 48 });
+    const originCardRectRef = useRef<{ x: number; y: number; width: number; height: number }>({ x: 16, y: 12, width: 100, height: 34 });
+    const pillRefs = useRef<Record<string, View | null>>({});
     const [openedFolderId, setOpenedFolderId] = useState<string | null>(null);
 
     // Shared values for container and rect so worklet can read them without closures
     const svContainerW = useSharedValue(windowWidth);
     const svContainerH = useSharedValue(windowHeight);
-    const svOriginX = useSharedValue(20);
-    const svOriginY = useSharedValue(50);
-    const svOriginW = useSharedValue(windowWidth - 40);
-    const svOriginH = useSharedValue(48);
+    const svOriginX = useSharedValue(16);
+    const svOriginY = useSharedValue(12);
+    const svOriginW = useSharedValue(100);
+    const svOriginH = useSharedValue(34);
 
     // Folder options menu popover state
     const [isFolderMenuVisible, setIsFolderMenuVisible] = useState(false);
@@ -590,6 +642,7 @@ export default function NotesScreen({ hideBars = false }: { hideBars?: boolean }
     const [isFolderModalVisible, setIsFolderModalVisible] = useState(false);
     const [editingFolder, setEditingFolder] = useState<Folder | null>(null);
     const [isMoveModalVisible, setIsMoveModalVisible] = useState(false);
+    const [isFolderShareModalVisible, setIsFolderShareModalVisible] = useState(false);
 
     // Animated values with Reanimated (runs on UI thread)
     const selectionAnim = useSharedValue(0);
@@ -610,7 +663,7 @@ export default function NotesScreen({ hideBars = false }: { hideBars?: boolean }
                 width: rect.width,
                 height: rect.height,
             }
-            : { x: 20, y: 50, width: svContainerW.value - 40, height: 48 };
+            : { x: 16, y: 12, width: 100, height: 34 };
 
         // Persist the origin rect in ref (survives close animation without re-renders)
         originCardRectRef.current = initialRect;
@@ -625,15 +678,37 @@ export default function NotesScreen({ hideBars = false }: { hideBars?: boolean }
 
         setOpenedFolderId(folderId);
         setActiveFolderId(folderId);
+        const currentStack = useFoldersStore.getState().folderStack;
+        if (currentStack.length === 0) {
+            const targetFolder = folders.find(f => f.id === folderId);
+            if (targetFolder) {
+                pushFolder(targetFolder);
+            }
+        }
 
         // Defer animation start to AFTER the overlay has been painted for the first time
         requestAnimationFrame(() => {
             folderMorphProgress.value = withTiming(1, {
-                duration: 440,
+                duration: 380,
                 easing: ReanimatedEasing.bezier(0.22, 1, 0.36, 1),
             });
         });
-    }, [setActiveFolderId]);
+    }, [setActiveFolderId, folders, pushFolder]);
+
+    const handlePillPress = useCallback((folderId: string) => {
+        const pillView = pillRefs.current[folderId];
+        if (pillView) {
+            pillView.measureInWindow((x, y, width, height) => {
+                if (typeof x === 'number' && typeof y === 'number' && width > 0 && height > 0) {
+                    handleOpenFolder(folderId, { x, y, width, height });
+                } else {
+                    handleOpenFolder(folderId);
+                }
+            });
+        } else {
+            handleOpenFolder(folderId);
+        }
+    }, [handleOpenFolder]);
 
     const isClosingFolderRef = useRef(false);
 
@@ -641,12 +716,8 @@ export default function NotesScreen({ hideBars = false }: { hideBars?: boolean }
         isClosingFolderRef.current = false;
         setOpenedFolderId(null);
         setActiveFolderId('all');
-        // Reset shared values back to defaults after close
-        svOriginX.value = 20;
-        svOriginY.value = 50;
-        svOriginW.value = svContainerW.value - 40;
-        svOriginH.value = 48;
-    }, [setActiveFolderId]);
+        resetFolderStack();
+    }, [setActiveFolderId, resetFolderStack]);
 
     const handleCloseFolder = useCallback(() => {
         if (isClosingFolderRef.current) return;
@@ -664,13 +735,13 @@ export default function NotesScreen({ hideBars = false }: { hideBars?: boolean }
             finishCloseFolder();
         };
 
-        const timeoutId = setTimeout(safeFinish, 360);
+        const timeoutId = setTimeout(safeFinish, 290);
 
         folderMorphProgress.value = withTiming(
             0,
             {
-                duration: 320,
-                easing: ReanimatedEasing.bezier(0.25, 1, 0.5, 1),
+                duration: 260,
+                easing: ReanimatedEasing.bezier(0.25, 1, 0.35, 1),
             },
             () => {
                 clearTimeout(timeoutId);
@@ -678,6 +749,27 @@ export default function NotesScreen({ hideBars = false }: { hideBars?: boolean }
             }
         );
     }, [isSearching, isFolderMenuVisible, finishCloseFolder]);
+
+    const handleBackPress = useCallback(() => {
+        if (folderStack.length > 1) {
+            popFolder();
+            const prev = folderStack[folderStack.length - 2];
+            setOpenedFolderId(prev.id);
+        } else {
+            handleCloseFolder();
+        }
+    }, [folderStack, popFolder, handleCloseFolder]);
+
+    const handleBreadcrumbNavigate = useCallback((targetIndex: number) => {
+        if (targetIndex === -1) {
+            handleCloseFolder();
+        } else if (targetIndex >= 0 && targetIndex < folderStack.length - 1) {
+            const targetFolder = folderStack[targetIndex];
+            const newStack = folderStack.slice(0, targetIndex + 1);
+            setFolderStack(newStack);
+            setOpenedFolderId(targetFolder.id);
+        }
+    }, [folderStack, handleCloseFolder, setFolderStack]);
 
     useEffect(() => {
         LayoutAnimation.configureNext({
@@ -942,6 +1034,8 @@ export default function NotesScreen({ hideBars = false }: { hideBars?: boolean }
         );
     };
 
+
+
     useEffect(() => {
         const backAction = () => {
             if (isFolderSelectionMode) {
@@ -962,7 +1056,7 @@ export default function NotesScreen({ hideBars = false }: { hideBars?: boolean }
                 return true;
             }
             if (openedFolderId !== null || activeFolderId !== 'all') {
-                handleCloseFolder();
+                handleBackPress();
                 return true;
             }
             if (router.canGoBack()) {
@@ -978,7 +1072,7 @@ export default function NotesScreen({ hideBars = false }: { hideBars?: boolean }
 
         const backHandler = BackHandler.addEventListener('hardwareBackPress', backAction);
         return () => backHandler.remove();
-    }, [isFolderSelectionMode, isSelectionMode, isFolderMenuVisible, isSearching, openedFolderId, activeFolderId, handleCloseFolder]);
+    }, [isFolderSelectionMode, isSelectionMode, isFolderMenuVisible, isSearching, openedFolderId, activeFolderId, handleBackPress]);
 
     useFocusEffect(
         useCallback(() => {
@@ -1100,7 +1194,7 @@ export default function NotesScreen({ hideBars = false }: { hideBars?: boolean }
             }
 
             for (const note of unpinned) {
-                const time = note.updated_at_ms || note.created_at_ms || Date.now();
+                const time = note.created_at_ms || note.updated_at_ms || Date.now();
                 const { key, title } = getSectionInfo(time);
                 if (!sectionsMap.has(key)) {
                     sectionsMap.set(key, { key, title, data: [] });
@@ -1109,7 +1203,7 @@ export default function NotesScreen({ hideBars = false }: { hideBars?: boolean }
             }
         } else {
             for (const note of notesList) {
-                const time = note.updated_at_ms || note.created_at_ms || Date.now();
+                const time = note.created_at_ms || note.updated_at_ms || Date.now();
                 const { key, title } = getSectionInfo(time);
                 if (!sectionsMap.has(key)) {
                     sectionsMap.set(key, { key, title, data: [] });
@@ -1135,8 +1229,8 @@ export default function NotesScreen({ hideBars = false }: { hideBars?: boolean }
 
     const sortedBaseNotes = useMemo(() => {
         return [...filteredBaseNotes].sort((a, b) => {
-            const timeA = a.updated_at_ms || a.created_at_ms || 0;
-            const timeB = b.updated_at_ms || b.created_at_ms || 0;
+            const timeA = a.created_at_ms || a.updated_at_ms || 0;
+            const timeB = b.created_at_ms || b.updated_at_ms || 0;
             return timeB - timeA;
         });
     }, [filteredBaseNotes]);
@@ -1167,8 +1261,8 @@ export default function NotesScreen({ hideBars = false }: { hideBars?: boolean }
 
     const sortedFolderNotes = useMemo(() => {
         return [...filteredFolderNotes].sort((a, b) => {
-            const timeA = a.updated_at_ms || a.created_at_ms || 0;
-            const timeB = b.updated_at_ms || b.created_at_ms || 0;
+            const timeA = a.created_at_ms || a.updated_at_ms || 0;
+            const timeB = b.created_at_ms || b.updated_at_ms || 0;
             return timeB - timeA;
         });
     }, [filteredFolderNotes]);
@@ -1189,16 +1283,169 @@ export default function NotesScreen({ hideBars = false }: { hideBars?: boolean }
         }
     };
 
+    // Sincronizar selección de notas y carpetas con el dock morpheado
+    useEffect(() => {
+        if (selectedNotes.length > 0) {
+            useSelectionStore.getState().setSelection({
+                title: `${selectedNotes.length} ${language === 'es' ? (selectedNotes.length === 1 ? 'seleccionada' : 'seleccionadas') : 'selected'}`,
+                isAllSelected: isAllFilteredSelected,
+                selectAllText: isAllFilteredSelected
+                    ? (language === 'es' ? 'Deseleccionar' : 'Deselect')
+                    : (language === 'es' ? 'Todas' : 'All'),
+                onToggleSelectAll: handleToggleSelectAll,
+                onClose: () => setSelectedNotes([]),
+                actions: [
+                    {
+                        id: 'pin',
+                        label: isAllPinned
+                            ? (language === 'es' ? 'Desfijar' : 'Unpin')
+                            : (language === 'es' ? 'Fijar' : 'Pin'),
+                        icon: (color) => isAllPinned
+                            ? <PinOff size={16} color={isDark ? '#FBBF24' : '#F59E0B'} strokeWidth={2.4} />
+                            : <Pin size={16} color={isDark ? '#FBBF24' : '#F59E0B'} strokeWidth={2.4} />,
+                        onPress: handleTogglePinSelected,
+                        color: isDark ? '#FBBF24' : '#F59E0B',
+                        bg: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)',
+                    },
+                    {
+                        id: 'move',
+                        label: language === 'es' ? 'Mover' : 'Move',
+                        icon: (color) => <FolderInput size={16} color={accent.primary} strokeWidth={2.4} />,
+                        onPress: () => setIsMoveModalVisible(true),
+                        color: accent.primary,
+                        bg: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)',
+                    },
+                    {
+                        id: 'duplicate',
+                        label: language === 'es' ? 'Duplicar' : 'Duplicate',
+                        icon: (color) => <Copy size={16} color={color} strokeWidth={2.4} />,
+                        onPress: handleDuplicateSelected,
+                        color: colors.textPrimary,
+                        bg: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)',
+                    },
+                    {
+                        id: 'share',
+                        label: language === 'es' ? 'Compartir' : 'Share',
+                        icon: (color) => <Share2 size={16} color={colors.textPrimary} strokeWidth={2.4} />,
+                        onPress: handleShareSelected,
+                        color: colors.textPrimary,
+                        bg: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)',
+                    },
+                    {
+                        id: 'delete',
+                        label: language === 'es' ? 'Eliminar' : 'Delete',
+                        icon: (color) => <Trash2 size={16} color={isDark ? '#FB7185' : '#E11D48'} strokeWidth={2.4} />,
+                        onPress: handleDeleteSelected,
+                        color: isDark ? '#FB7185' : '#E11D48',
+                        bg: isDark ? 'rgba(239, 68, 68, 0.15)' : 'rgba(239, 68, 68, 0.1)',
+                    },
+                ],
+            });
+        } else if (selectedFolderIds.length > 0) {
+            const folderActions: any[] = [];
+            if (selectedFolderIds.length === 1) {
+                folderActions.push({
+                    id: 'edit',
+                    label: language === 'es' ? 'Editar' : 'Edit',
+                    icon: (color: string) => <Edit3 size={16} color={colors.textPrimary} strokeWidth={2.4} />,
+                    onPress: handleEditSelectedFolder,
+                    color: colors.textPrimary,
+                    bg: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)',
+                });
+            }
+            folderActions.push({
+                id: 'pin',
+                label: isAllSelectedFoldersPinned
+                    ? (language === 'es' ? 'Desfijar' : 'Unpin')
+                    : (language === 'es' ? 'Fijar' : 'Pin'),
+                icon: (color: string) => isAllSelectedFoldersPinned
+                    ? <PinOff size={16} color={isDark ? '#FBBF24' : '#F59E0B'} strokeWidth={2.4} />
+                    : <Pin size={16} color={isDark ? '#FBBF24' : '#F59E0B'} strokeWidth={2.4} />,
+                onPress: handleTogglePinSelectedFolders,
+                color: isDark ? '#FBBF24' : '#F59E0B',
+                bg: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)',
+            });
+            folderActions.push({
+                id: 'delete',
+                label: language === 'es' ? 'Eliminar' : 'Delete',
+                icon: (color: string) => <Trash2 size={16} color={isDark ? '#FB7185' : '#E11D48'} strokeWidth={2.4} />,
+                onPress: handleDeleteSelectedFolders,
+                color: isDark ? '#FB7185' : '#E11D48',
+                bg: isDark ? 'rgba(239, 68, 68, 0.15)' : 'rgba(239, 68, 68, 0.1)',
+            });
+
+            useSelectionStore.getState().setSelection({
+                title: `${selectedFolderIds.length} ${language === 'es' ? (selectedFolderIds.length === 1 ? 'carpeta' : 'carpetas') : (selectedFolderIds.length === 1 ? 'folder' : 'folders')}`,
+                isAllSelected: isAllFoldersSelected,
+                selectAllText: isAllFoldersSelected
+                    ? (language === 'es' ? 'Deseleccionar' : 'Deselect')
+                    : (language === 'es' ? 'Todas' : 'All'),
+                onToggleSelectAll: handleToggleSelectAllFolders,
+                onClose: () => setSelectedFolderIds([]),
+                actions: folderActions,
+            });
+        } else {
+            useSelectionStore.getState().clearSelection();
+        }
+    }, [
+        selectedNotes,
+        selectedFolderIds,
+        isAllFilteredSelected,
+        isAllFoldersSelected,
+        isAllPinned,
+        isAllSelectedFoldersPinned,
+        language,
+        isDark,
+        accent.primary,
+        colors.textPrimary,
+    ]);
+
+    // Compartir notas desde el menú contextual
+    const handleShareNotesMenu = async () => {
+        const notesToShare = isFolderViewActive
+            ? filteredFolderNotes
+            : filteredBaseNotes;
+
+        if (notesToShare.length === 0) {
+            Alert.alert(
+                language === 'es' ? 'Sin notas' : 'No notes',
+                language === 'es' ? 'No hay notas para compartir.' : 'No notes to share.'
+            );
+            return;
+        }
+
+        let shareText = '';
+        if (notesToShare.length === 1) {
+            const n = notesToShare[0];
+            const plain = extractPlainTextFromPages(n.content);
+            shareText = `${n.title || (language === 'es' ? 'Sin título' : 'Untitled')}\n\n${plain}`;
+        } else {
+            shareText = notesToShare
+                .map((n, idx) => {
+                    const plain = extractPlainTextFromPages(n.content);
+                    return `--- ${n.title || (language === 'es' ? `Nota ${idx + 1}` : `Note ${idx + 1}`)} ---\n${plain}`;
+                })
+                .join('\n\n');
+        }
+
+        try {
+            await Share.share({
+                title: language === 'es' ? 'Notas de Veyra' : 'Veyra Notes',
+                message: shareText,
+            });
+        } catch (e) {}
+    };
+
     // Color de la carpeta activa actual
     const activeFolderColor = useMemo(() => {
         if (currentTargetFolderId && currentTargetFolderId !== 'all' && currentTargetFolderId !== 'pinned' && currentTargetFolderId !== 'unassigned') {
             const f = foldersMap.get(currentTargetFolderId);
-            return f?.color || '#8B5CF6';
+            return normalizeHex(f?.color, '#8B5CF6');
         }
         if (currentTargetFolderId === 'pinned') {
             return isDark ? '#FBBF24' : '#F59E0B';
         }
-        return accent.primary;
+        return normalizeHex(accent.primary, '#8B5CF6');
     }, [currentTargetFolderId, foldersMap, accent.primary, isDark]);
 
     // 1. Render de sección para la Pantalla Base (Siempre estilo neutro, sin teñir)
@@ -1326,20 +1573,65 @@ export default function NotesScreen({ hideBars = false }: { hideBars?: boolean }
         );
     };
 
-    // Conteo de notas por carpeta
+    // Conteo de notas por carpeta (recursivo: incluye notas de subcarpetas descendientes)
     const noteCountsMap = useMemo(() => {
-        const counts: Record<string, number> = {};
+        const directCounts: Record<string, number> = {};
         for (const n of notes) {
             if (n.folder_id) {
-                counts[n.folder_id] = (counts[n.folder_id] || 0) + 1;
+                directCounts[n.folder_id] = (directCounts[n.folder_id] || 0) + 1;
+            }
+        }
+
+        const totalCounts: Record<string, number> = {};
+        for (const f of folders) {
+            let sum = directCounts[f.id] || 0;
+            let queue = [f.id];
+            while (queue.length > 0) {
+                const curr = queue.shift()!;
+                const children = folders.filter(c => c.parent_id === curr);
+                for (const child of children) {
+                    sum += (directCounts[child.id] || 0);
+                    queue.push(child.id);
+                }
+            }
+            totalCounts[f.id] = sum;
+        }
+        return totalCounts;
+    }, [folders, notes]);
+
+    // Conteo de subcarpetas directas por carpeta
+    const subfolderCountsMap = useMemo(() => {
+        const counts: Record<string, number> = {};
+        for (const f of folders) {
+            if (f.parent_id) {
+                counts[f.parent_id] = (counts[f.parent_id] || 0) + 1;
             }
         }
         return counts;
-    }, [notes]);
+    }, [folders]);
+
+    // Carpetas raíz para la pantalla principal
+    const rootFolders = useMemo(() => {
+        return folders.filter(f => !f.parent_id);
+    }, [folders]);
+
+    // Carpetas para la cinta horizontal superior: ordenadas con fijadas primero, luego las demás
+    const stripFolders = useMemo(() => {
+        const root = folders.filter(f => !f.parent_id);
+        const pinned = root.filter(f => f.is_pinned === 1);
+        const unpinned = root.filter(f => f.is_pinned !== 1);
+        return [...pinned, ...unpinned];
+    }, [folders]);
+
+    // Subcarpetas de la carpeta actualmente abierta
+    const currentSubfolders = useMemo(() => {
+        if (!openedFolderId) return [];
+        return folders.filter(f => f.parent_id === openedFolderId);
+    }, [folders, openedFolderId]);
 
     // Carpetas para el carrusel de Acceso Rápido (máximo 3 fijadas + la actualmente activa)
     const quickAccessFolders = useMemo(() => {
-        const pinned = folders.filter(f => f.is_pinned === 1).slice(0, 3);
+        const pinned = folders.filter(f => f.is_pinned === 1 && !f.parent_id).slice(0, 3);
         if (currentTargetFolderId !== 'all' && currentTargetFolderId !== 'pinned' && currentTargetFolderId !== 'unassigned') {
             const isAlreadyIncluded = pinned.some(f => f.id === currentTargetFolderId);
             if (!isAlreadyIncluded) {
@@ -1362,13 +1654,14 @@ export default function NotesScreen({ hideBars = false }: { hideBars?: boolean }
 
     // Header superior de la lista: Grid de carpetas colapsable solo en la vista 'all'
     const renderListHeader = () => {
-        if (isSearching || searchQuery) return null;
+        if (searchQuery.trim().length > 0) return null;
 
         return (
             <View style={styles.folderGridWrapper}>
                 <FolderCardGrid
-                    folders={folders}
+                    folders={rootFolders}
                     noteCounts={noteCountsMap}
+                    subfolderCounts={subfolderCountsMap}
                     selectedFolderIds={selectedFolderIds}
                     isSelectionMode={isFolderSelectionMode}
                     onToggleSelectFolder={handleToggleSelectFolder}
@@ -1378,10 +1671,12 @@ export default function NotesScreen({ hideBars = false }: { hideBars?: boolean }
                     }}
                     onEditFolder={(folder) => {
                         setEditingFolder(folder);
+                        setModalParentFolder(null);
                         setIsFolderModalVisible(true);
                     }}
                     onCreateFolder={() => {
                         setEditingFolder(null);
+                        setModalParentFolder(null);
                         setIsFolderModalVisible(true);
                     }}
                     onTogglePin={async (id) => {
@@ -1441,11 +1736,17 @@ export default function NotesScreen({ hideBars = false }: { hideBars?: boolean }
         const top = interpolate(folderMorphProgress.value, [0, 1], [svOriginY.value, 0]);
         const width = interpolate(folderMorphProgress.value, [0, 1], [svOriginW.value, svContainerW.value]);
         const height = interpolate(folderMorphProgress.value, [0, 1], [svOriginH.value, svContainerH.value]);
-        const borderRadius = interpolate(folderMorphProgress.value, [0, 0.8, 1], [13, 6, 0], 'clamp');
+
+        // Radio colapsado adaptativo: si es píldora (alto <= 40), radio = alto / 2; si es tarjeta, 14
+        const targetRadius = svOriginH.value <= 40 ? svOriginH.value / 2 : 14;
+        const borderRadius = interpolate(folderMorphProgress.value, [0, 0.8, 1], [targetRadius, 6, 0], 'clamp');
         const borderWidth = interpolate(folderMorphProgress.value, [0, 0.7, 1], [1, 0.5, 0], 'clamp');
-        const elevation = interpolate(folderMorphProgress.value, [0, 0.35, 1], [2, 10, 0], 'clamp');
-        const shadowOpacity = interpolate(folderMorphProgress.value, [0, 0.35, 1], [0.06, 0.2, 0], 'clamp');
-        const shadowRadius = interpolate(folderMorphProgress.value, [0, 0.35, 1], [3, 16, 0], 'clamp');
+        const elevation = interpolate(folderMorphProgress.value, [0, 0.35, 1], [0, 10, 0], 'clamp');
+        const shadowOpacity = interpolate(folderMorphProgress.value, [0, 0.35, 1], [0, 0.2, 0], 'clamp');
+        const shadowRadius = interpolate(folderMorphProgress.value, [0, 0.35, 1], [0, 16, 0], 'clamp');
+
+        // Desvanecimiento suave en el último 6% del cierre para revelar el elemento subyacente sin saltos
+        const opacity = interpolate(folderMorphProgress.value, [0, 0.06], [0, 1], 'clamp');
 
         return {
             position: 'absolute',
@@ -1459,6 +1760,7 @@ export default function NotesScreen({ hideBars = false }: { hideBars?: boolean }
             backgroundColor: morphBgColor,
             overflow: 'hidden',
             zIndex: 2000,
+            opacity,
             elevation,
             shadowColor: '#000',
             shadowOffset: { width: 0, height: 4 },
@@ -1626,165 +1928,217 @@ export default function NotesScreen({ hideBars = false }: { hideBars?: boolean }
                                 contentContainerStyle={styles.mainFiltersScrollContent}
                             >
                                 {/* 1. TODAS */}
-                                <TouchableOpacity
-                                    style={[
-                                        styles.folderChip,
-                                        {
-                                            backgroundColor: isDark ? '#262933' : '#E2E8F0',
-                                            borderColor: accent.primary,
-                                        },
-                                    ]}
-                                    onPress={() => {
-                                        if (isFolderViewActive) {
-                                            handleCloseFolder();
-                                        }
-                                    }}
-                                    activeOpacity={0.7}
+                                <View
+                                    ref={(el) => { pillRefs.current['all'] = el; }}
+                                    collapsable={false}
                                 >
-                                    <Layers size={13} color={accent.primary as any} />
-                                    <Text
-                                        style={[
-                                            styles.folderChipText,
-                                            {
-                                                color: colors.textPrimary,
-                                                fontWeight: '700',
-                                            },
-                                        ]}
-                                    >
-                                        {language === 'es' ? 'Todas' : 'All'}
-                                    </Text>
-                                    <Text
-                                        style={[
-                                            styles.folderChipBadge,
-                                            {
-                                                backgroundColor: isDark ? '#1C1F26' : '#FFFFFF',
-                                                color: accent.primary,
-                                            },
-                                        ]}
-                                    >
-                                        {notes.length}
-                                    </Text>
-                                </TouchableOpacity>
-
-                                {/* 2. FIJADAS */}
-                                {pinnedCount > 0 && (
                                     <TouchableOpacity
                                         style={[
                                             styles.folderChip,
                                             {
-                                                backgroundColor: isDark ? '#1C1F26' : '#FFFFFF',
-                                                borderColor: isDark ? '#FBBF2440' : '#F59E0B30',
+                                                backgroundColor: (!isFolderViewActive && activeFolderId === 'all')
+                                                    ? (isDark ? `${accent.primary}25` : `${accent.primary}18`)
+                                                    : (isDark ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.04)'),
+                                                borderColor: (!isFolderViewActive && activeFolderId === 'all')
+                                                    ? (isDark ? `${accent.primary}60` : `${accent.primary}45`)
+                                                    : colors.borderSubtle,
                                             },
                                         ]}
-                                        onPress={() => handleOpenFolder('pinned')}
+                                        onPress={() => {
+                                            if (isFolderViewActive) {
+                                                handleCloseFolder();
+                                            }
+                                        }}
                                         activeOpacity={0.7}
                                     >
-                                        <Pin size={12} color={(isDark ? '#FBBF24' : '#F59E0B') as any} />
+                                        <Layers size={13} color={(!isFolderViewActive && activeFolderId === 'all') ? accent.primary : (colors.textSecondary as any)} />
                                         <Text
                                             style={[
                                                 styles.folderChipText,
-                                                { color: colors.textPrimary },
+                                                {
+                                                    color: (!isFolderViewActive && activeFolderId === 'all') ? colors.textPrimary : colors.textSecondary,
+                                                    fontWeight: (!isFolderViewActive && activeFolderId === 'all') ? '700' : '600',
+                                                },
                                             ]}
                                         >
-                                            {language === 'es' ? 'Fijadas' : 'Pinned'}
+                                            {language === 'es' ? 'Todas' : 'All'}
                                         </Text>
                                         <Text
                                             style={[
                                                 styles.folderChipBadge,
                                                 {
-                                                    backgroundColor: isDark ? '#262933' : '#F1F5F9',
-                                                    color: isDark ? '#FBBF24' : '#F59E0B',
+                                                    backgroundColor: (!isFolderViewActive && activeFolderId === 'all')
+                                                        ? (isDark ? `${accent.primary}35` : `${accent.primary}22`)
+                                                        : (isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.06)'),
+                                                    color: (!isFolderViewActive && activeFolderId === 'all') ? accent.primary : colors.textMuted,
                                                 },
                                             ]}
                                         >
-                                            {pinnedCount}
+                                            {notes.length}
                                         </Text>
                                     </TouchableOpacity>
+                                </View>
+
+                                {/* 2. FIJADAS */}
+                                {pinnedCount > 0 && (
+                                    <View
+                                        ref={(el) => { pillRefs.current['pinned'] = el; }}
+                                        collapsable={false}
+                                    >
+                                        <TouchableOpacity
+                                            style={[
+                                                styles.folderChip,
+                                                {
+                                                    backgroundColor: (isFolderViewActive && currentTargetFolderId === 'pinned')
+                                                        ? (isDark ? 'rgba(251, 191, 36, 0.20)' : 'rgba(245, 158, 11, 0.15)')
+                                                        : (isDark ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.04)'),
+                                                    borderColor: (isFolderViewActive && currentTargetFolderId === 'pinned')
+                                                        ? (isDark ? '#FBBF2480' : '#F59E0B60')
+                                                        : colors.borderSubtle,
+                                                },
+                                            ]}
+                                            onPress={() => handlePillPress('pinned')}
+                                            activeOpacity={0.7}
+                                        >
+                                            <Pin size={12} color={(isDark ? '#FBBF24' : '#F59E0B') as any} />
+                                            <Text
+                                                style={[
+                                                    styles.folderChipText,
+                                                    {
+                                                        color: (isFolderViewActive && currentTargetFolderId === 'pinned') ? colors.textPrimary : colors.textSecondary,
+                                                        fontWeight: (isFolderViewActive && currentTargetFolderId === 'pinned') ? '700' : '600',
+                                                    },
+                                                ]}
+                                            >
+                                                {language === 'es' ? 'Fijadas' : 'Pinned'}
+                                            </Text>
+                                            <Text
+                                                style={[
+                                                    styles.folderChipBadge,
+                                                    {
+                                                        backgroundColor: (isFolderViewActive && currentTargetFolderId === 'pinned')
+                                                            ? (isDark ? 'rgba(251, 191, 36, 0.32)' : 'rgba(245, 158, 11, 0.22)')
+                                                            : (isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.06)'),
+                                                        color: isDark ? '#FBBF24' : '#F59E0B',
+                                                    },
+                                                ]}
+                                            >
+                                                {pinnedCount}
+                                            </Text>
+                                        </TouchableOpacity>
+                                    </View>
                                 )}
 
                                 {/* 3. SIN CARPETA */}
                                 {unassignedCount > 0 && (
-                                    <TouchableOpacity
-                                        style={[
-                                            styles.folderChip,
-                                            {
-                                                backgroundColor: isDark ? '#1C1F26' : '#FFFFFF',
-                                                borderColor: colors.borderSubtle,
-                                            },
-                                        ]}
-                                        onPress={() => handleOpenFolder('unassigned')}
-                                        activeOpacity={0.7}
+                                    <View
+                                        ref={(el) => { pillRefs.current['unassigned'] = el; }}
+                                        collapsable={false}
                                     >
-                                        <Inbox size={12} color={colors.textSecondary as any} />
-                                        <Text
-                                            style={[
-                                                styles.folderChipText,
-                                                { color: colors.textSecondary },
-                                            ]}
-                                        >
-                                            {language === 'es' ? 'Sin carpeta' : 'Unassigned'}
-                                        </Text>
-                                        <Text
-                                            style={[
-                                                styles.folderChipBadge,
-                                                {
-                                                    backgroundColor: isDark ? '#262933' : '#F1F5F9',
-                                                    color: colors.textMuted,
-                                                },
-                                            ]}
-                                        >
-                                            {unassignedCount}
-                                        </Text>
-                                    </TouchableOpacity>
-                                )}
-
-                                {/* 4. CARPETAS DE ACCESO RÁPIDO */}
-                                {quickAccessFolders.map(f => {
-                                    const folderColor = f.color || '#8B5CF6';
-                                    const count = noteCountsMap[f.id] || 0;
-
-                                    return (
                                         <TouchableOpacity
-                                            key={f.id}
                                             style={[
                                                 styles.folderChip,
                                                 {
-                                                    backgroundColor: isDark ? '#1C1F26' : '#FFFFFF',
-                                                    borderColor: isDark ? `${folderColor}40` : `${folderColor}30`,
+                                                    backgroundColor: (isFolderViewActive && currentTargetFolderId === 'unassigned')
+                                                        ? (isDark ? 'rgba(255, 255, 255, 0.12)' : 'rgba(0, 0, 0, 0.08)')
+                                                        : (isDark ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.04)'),
+                                                    borderColor: (isFolderViewActive && currentTargetFolderId === 'unassigned')
+                                                        ? (isDark ? 'rgba(255, 255, 255, 0.3)' : 'rgba(0, 0, 0, 0.25)')
+                                                        : colors.borderSubtle,
                                                 },
                                             ]}
-                                            onPress={() => handleOpenFolder(f.id)}
+                                            onPress={() => handlePillPress('unassigned')}
                                             activeOpacity={0.7}
                                         >
-                                            <FolderIconRenderer
-                                                name={f.icon || 'folder'}
-                                                size={12}
-                                                color={folderColor}
-                                                strokeWidth={2}
-                                            />
+                                            <Inbox size={12} color={colors.textSecondary as any} />
                                             <Text
                                                 style={[
                                                     styles.folderChipText,
-                                                    { color: colors.textPrimary },
+                                                    {
+                                                        color: (isFolderViewActive && currentTargetFolderId === 'unassigned') ? colors.textPrimary : colors.textSecondary,
+                                                        fontWeight: (isFolderViewActive && currentTargetFolderId === 'unassigned') ? '700' : '600',
+                                                    },
                                                 ]}
-                                                numberOfLines={1}
                                             >
-                                                {f.name}
+                                                {language === 'es' ? 'Sin carpeta' : 'Unassigned'}
                                             </Text>
-                                            {count > 0 && (
+                                            <Text
+                                                style={[
+                                                    styles.folderChipBadge,
+                                                    {
+                                                        backgroundColor: isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.06)',
+                                                        color: colors.textMuted,
+                                                    },
+                                                ]}
+                                            >
+                                                {unassignedCount}
+                                            </Text>
+                                        </TouchableOpacity>
+                                    </View>
+                                )}
+
+                                {/* 4. CARPETAS RAÍZ */}
+                                {stripFolders.map(f => {
+                                    const folderColor = normalizeHex(f.color, '#8B5CF6');
+                                    const count = noteCountsMap[f.id] || 0;
+                                    const isFolderActive = isFolderViewActive && currentTargetFolderId === f.id;
+
+                                    return (
+                                        <View
+                                            key={f.id}
+                                            ref={(el) => { pillRefs.current[f.id] = el; }}
+                                            collapsable={false}
+                                        >
+                                            <TouchableOpacity
+                                                style={[
+                                                    styles.folderChip,
+                                                    {
+                                                        backgroundColor: isFolderActive
+                                                            ? `${folderColor}${isDark ? '24' : '16'}`
+                                                            : (isDark ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.04)'),
+                                                        borderColor: isFolderActive
+                                                            ? `${folderColor}${isDark ? '60' : '45'}`
+                                                            : (isDark ? `${folderColor}35` : `${folderColor}25`),
+                                                    },
+                                                ]}
+                                                onPress={() => handlePillPress(f.id)}
+                                                activeOpacity={0.7}
+                                            >
+                                                <FolderIconRenderer
+                                                    name={f.icon || 'folder'}
+                                                    size={12}
+                                                    color={folderColor}
+                                                    strokeWidth={2}
+                                                />
                                                 <Text
                                                     style={[
-                                                        styles.folderChipBadge,
+                                                        styles.folderChipText,
                                                         {
-                                                            backgroundColor: isDark ? '#262933' : '#F1F5F9',
-                                                            color: folderColor,
+                                                            color: isFolderActive ? colors.textPrimary : colors.textSecondary,
+                                                            fontWeight: isFolderActive ? '700' : '600',
                                                         },
                                                     ]}
+                                                    numberOfLines={1}
                                                 >
-                                                    {count}
+                                                    {f.name}
                                                 </Text>
-                                            )}
-                                        </TouchableOpacity>
+                                                {count > 0 && (
+                                                    <Text
+                                                        style={[
+                                                            styles.folderChipBadge,
+                                                            {
+                                                                backgroundColor: isFolderActive
+                                                                    ? `${folderColor}${isDark ? '35' : '22'}`
+                                                                    : (isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.06)'),
+                                                                color: folderColor,
+                                                            },
+                                                        ]}
+                                                    >
+                                                        {count}
+                                                    </Text>
+                                                )}
+                                            </TouchableOpacity>
+                                        </View>
                                     );
                                 })}
 
@@ -1793,8 +2147,8 @@ export default function NotesScreen({ hideBars = false }: { hideBars?: boolean }
                                     style={[
                                         styles.newFolderChip,
                                         {
-                                            borderColor: accent.primary,
-                                            backgroundColor: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)',
+                                            borderColor: isDark ? `${accent.primary}50` : `${accent.primary}35`,
+                                            backgroundColor: isDark ? `${accent.primary}12` : `${accent.primary}08`,
                                         },
                                     ]}
                                     onPress={() => {
@@ -1811,39 +2165,37 @@ export default function NotesScreen({ hideBars = false }: { hideBars?: boolean }
                             </ScrollView>
                         </View>
 
-                        {/* Botones de Acción a la Derecha */}
-                        <View style={styles.mainTopActions}>
+                        {/* Botones de Acción a la Derecha: Mini-píldora unificada */}
+                        <View
+                            style={[
+                                styles.actionsPill,
+                                {
+                                    backgroundColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.035)',
+                                    borderColor: colors.borderSubtle,
+                                },
+                            ]}
+                        >
                             <TouchableOpacity
-                                style={[
-                                    styles.mainTopActionIconBtn,
-                                    {
-                                        backgroundColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.035)',
-                                        borderColor: colors.borderSubtle,
-                                    },
-                                ]}
+                                style={styles.pillActionBtn}
                                 onPress={() => {
                                     LayoutAnimation.configureNext(smoothLayoutAnimation);
                                     setIsSearching(true);
                                 }}
-                                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                                hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
                                 activeOpacity={0.7}
                             >
-                                <Search size={16} color={colors.textSecondary as any} />
+                                <Search size={15} color={colors.textSecondary as any} />
                             </TouchableOpacity>
 
+                            <View style={[styles.pillDivider, { backgroundColor: colors.borderSubtle }]} />
+
                             <TouchableOpacity
-                                style={[
-                                    styles.mainTopActionIconBtn,
-                                    {
-                                        backgroundColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.035)',
-                                        borderColor: colors.borderSubtle,
-                                    },
-                                ]}
-                                onPress={() => router.push('/notes-history')}
-                                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                                style={styles.pillActionBtn}
+                                onPress={() => setIsFolderMenuVisible(true)}
+                                hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
                                 activeOpacity={0.7}
                             >
-                                <History size={16} color={colors.textSecondary as any} />
+                                <MoreVertical size={15} color={colors.textSecondary as any} />
                             </TouchableOpacity>
                         </View>
                     </View>
@@ -1855,7 +2207,7 @@ export default function NotesScreen({ hideBars = false }: { hideBars?: boolean }
                 showsVerticalScrollIndicator={false}
                 contentContainerStyle={{
                     paddingTop: 8,
-                    paddingBottom: insets.bottom + ((isSelectionMode || isFolderSelectionMode) ? 220 : 100),
+                    paddingBottom: insets.bottom + ((isSelectionMode || isFolderSelectionMode) ? 130 : 90),
                 }}
             >
                 {renderListHeader()}
@@ -2029,7 +2381,7 @@ export default function NotesScreen({ hideBars = false }: { hideBars?: boolean }
                                                         borderColor: colors.borderSubtle,
                                                     },
                                                 ]}
-                                                onPress={handleCloseFolder}
+                                                onPress={handleBackPress}
                                                 activeOpacity={0.7}
                                                 hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                                             >
@@ -2073,44 +2425,63 @@ export default function NotesScreen({ hideBars = false }: { hideBars?: boolean }
                                         </View>
                                     </View>
 
-                                    {/* Lado Derecho: Acciones de Carpeta */}
-                                    <Animated.View style={[styles.mainTopActions, morphActionsStyle]}>
-                                        <TouchableOpacity
+                                    {/* Lado Derecho: Colaboradores + Acciones de Carpeta */}
+                                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                                        {activeFolderObj && (
+                                            <CollaboratorsAvatars
+                                                targetType="folder"
+                                                targetId={activeFolderObj.id}
+                                                onPress={() => setIsFolderShareModalVisible(true)}
+                                            />
+                                        )}
+                                        <Animated.View
                                             style={[
-                                                styles.mainTopActionIconBtn,
+                                                styles.actionsPill,
+                                                morphActionsStyle,
                                                 {
                                                     backgroundColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.035)',
                                                     borderColor: colors.borderSubtle,
                                                 },
                                             ]}
+                                        >
+                                        <TouchableOpacity
+                                            style={styles.pillActionBtn}
                                             onPress={() => {
                                                 LayoutAnimation.configureNext(smoothLayoutAnimation);
                                                 setIsSearching(true);
                                             }}
-                                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                                            hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
                                             activeOpacity={0.7}
                                         >
-                                            <Search size={16} color={colors.textSecondary as any} />
+                                            <Search size={15} color={colors.textSecondary as any} />
                                         </TouchableOpacity>
 
+                                        <View style={[styles.pillDivider, { backgroundColor: colors.borderSubtle }]} />
+
                                         <TouchableOpacity
-                                            style={[
-                                                styles.mainTopActionIconBtn,
-                                                {
-                                                    backgroundColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.035)',
-                                                    borderColor: colors.borderSubtle,
-                                                },
-                                            ]}
+                                            style={styles.pillActionBtn}
                                             onPress={() => setIsFolderMenuVisible(true)}
-                                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                                            hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
                                             activeOpacity={0.7}
                                         >
-                                            <MoreVertical size={16} color={colors.textSecondary as any} />
+                                            <MoreVertical size={15} color={colors.textSecondary as any} />
                                         </TouchableOpacity>
                                     </Animated.View>
+                                    </View>
                                 </View>
                             )}
                         </Animated.View>
+
+                        {/* Breadcrumbs de navegación jerárquica */}
+                        {folderStack.length > 0 && (
+                            <View style={{ paddingHorizontal: 16, paddingBottom: 4 }}>
+                                <FolderBreadcrumb
+                                    stack={folderStack}
+                                    onNavigate={handleBreadcrumbNavigate}
+                                    accentColor={activeFolderColor}
+                                />
+                            </View>
+                        )}
 
                         {/* Contenido de Notas de la Carpeta (Fade + Slide progresivo en la 2da mitad) */}
                         <Animated.View style={[{ flex: 1 }, morphNotesContentStyle]}>
@@ -2118,9 +2489,43 @@ export default function NotesScreen({ hideBars = false }: { hideBars?: boolean }
                                 showsVerticalScrollIndicator={false}
                                 contentContainerStyle={{
                                     paddingTop: 8,
-                                    paddingBottom: insets.bottom + (isSelectionMode ? 220 : 100),
+                                    paddingBottom: insets.bottom + (isSelectionMode ? 130 : 90),
                                 }}
                             >
+                                {/* Subcarpetas dentro de esta carpeta */}
+                                {currentSubfolders.length > 0 && (
+                                    <View style={{ paddingHorizontal: 16, marginBottom: 12 }}>
+                                        <FolderCardGrid
+                                            folders={currentSubfolders}
+                                            noteCounts={noteCountsMap}
+                                            subfolderCounts={subfolderCountsMap}
+                                            headerTitle={
+                                                language === 'es'
+                                                    ? `SUBCARPETAS (${currentSubfolders.length})`
+                                                    : `SUBFOLDERS (${currentSubfolders.length})`
+                                            }
+                                            onSelectFolder={(id) => {
+                                                const sub = folders.find(f => f.id === id);
+                                                if (sub) {
+                                                    pushFolder(sub);
+                                                    setOpenedFolderId(sub.id);
+                                                }
+                                            }}
+                                            onEditFolder={(folder) => {
+                                                setEditingFolder(folder);
+                                                setModalParentFolder(activeFolderObj);
+                                                setIsFolderModalVisible(true);
+                                            }}
+                                            onCreateFolder={() => {
+                                                setEditingFolder(null);
+                                                setModalParentFolder(activeFolderObj);
+                                                setIsFolderModalVisible(true);
+                                            }}
+                                            onTogglePin={() => {}}
+                                        />
+                                    </View>
+                                )}
+
                                 {folderSections.length === 0 ? (
                                     <View style={styles.emptyContainer}>
                                         <View
@@ -2149,264 +2554,17 @@ export default function NotesScreen({ hideBars = false }: { hideBars?: boolean }
                 </Animated.View>
             )}
 
-            {/* Píldora Flotante Inferior de Selección Múltiple */}
-            <Animated.View
-                pointerEvents={isSelectionMode ? 'auto' : 'none'}
-                style={[
-                    styles.floatingSelectionPill,
-                    {
-                        backgroundColor: colors.navBar || (isDark ? '#1B1B1B' : '#FFFFFF'),
-                        borderColor: colors.borderSubtle,
-                        bottom: Math.max(insets.bottom, 10) + 72,
-                    },
-                    pillAnimatedStyle,
-                ]}
-            >
-                {/* Cabecera de la píldora: Contador y Seleccionar todas */}
-                <View style={styles.pillHeaderRow}>
-                    <View style={styles.pillCounterContainer}>
-                        <TouchableOpacity
-                            onPress={() => setSelectedNotes([])}
-                            style={[
-                                styles.pillCloseBtn,
-                                { backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)' },
-                            ]}
-                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                            activeOpacity={0.7}
-                        >
-                            <X size={13} color={colors.textSecondary} />
-                        </TouchableOpacity>
-                        <Text style={[styles.pillTitle, { color: colors.textPrimary }]}>
-                            {selectedNotes.length} {language === 'es' ? (selectedNotes.length === 1 ? 'seleccionada' : 'seleccionadas') : 'selected'}
-                        </Text>
-                    </View>
-
-                    <TouchableOpacity
-                        onPress={handleToggleSelectAll}
-                        style={[
-                            styles.pillSelectAllBtn,
-                            {
-                                backgroundColor: isAllFilteredSelected ? accent.primary + '18' : (isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)'),
-                                borderColor: isAllFilteredSelected ? accent.primary : colors.borderSubtle,
-                            },
-                        ]}
-                        activeOpacity={0.7}
-                    >
-                        {isAllFilteredSelected ? (
-                            <CheckSquare size={13} color={accent.primary as any} />
-                        ) : (
-                            <Square size={13} color={colors.textSecondary as any} />
-                        )}
-                        <Text style={[styles.pillSelectAllText, { color: isAllFilteredSelected ? accent.primary : colors.textSecondary }]}>
-                            {isAllFilteredSelected ? (language === 'es' ? 'Deseleccionar' : 'Deselect') : (language === 'es' ? 'Todas' : 'All')}
-                        </Text>
-                    </TouchableOpacity>
-                </View>
-
-                {/* Divisor sutil */}
-                <View style={[styles.pillDivider, { backgroundColor: colors.borderSubtle }]} />
-
-                {/* Acciones principales: Fijar, Mover a carpeta, Duplicar, Compartir, Eliminar */}
-                <View style={styles.pillActionsRow}>
-                    {/* 1. Fijar / Desfijar */}
-                    <TouchableOpacity
-                        style={styles.pillActionBtn}
-                        onPress={handleTogglePinSelected}
-                        activeOpacity={0.7}
-                    >
-                        <Animated.View
-                            style={[
-                                styles.pillActionIconCircle,
-                                {
-                                    backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)',
-                                },
-                                pinButtonAnimatedStyle,
-                            ]}
-                        >
-                            {isAllPinned ? (
-                                <PinOff size={16} color={(isDark ? '#FBBF24' : '#F59E0B') as any} />
-                            ) : (
-                                <Pin size={16} color={(isDark ? '#FBBF24' : '#F59E0B') as any} />
-                            )}
-                        </Animated.View>
-                        <Text style={[styles.pillActionLabel, { color: colors.textSecondary }]}>
-                            {isAllPinned ? (language === 'es' ? 'Desfijar' : 'Unpin') : (language === 'es' ? 'Fijar' : 'Pin')}
-                        </Text>
-                    </TouchableOpacity>
-
-                    {/* 2. Mover a Carpeta */}
-                    <TouchableOpacity
-                        style={styles.pillActionBtn}
-                        onPress={() => setIsMoveModalVisible(true)}
-                        activeOpacity={0.7}
-                    >
-                        <View style={[styles.pillActionIconCircle, { backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)' }]}>
-                            <FolderInput size={16} color={accent.primary as any} />
-                        </View>
-                        <Text style={[styles.pillActionLabel, { color: colors.textSecondary }]}>
-                            {language === 'es' ? 'Mover' : 'Move'}
-                        </Text>
-                    </TouchableOpacity>
-
-                    {/* 3. Duplicar */}
-                    <TouchableOpacity
-                        style={styles.pillActionBtn}
-                        onPress={handleDuplicateSelected}
-                        activeOpacity={0.7}
-                    >
-                        <View style={[styles.pillActionIconCircle, { backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)' }]}>
-                            <Copy size={16} color={colors.textPrimary as any} />
-                        </View>
-                        <Text style={[styles.pillActionLabel, { color: colors.textSecondary }]}>
-                            {language === 'es' ? 'Duplicar' : 'Duplicate'}
-                        </Text>
-                    </TouchableOpacity>
-
-                    {/* 4. Compartir */}
-                    <TouchableOpacity
-                        style={styles.pillActionBtn}
-                        onPress={handleShareSelected}
-                        activeOpacity={0.7}
-                    >
-                        <View style={[styles.pillActionIconCircle, { backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)' }]}>
-                            <Share2 size={16} color={colors.textPrimary as any} />
-                        </View>
-                        <Text style={[styles.pillActionLabel, { color: colors.textSecondary }]}>
-                            {language === 'es' ? 'Compartir' : 'Share'}
-                        </Text>
-                    </TouchableOpacity>
-
-                    {/* 5. Eliminar */}
-                    <TouchableOpacity
-                        style={styles.pillActionBtn}
-                        onPress={handleDeleteSelected}
-                        activeOpacity={0.7}
-                    >
-                        <View style={[styles.pillActionIconCircle, { backgroundColor: isDark ? 'rgba(239,68,68,0.15)' : 'rgba(239,68,68,0.1)' }]}>
-                            <Trash2 size={16} color={(isDark ? '#FB7185' : '#E11D48') as any} />
-                        </View>
-                        <Text style={[styles.pillActionLabel, { color: isDark ? '#FB7185' : '#E11D48' }]}>
-                            {language === 'es' ? 'Eliminar' : 'Delete'}
-                        </Text>
-                    </TouchableOpacity>
-                </View>
-            </Animated.View>
-
-            {/* Píldora Flotante Inferior de Selección Múltiple de Carpetas */}
-            <Animated.View
-                pointerEvents={isFolderSelectionMode ? 'auto' : 'none'}
-                style={[
-                    styles.floatingSelectionPill,
-                    {
-                        backgroundColor: colors.navBar || (isDark ? '#1B1B1B' : '#FFFFFF'),
-                        borderColor: colors.borderSubtle,
-                        bottom: Math.max(insets.bottom, 10) + 72,
-                    },
-                    folderPillAnimatedStyle,
-                ]}
-            >
-                {/* Cabecera de la píldora: Contador y Seleccionar todas */}
-                <View style={styles.pillHeaderRow}>
-                    <View style={styles.pillCounterContainer}>
-                        <TouchableOpacity
-                            onPress={() => setSelectedFolderIds([])}
-                            style={[
-                                styles.pillCloseBtn,
-                                { backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)' },
-                            ]}
-                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                            activeOpacity={0.7}
-                        >
-                            <X size={13} color={colors.textSecondary} />
-                        </TouchableOpacity>
-                        <Text style={[styles.pillTitle, { color: colors.textPrimary }]}>
-                            {selectedFolderIds.length} {language === 'es' ? (selectedFolderIds.length === 1 ? 'carpeta' : 'carpetas') : (selectedFolderIds.length === 1 ? 'folder' : 'folders')}
-                        </Text>
-                    </View>
-
-                    <TouchableOpacity
-                        onPress={handleToggleSelectAllFolders}
-                        style={[
-                            styles.pillSelectAllBtn,
-                            {
-                                backgroundColor: isAllFoldersSelected ? accent.primary + '18' : (isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)'),
-                                borderColor: isAllFoldersSelected ? accent.primary : colors.borderSubtle,
-                            },
-                        ]}
-                        activeOpacity={0.7}
-                    >
-                        {isAllFoldersSelected ? (
-                            <CheckSquare size={13} color={accent.primary as any} />
-                        ) : (
-                            <Square size={13} color={colors.textSecondary as any} />
-                        )}
-                        <Text style={[styles.pillSelectAllText, { color: isAllFoldersSelected ? accent.primary : colors.textSecondary }]}>
-                            {isAllFoldersSelected ? (language === 'es' ? 'Deseleccionar' : 'Deselect') : (language === 'es' ? 'Todas' : 'All')}
-                        </Text>
-                    </TouchableOpacity>
-                </View>
-
-                {/* Divisor sutil */}
-                <View style={[styles.pillDivider, { backgroundColor: colors.borderSubtle }]} />
-
-                {/* Acciones: Editar (si 1), Fijar/Desfijar, Eliminar */}
-                <View style={styles.pillActionsRow}>
-                    {selectedFolderIds.length === 1 && (
-                        <TouchableOpacity
-                            style={styles.pillActionBtn}
-                            onPress={handleEditSelectedFolder}
-                            activeOpacity={0.7}
-                        >
-                            <View style={[styles.pillActionIconCircle, { backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)' }]}>
-                                <Edit3 size={16} color={colors.textPrimary as any} />
-                            </View>
-                            <Text style={[styles.pillActionLabel, { color: colors.textSecondary }]}>
-                                {language === 'es' ? 'Editar' : 'Edit'}
-                            </Text>
-                        </TouchableOpacity>
-                    )}
-
-                    <TouchableOpacity
-                        style={styles.pillActionBtn}
-                        onPress={handleTogglePinSelectedFolders}
-                        activeOpacity={0.7}
-                    >
-                        <View style={[styles.pillActionIconCircle, { backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)' }]}>
-                            {isAllSelectedFoldersPinned ? (
-                                <PinOff size={16} color={(isDark ? '#FBBF24' : '#F59E0B') as any} />
-                            ) : (
-                                <Pin size={16} color={(isDark ? '#FBBF24' : '#F59E0B') as any} />
-                            )}
-                        </View>
-                        <Text style={[styles.pillActionLabel, { color: colors.textSecondary }]}>
-                            {isAllSelectedFoldersPinned ? (language === 'es' ? 'Desfijar' : 'Unpin') : (language === 'es' ? 'Fijar' : 'Pin')}
-                        </Text>
-                    </TouchableOpacity>
-
-                    <TouchableOpacity
-                        style={styles.pillActionBtn}
-                        onPress={handleDeleteSelectedFolders}
-                        activeOpacity={0.7}
-                    >
-                        <View style={[styles.pillActionIconCircle, { backgroundColor: isDark ? 'rgba(239,68,68,0.15)' : 'rgba(239,68,68,0.1)' }]}>
-                            <Trash2 size={16} color={(isDark ? '#FB7185' : '#E11D48') as any} />
-                        </View>
-                        <Text style={[styles.pillActionLabel, { color: isDark ? '#FB7185' : '#E11D48' }]}>
-                            {language === 'es' ? 'Eliminar' : 'Delete'}
-                        </Text>
-                    </TouchableOpacity>
-                </View>
-            </Animated.View>
-
             {/* Modal de Creación / Edición de Carpeta */}
             <FolderModal
                 visible={isFolderModalVisible}
                 onClose={() => {
                     setIsFolderModalVisible(false);
                     setEditingFolder(null);
+                    setModalParentFolder(null);
                 }}
                 folderToEdit={editingFolder}
-                onSave={async (name, icon, color, isPinned) => {
+                parentFolder={modalParentFolder}
+                onSave={async (name, icon, color, isPinned, parentId) => {
                     LayoutAnimation.configureNext(smoothLayoutAnimation);
                     if (editingFolder) {
                         await updateFolder(editingFolder.id, {
@@ -2416,7 +2574,7 @@ export default function NotesScreen({ hideBars = false }: { hideBars?: boolean }
                             is_pinned: isPinned ? 1 : 0,
                         });
                     } else {
-                        await createFolder(name, icon, color, isPinned);
+                        await createFolder(name, icon, color, isPinned, parentId);
                     }
                 }}
                 onDelete={async (folderId) => {
@@ -2435,8 +2593,9 @@ export default function NotesScreen({ hideBars = false }: { hideBars?: boolean }
                 folders={folders}
                 noteCount={selectedNotes.length}
                 onSelectFolder={handleMoveSelected}
-                onCreateNewFolder={() => {
+                onCreateNewFolder={(parentId) => {
                     setEditingFolder(null);
+                    setModalParentFolder(parentId ? folders.find(f => f.id === parentId) || null : null);
                     setIsFolderModalVisible(true);
                 }}
             />
@@ -2453,7 +2612,7 @@ export default function NotesScreen({ hideBars = false }: { hideBars?: boolean }
                     activeOpacity={1}
                     onPress={() => setIsFolderMenuVisible(false)}
                 >
-                    <View style={[styles.menuModalCardWrap, { top: insets.top + 48 }]}>
+                    <View style={[styles.menuModalCardWrap, { top: insets.top + 92 }]}>
                         <VeyraSurface
                             level={2}
                             radius="lg"
@@ -2469,48 +2628,7 @@ export default function NotesScreen({ hideBars = false }: { hideBars?: boolean }
                                 },
                             ]}
                         >
-                            {/* 1. Fijar / Desfijar */}
-                            {activeFolderObj && (
-                                <TouchableOpacity
-                                    style={styles.menuModalItem}
-                                    onPress={async () => {
-                                        setIsFolderMenuVisible(false);
-                                        await togglePinFolder(activeFolderObj.id);
-                                    }}
-                                    activeOpacity={0.7}
-                                >
-                                    <Pin
-                                        size={16}
-                                        color={(isFolderPinned ? (isDark ? '#FBBF24' : '#F59E0B') : colors.textSecondary) as any}
-                                        strokeWidth={2}
-                                    />
-                                    <Text style={[styles.menuModalItemText, { color: colors.textPrimary }]}>
-                                        {isFolderPinned
-                                            ? (language === 'es' ? 'Desfijar de acceso rápido' : 'Unpin from quick access')
-                                            : (language === 'es' ? 'Fijar en acceso rápido' : 'Pin to quick access')}
-                                    </Text>
-                                </TouchableOpacity>
-                            )}
-
-                            {/* 2. Editar carpeta */}
-                            {activeFolderObj && (
-                                <TouchableOpacity
-                                    style={styles.menuModalItem}
-                                    onPress={() => {
-                                        setIsFolderMenuVisible(false);
-                                        setEditingFolder(activeFolderObj);
-                                        setIsFolderModalVisible(true);
-                                    }}
-                                    activeOpacity={0.7}
-                                >
-                                    <Edit3 size={16} color={colors.textSecondary as any} strokeWidth={2} />
-                                    <Text style={[styles.menuModalItemText, { color: colors.textPrimary }]}>
-                                        {language === 'es' ? 'Editar carpeta' : 'Edit folder'}
-                                    </Text>
-                                </TouchableOpacity>
-                            )}
-
-                            {/* 3. Historial de notas */}
+                            {/* 1. Historial de notas */}
                             <TouchableOpacity
                                 style={styles.menuModalItem}
                                 onPress={() => {
@@ -2525,10 +2643,100 @@ export default function NotesScreen({ hideBars = false }: { hideBars?: boolean }
                                 </Text>
                             </TouchableOpacity>
 
-                            {/* 4. Eliminar carpeta */}
+                            {/* 2. Compartir notas */}
+                            <TouchableOpacity
+                                style={styles.menuModalItem}
+                                onPress={() => {
+                                    setIsFolderMenuVisible(false);
+                                    handleShareNotesMenu();
+                                }}
+                                activeOpacity={0.7}
+                            >
+                                <Share2 size={16} color={colors.textSecondary as any} strokeWidth={2} />
+                                <Text style={[styles.menuModalItemText, { color: colors.textPrimary }]}>
+                                    {language === 'es' ? 'Compartir notas' : 'Share notes'}
+                                </Text>
+                            </TouchableOpacity>
+
+                            {/* Opciones de Carpeta (si estamos dentro de una carpeta activa) */}
                             {activeFolderObj && (
                                 <>
                                     <View style={[styles.menuModalDivider, { backgroundColor: colors.borderSubtle }]} />
+
+                                    {/* Compartir carpeta (Colaboración) */}
+                                    <TouchableOpacity
+                                        style={styles.menuModalItem}
+                                        onPress={() => {
+                                            setIsFolderMenuVisible(false);
+                                            setIsFolderShareModalVisible(true);
+                                        }}
+                                        activeOpacity={0.7}
+                                    >
+                                        <Users size={16} color={colors.textSecondary as any} strokeWidth={2} />
+                                        <Text style={[styles.menuModalItemText, { color: colors.textPrimary }]}>
+                                            {language === 'es' ? 'Compartir carpeta' : 'Share folder'}
+                                        </Text>
+                                    </TouchableOpacity>
+
+                                    {/* 3. Nueva subcarpeta */}
+                                    <TouchableOpacity
+                                        style={styles.menuModalItem}
+                                        onPress={() => {
+                                            setIsFolderMenuVisible(false);
+                                            setEditingFolder(null);
+                                            setModalParentFolder(activeFolderObj);
+                                            setIsFolderModalVisible(true);
+                                        }}
+                                        activeOpacity={0.7}
+                                    >
+                                        <FolderPlus size={16} color={colors.textSecondary as any} strokeWidth={2} />
+                                        <Text style={[styles.menuModalItemText, { color: colors.textPrimary }]}>
+                                            {language === 'es' ? 'Nueva subcarpeta' : 'New subfolder'}
+                                        </Text>
+                                    </TouchableOpacity>
+
+                                    {/* 4. Fijar / Desfijar (Solo para carpetas raíz) */}
+                                    {!activeFolderObj.parent_id && (
+                                        <TouchableOpacity
+                                            style={styles.menuModalItem}
+                                            onPress={async () => {
+                                                setIsFolderMenuVisible(false);
+                                                await togglePinFolder(activeFolderObj.id);
+                                            }}
+                                            activeOpacity={0.7}
+                                        >
+                                            <Pin
+                                                size={16}
+                                                color={(isFolderPinned ? (isDark ? '#FBBF24' : '#F59E0B') : colors.textSecondary) as any}
+                                                strokeWidth={2}
+                                            />
+                                            <Text style={[styles.menuModalItemText, { color: colors.textPrimary }]}>
+                                                {isFolderPinned
+                                                    ? (language === 'es' ? 'Desfijar de acceso rápido' : 'Unpin from quick access')
+                                                    : (language === 'es' ? 'Fijar en acceso rápido' : 'Pin to quick access')}
+                                            </Text>
+                                        </TouchableOpacity>
+                                    )}
+
+                                    {/* 5. Editar carpeta */}
+                                    <TouchableOpacity
+                                        style={styles.menuModalItem}
+                                        onPress={() => {
+                                            setIsFolderMenuVisible(false);
+                                            setEditingFolder(activeFolderObj);
+                                            setIsFolderModalVisible(true);
+                                        }}
+                                        activeOpacity={0.7}
+                                    >
+                                        <Edit3 size={16} color={colors.textSecondary as any} strokeWidth={2} />
+                                        <Text style={[styles.menuModalItemText, { color: colors.textPrimary }]}>
+                                            {language === 'es' ? 'Editar carpeta' : 'Edit folder'}
+                                        </Text>
+                                    </TouchableOpacity>
+
+                                    <View style={[styles.menuModalDivider, { backgroundColor: colors.borderSubtle }]} />
+
+                                    {/* 5. Eliminar carpeta */}
                                     <TouchableOpacity
                                         style={styles.menuModalItem}
                                         onPress={() => {
@@ -2565,6 +2773,18 @@ export default function NotesScreen({ hideBars = false }: { hideBars?: boolean }
                     </View>
                 </TouchableOpacity>
             </Modal>
+
+            {/* Modal de Colaboración de Carpeta */}
+            {activeFolderObj && (
+                <ShareModal
+                    visible={isFolderShareModalVisible}
+                    onClose={() => setIsFolderShareModalVisible(false)}
+                    targetType="folder"
+                    targetId={activeFolderObj.id}
+                    targetTitle={activeFolderObj.name}
+                    isOwner={activeFolderObj.is_shared !== 1}
+                />
+            )}
         </View>
     );
 
@@ -2594,69 +2814,77 @@ const styles = StyleSheet.create({
         flex: 1,
     },
     headerContainer: {
-        paddingHorizontal: 20,
+        paddingHorizontal: 16,
         paddingTop: 4,
         paddingBottom: 4,
+        minHeight: 52,
+        justifyContent: 'center',
     },
     mainTopRow: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 10,
+        gap: 8,
         height: 44,
     },
     mainFiltersStrip: {
         flex: 1,
-        marginLeft: -20,
+        marginLeft: -16,
     },
     mainFiltersScrollContent: {
         flexDirection: 'row',
         alignItems: 'center',
         gap: 8,
-        paddingLeft: 20,
+        paddingLeft: 16,
         paddingRight: 4,
         paddingVertical: 4,
     },
-    mainTopActions: {
+    actionsPill: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
-    },
-    mainTopActionIconBtn: {
-        width: 36,
-        height: 36,
-        borderRadius: 12,
+        height: 34,
+        borderRadius: 17,
         borderWidth: 1,
+        paddingHorizontal: 3,
+    },
+    pillActionBtn: {
+        width: 28,
+        height: 28,
+        borderRadius: 14,
         alignItems: 'center',
         justifyContent: 'center',
+    },
+    pillDivider: {
+        width: 1,
+        height: 14,
+        marginHorizontal: 1,
     },
     folderChip: {
         flexDirection: 'row',
         alignItems: 'center',
+        height: 34,
         gap: 6,
-        paddingVertical: 6,
-        paddingLeft: 10,
-        paddingRight: 8,
-        borderRadius: 14,
+        paddingHorizontal: 10,
+        borderRadius: 17,
         borderWidth: 1,
     },
     folderChipText: {
         fontSize: 12,
     },
     folderChipBadge: {
-        fontSize: 10.5,
+        fontSize: 10,
         fontWeight: '700',
-        paddingHorizontal: 6,
-        paddingVertical: 1.5,
-        borderRadius: 8,
+        paddingHorizontal: 5,
+        paddingVertical: 1,
+        borderRadius: 999,
         overflow: 'hidden',
     },
     newFolderChip: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 4,
-        paddingVertical: 6,
+        height: 34,
+        gap: 5,
         paddingHorizontal: 10,
-        borderRadius: 14,
+        borderRadius: 17,
         borderWidth: 1,
         borderStyle: 'dashed',
     },
@@ -2837,36 +3065,7 @@ const styles = StyleSheet.create({
         fontSize: 11,
         fontWeight: '600',
     },
-    pillDivider: {
-        height: StyleSheet.hairlineWidth,
-        marginHorizontal: 4,
-        marginBottom: 8,
-    },
-    pillActionsRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-around',
-    },
-    pillActionBtn: {
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 3,
-        paddingVertical: 2,
-        paddingHorizontal: 6,
-        minWidth: 50,
-    },
-    pillActionIconCircle: {
-        width: 36,
-        height: 36,
-        borderRadius: 18,
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    pillActionLabel: {
-        fontSize: 10,
-        fontWeight: '600',
-        letterSpacing: 0.1,
-    },
+
     folderHeaderLeftCol: {
         flex: 1,
         flexDirection: 'row',
@@ -2904,7 +3103,8 @@ const styles = StyleSheet.create({
         flexShrink: 1,
     },
     searchExpandedBar: {
-        flex: 1,
+        width: '100%',
+        minHeight: 44,
         flexDirection: 'row',
         alignItems: 'center',
         gap: 8,
@@ -2935,7 +3135,7 @@ const styles = StyleSheet.create({
     },
     menuModalCardWrap: {
         position: 'absolute',
-        right: 20,
+        right: 16,
         width: 230,
     },
     menuModalCard: {
@@ -2967,21 +3167,21 @@ const styles = StyleSheet.create({
         top: 0,
         left: 0,
         right: 0,
-        height: 48,
+        bottom: 0,
         flexDirection: 'row',
         alignItems: 'center',
-        paddingHorizontal: 9,
-        borderRadius: 13,
+        paddingHorizontal: 8,
+        borderRadius: 16,
         borderWidth: 1,
         zIndex: 10,
     },
     cardIconBox: {
-        width: 30,
-        height: 30,
-        borderRadius: 8,
+        width: 24,
+        height: 24,
+        borderRadius: 7,
         alignItems: 'center',
         justifyContent: 'center',
-        marginRight: 8,
+        marginRight: 6,
     },
     cardTextCol: {
         flex: 1,

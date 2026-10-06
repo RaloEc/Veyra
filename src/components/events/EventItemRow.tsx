@@ -5,7 +5,7 @@ import {
     TouchableOpacity,
     StyleSheet,
 } from 'react-native';
-import { format, isToday, differenceInMinutes } from 'date-fns';
+import { format, isToday, differenceInMinutes, isSameDay } from 'date-fns';
 import { CalendarEvent } from '../../types/db';
 import { isEventOccurringOnDate } from '../../services/eventService';
 import { useVeyraTheme } from '../../theme/useVeyraTheme';
@@ -22,6 +22,8 @@ import { useRouter } from 'expo-router';
 
 interface EventItemRowProps {
     event: CalendarEvent;
+    itemTime?: number;
+    occurrenceDate?: Date;
     onPress?: () => void;
     onPressNote?: (noteId?: string | null) => void;
     onCreateNoteForEvent?: (event: CalendarEvent) => void;
@@ -29,6 +31,8 @@ interface EventItemRowProps {
 
 export function EventItemRow({
     event,
+    itemTime,
+    occurrenceDate,
     onPress,
     onPressNote,
     onCreateNoteForEvent,
@@ -45,7 +49,9 @@ export function EventItemRow({
     // Comprobar si el evento está "En curso ahora"
     const nowMs = Date.now();
     const today = new Date(nowMs);
-    const occursToday = isEventOccurringOnDate(event, today);
+    const targetDate = itemTime ? new Date(itemTime) : (occurrenceDate || startDate);
+    const isTargetToday = isSameDay(targetDate, today);
+    const occursToday = isTargetToday && isEventOccurringOnDate(event, today);
     let isHappeningNow = false;
     if (occursToday) {
         const startToday = new Date(today);

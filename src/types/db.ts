@@ -45,6 +45,8 @@ export interface Reminder {
     attachments?: string; // JSON array of strings (local paths or URIs)
     links?: string; // JSON array of links
     subtasks?: string; // JSON array of Subtask
+    is_shared?: number; // 0 | 1
+    shared_owner_id?: string;
 }
 
 export interface ComplianceEvent {
@@ -65,6 +67,7 @@ export interface NotificationAttempt {
 export interface Folder {
     id: string; // UUID
     user_id?: string;
+    parent_id?: string | null; // UUID de la carpeta contenedora (NULL si es carpeta raíz)
     name: string;
     icon?: string; // Nombre del icono de Lucide (ej: 'folder', 'briefcase', 'lightbulb')
     color?: string; // Color HEX o clave de acento
@@ -73,6 +76,8 @@ export interface Folder {
     updated_at_ms: number;
     last_modified_ms?: number;
     deleted?: number; // 0 | 1
+    is_shared?: number; // 0 | 1
+    shared_owner_id?: string;
 }
 
 export interface Note {
@@ -89,6 +94,8 @@ export interface Note {
     links?: string; // JSON array of strings
     deleted?: number; // 0 | 1
     last_modified_ms?: number;
+    is_shared?: number; // 0 | 1
+    shared_owner_id?: string;
 }
 
 export interface CalendarEvent {
@@ -105,8 +112,66 @@ export interface CalendarEvent {
     notification_offsets?: string; // JSON array of numbers, e.g. "[5, 15, 1440]"
     notification_ids?: string; // JSON array of string notification IDs
     note_id?: string | null; // UUID de la nota vinculada
+    tags?: string; // JSON array of string tags, e.g. '["clase", "universidad"]'
     created_at_ms: number;
     updated_at_ms: number;
     last_modified_ms?: number;
     deleted: number; // 0 | 1
+    is_shared?: number; // 0 | 1
+    shared_owner_id?: string;
 }
+
+// ─── Tipos para Colaboración y Recursos Compartidos ───────────
+
+export type CollabTargetType = 'folder' | 'reminder' | 'note' | 'event';
+export type CollabRole = 'viewer' | 'editor';
+
+export interface ShareInvitation {
+    id: string; // UUID
+    invite_code: string;
+    owner_id: string;
+    target_type: CollabTargetType;
+    target_id: string;
+    target_name?: string;
+    role: CollabRole;
+    is_public_members?: boolean;
+    status: 'pending' | 'accepted' | 'revoked' | 'expired';
+    created_at: string;
+    expires_at: string;
+}
+
+export interface Collaboration {
+    id: string; // UUID
+    target_type: CollabTargetType;
+    target_id: string;
+    owner_id: string;
+    member_id: string;
+    role: CollabRole;
+    is_public_members?: boolean;
+    joined_at: string;
+}
+
+export interface CollaboratorMember {
+    collaboration_id: string;
+    member_id: string;
+    email?: string;
+    name?: string;
+    full_name?: string;
+    role: CollabRole;
+    joined_at: string;
+    is_owner?: boolean;
+    is_public_members?: boolean;
+}
+
+export interface CollaborationActivity {
+    id: string; // UUID
+    target_type: CollabTargetType;
+    target_id: string;
+    actor_id: string;
+    actor_name?: string;
+    action: 'completed' | 'uncompleted' | 'edited' | 'added' | 'deleted';
+    item_title?: string;
+    details?: string;
+    created_at: string;
+}
+

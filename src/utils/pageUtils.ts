@@ -93,7 +93,7 @@ export function serializeNotePages(pages: NotePage[], layout: PageLayoutMode = '
 }
 
 function cleanHtmlAndEntities(html: string): string {
-    if (!html) return '';
+    if (!html || typeof html !== 'string') return '';
     return html
         .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
         .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
@@ -102,8 +102,23 @@ function cleanHtmlAndEntities(html: string): string {
         .replace(/&amp;/gi, '&')
         .replace(/&quot;/gi, '"')
         .replace(/&#39;/gi, "'")
+        .replace(/&apos;/gi, "'")
         .replace(/&lt;/gi, '<')
         .replace(/&gt;/gi, '>')
+        .replace(/&#(\d+);/g, (_, dec) => {
+            try {
+                return String.fromCharCode(Number(dec));
+            } catch {
+                return '';
+            }
+        })
+        .replace(/&#x([0-9a-fA-F]+);/g, (_, hex) => {
+            try {
+                return String.fromCharCode(parseInt(hex, 16));
+            } catch {
+                return '';
+            }
+        })
         .replace(/\s+/g, ' ')
         .trim();
 }
@@ -112,10 +127,16 @@ function cleanHtmlAndEntities(html: string): string {
  * Extrae texto plano de todas las páginas para búsquedas, vistas previas y resúmenes.
  */
 export function extractPlainTextFromPages(content?: string | null): string {
-    if (!content || !content.trim()) return '';
+    if (!content || typeof content !== 'string' || !content.trim()) return '';
     const { pages } = parseNotePages(content);
     return pages
-        .map(page => cleanHtmlAndEntities(page.content))
+        .map(page => {
+            const pageText = cleanHtmlAndEntities(page.content);
+            if (!pageText && page.title) {
+                return cleanHtmlAndEntities(page.title);
+            }
+            return pageText;
+        })
         .filter(Boolean)
         .join('\n');
 }

@@ -1,5 +1,5 @@
 import React, { useEffect, useCallback, useRef } from 'react';
-import { View, Text, StyleSheet, useWindowDimensions, Keyboard } from 'react-native';
+import { View, Text, StyleSheet, Dimensions, Platform, Keyboard } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { RichEditor } from 'react-native-pell-rich-editor';
 import { useVeyraTheme } from '../../theme/useVeyraTheme';
@@ -19,6 +19,7 @@ interface RichTextEditorSectionProps {
     onAutoScroll?: (deltaY: number) => void;
     onUndo?: () => void;
     onRedo?: () => void;
+    onCursorPosition?: (offsetY: number) => void;
 }
 
 /**
@@ -37,10 +38,11 @@ export function RichTextEditorSection({
     onAutoScroll,
     onUndo,
     onRedo,
+    onCursorPosition,
 }: RichTextEditorSectionProps) {
     const { t } = useTranslation();
     const { colors, typography, radii, isDark, accent } = useVeyraTheme();
-    const { height: screenHeight } = useWindowDimensions();
+    const screenHeight = Dimensions.get('screen').height;
     const calculatedMinHeight = flat ? Math.max(560, screenHeight - 140) : 68;
     const accentColor = accent.primary || '#8B5CF6';
     const internalRef = useRef<any>(null);
@@ -57,9 +59,18 @@ export function RichTextEditorSection({
                 const IS_DARK = ${isDark ? 'true' : 'false'};
                 const IS_READONLY = ${readOnly ? 'true' : 'false'};
                 const SCRIPT_VERSION = 'v42.0';
-                const SCREEN_HEIGHT = ${Math.round(screenHeight)};
+                const SCREEN_HEIGHT = window.innerHeight || ${Math.round(screenHeight)};
                 const TOP_ZONE = 100;
                 const BOTTOM_ZONE = 100;
+
+                // Prevenir que Chromium haga scroll interno dentro del WebView (el ScrollView nativo gestiona el scroll)
+                try {
+                    window.addEventListener('scroll', function() {
+                        if (window.scrollY !== 0 || window.scrollX !== 0) {
+                            window.scrollTo(0, 0);
+                        }
+                    }, { passive: false });
+                } catch(e) {}
 
                 window.__veyraAccentColor = ACCENT_COLOR;
                 window.__veyraIsDark = IS_DARK;
@@ -1315,7 +1326,7 @@ export function RichTextEditorSection({
         } catch (e) {
             console.warn('Error injecting script:', e);
         }
-    }, [accentColor, isDark, readOnly, screenHeight]);
+    }, [accentColor, isDark, readOnly]);
 
     const handleMessage = useCallback((message: any) => {
         try {
@@ -1711,6 +1722,7 @@ export function RichTextEditorSection({
                         }
                     }}
                     onBlur={onBlur}
+                    onCursorPosition={onCursorPosition}
                     placeholder={readOnly ? '' : t('create.placeholder_notes')}
                     scrollEnabled={false}
                     initialHeight={flat ? calculatedMinHeight : (readOnly ? 100 : calculatedMinHeight)}
@@ -1718,6 +1730,14 @@ export function RichTextEditorSection({
                     autoCapitalize="sentences"
                     autoCorrect={true}
                     editorInitializedCallback={() => {
+                        // Neutralizar el TextInput fantasma de Pell Rich Editor en Android para evitar saltos erráticos a bottom: -999
+                        if (Platform.OS === 'android' && activeRefHolder.current?.current?._input) {
+                            try {
+                                activeRefHolder.current.current._input.setNativeProps?.({
+                                    style: { position: 'absolute', top: 0, left: 0, width: 0, height: 0, opacity: 0 },
+                                });
+                            } catch {}
+                        }
                         injectImageHandlerScript();
                         injectCheckboxHandlerScript();
                     }}
@@ -1739,6 +1759,8 @@ export function RichTextEditorSection({
                                 height: 100% !important;
                                 margin: 0;
                                 padding: 0;
+                                overflow-x: hidden !important;
+                                overflow-y: hidden !important;
                                 cursor: ${readOnly ? 'default' : 'text'} !important;
                                 display: flex;
                                 flex-direction: column;

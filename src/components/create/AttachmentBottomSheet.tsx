@@ -20,6 +20,14 @@ interface AttachmentBottomSheetProps {
     onSelectCamera: () => void;
     onSelectGallery: () => void;
     onSelectDocument: () => void;
+    title?: string;
+    description?: string;
+    cameraTitle?: string;
+    cameraHint?: string;
+    galleryTitle?: string;
+    galleryHint?: string;
+    documentTitle?: string;
+    documentHint?: string;
 }
 
 /**
@@ -31,6 +39,14 @@ export function AttachmentBottomSheet({
     onSelectCamera,
     onSelectGallery,
     onSelectDocument,
+    title,
+    description,
+    cameraTitle,
+    cameraHint,
+    galleryTitle,
+    galleryHint,
+    documentTitle,
+    documentHint,
 }: AttachmentBottomSheetProps) {
     const { t } = useTranslation();
     const insets = useSafeAreaInsets();
@@ -119,9 +135,16 @@ export function AttachmentBottomSheet({
 
                     {/* Header del Sheet */}
                     <View style={styles.header}>
-                        <Text style={[styles.title, { color: colors.textPrimary, fontSize: 17, fontWeight: '700' }]}>
-                            {t('create.sections.attachments', { defaultValue: 'Adjuntar a la nota' })}
-                        </Text>
+                        <View style={{ flex: 1, marginRight: 10 }}>
+                            <Text style={[styles.title, { color: colors.textPrimary, fontSize: 17, fontWeight: '700' }]}>
+                                {title || t('create.sections.attachments', { defaultValue: 'Adjuntar a la nota' })}
+                            </Text>
+                            {Boolean(description) && (
+                                <Text style={{ color: colors.textSecondary, fontSize: 12.5, marginTop: 4, lineHeight: 17 }}>
+                                    {description}
+                                </Text>
+                            )}
+                        </View>
                         <TouchableOpacity
                             onPress={onClose}
                             style={[styles.closeBtn, { backgroundColor: colors.surface }]}
@@ -140,14 +163,14 @@ export function AttachmentBottomSheet({
                             onPress={() => handleAction(onSelectCamera)}
                         >
                             <View style={[styles.iconCircle, { backgroundColor: `${accent.primary}18` }]}>
-                                <Camera size={22} color={accent.primary} />
+                                <Camera size={22} color={accent.primary as any} />
                             </View>
                             <View style={styles.optionTextContainer}>
                                 <Text style={[styles.optionTitle, { color: colors.textPrimary }]}>
-                                    {t('create.multimedia.camera', { defaultValue: 'Hacer foto con la cámara' })}
+                                    {cameraTitle || t('create.multimedia.camera', { defaultValue: 'Hacer foto con la cámara' })}
                                 </Text>
                                 <Text style={[styles.optionSubtitle, { color: colors.textSecondary }]}>
-                                    {t('create.multimedia.camera_hint', { defaultValue: 'Capturar e insertar en la nota' })}
+                                    {cameraHint || t('create.multimedia.camera_hint', { defaultValue: 'Capturar e insertar en la nota' })}
                                 </Text>
                             </View>
                         </TouchableOpacity>
@@ -163,10 +186,10 @@ export function AttachmentBottomSheet({
                             </View>
                             <View style={styles.optionTextContainer}>
                                 <Text style={[styles.optionTitle, { color: colors.textPrimary }]}>
-                                    {t('create.multimedia.gallery', { defaultValue: 'Elegir de la galería' })}
+                                    {galleryTitle || t('create.multimedia.gallery', { defaultValue: 'Elegir de la galería' })}
                                 </Text>
                                 <Text style={[styles.optionSubtitle, { color: colors.textSecondary }]}>
-                                    {t('create.multimedia.gallery_hint', { defaultValue: 'Insertar en la posición del cursor' })}
+                                    {galleryHint || t('create.multimedia.gallery_hint', { defaultValue: 'Insertar en la posición del cursor' })}
                                 </Text>
                             </View>
                         </TouchableOpacity>
@@ -182,10 +205,10 @@ export function AttachmentBottomSheet({
                             </View>
                             <View style={styles.optionTextContainer}>
                                 <Text style={[styles.optionTitle, { color: colors.textPrimary }]}>
-                                    {t('create.multimedia.document', { defaultValue: 'Adjuntar documento o PDF' })}
+                                    {documentTitle || t('create.multimedia.document', { defaultValue: 'Adjuntar documento o PDF' })}
                                 </Text>
                                 <Text style={[styles.optionSubtitle, { color: colors.textSecondary }]}>
-                                    {t('create.multimedia.document_hint', { defaultValue: 'Archivos legibles por el sistema' })}
+                                    {documentHint || t('create.multimedia.document_hint', { defaultValue: 'Archivos legibles por el sistema' })}
                                 </Text>
                             </View>
                         </TouchableOpacity>

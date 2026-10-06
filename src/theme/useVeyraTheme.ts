@@ -1,3 +1,4 @@
+import { useColorScheme } from 'react-native';
 import { useStore } from '../store/useStore';
 import { useAccentColor, AccentTheme, AccentPalette } from './accentColors';
 import { VEYRA_TOKENS, ControlLevelType } from './tokens';
@@ -5,13 +6,19 @@ import { VEYRA_TOKENS, ControlLevelType } from './tokens';
 /**
  * useVeyraTheme
  * Hook unificado para acceder a tokens, modo claro/oscuro, color de acento y colores semánticos.
+ * Se adapta automáticamente al modo claro/oscuro del sistema cuando themeMode es 'system'.
  */
 export function useVeyraTheme() {
-    const themeMode = useStore(state => state.theme) || 'dark';
-    const accentTheme = (useStore(state => state.accentTheme) || 'purple') as AccentTheme;
+    const systemColorScheme = useColorScheme();
+    const themeMode = useStore(state => state.theme) || 'system';
+    const accentTheme = (useStore(state => state.accentTheme) || 'blue') as AccentTheme;
     const accentPalette = useAccentColor();
 
-    const isDark = themeMode === 'dark';
+    const resolvedTheme: 'light' | 'dark' = themeMode === 'system'
+        ? (systemColorScheme === 'dark' ? 'dark' : 'light')
+        : themeMode;
+
+    const isDark = resolvedTheme === 'dark';
     const modeColors = isDark ? VEYRA_TOKENS.colors.dark : VEYRA_TOKENS.colors.light;
 
     // Helper for semantic control level tokens
@@ -48,6 +55,7 @@ export function useVeyraTheme() {
         // State
         isDark,
         themeMode,
+        resolvedTheme,
         accentTheme,
 
         // Palettes

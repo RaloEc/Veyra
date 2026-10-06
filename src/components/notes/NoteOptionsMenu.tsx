@@ -19,6 +19,8 @@ import {
     Trash2,
     Edit3,
     Eye,
+    Share2,
+    Clock,
 } from '@tamagui/lucide-icons';
 import { useVeyraTheme } from '../../theme/useVeyraTheme';
 import { VeyraSurface } from '../ui/VeyraSurface';
@@ -26,6 +28,8 @@ import { VeyraSurface } from '../ui/VeyraSurface';
 export interface NoteOptionsMenuProps {
     visible: boolean;
     onClose: () => void;
+    onShare?: () => void;
+    onViewHistory?: () => void;
     onExportPdf: () => void;
     isExportingPdf?: boolean;
     onOpenPagesManager: () => void;
@@ -52,6 +56,8 @@ export function NoteOptionsMenu({
     onDelete,
     isEditMode,
     onToggleEditMode,
+    onShare,
+    onViewHistory,
 }: NoteOptionsMenuProps) {
     const { t } = useTranslation();
     const insets = useSafeAreaInsets();
@@ -173,6 +179,44 @@ export function NoteOptionsMenu({
                                 {t('notes.export_pdf', { defaultValue: 'Exportar a PDF' })}
                             </Text>
                         </TouchableOpacity>
+
+                        {/* Compartir nota */}
+                        {onShare && (
+                            <TouchableOpacity
+                                activeOpacity={0.65}
+                                onPress={() => {
+                                    onClose();
+                                    onShare();
+                                }}
+                                style={styles.menuRow}
+                            >
+                                <View style={styles.iconSlot}>
+                                    <Share2 size={16} color="#10B981" strokeWidth={2.2} />
+                                </View>
+                                <Text style={[styles.menuLabel, { color: colors.textPrimary }]}>
+                                    {t('common.share', { defaultValue: 'Compartir nota' })}
+                                </Text>
+                            </TouchableOpacity>
+                        )}
+
+                        {/* Historial de cambios */}
+                        {onViewHistory && (
+                            <TouchableOpacity
+                                activeOpacity={0.65}
+                                onPress={() => {
+                                    onClose();
+                                    onViewHistory();
+                                }}
+                                style={styles.menuRow}
+                            >
+                                <View style={styles.iconSlot}>
+                                    <Clock size={16} color={accent.primary as any} strokeWidth={2.2} />
+                                </View>
+                                <Text style={[styles.menuLabel, { color: colors.textPrimary }]}>
+                                    {t('notes.activity_history', { defaultValue: 'Historial de cambios' })}
+                                </Text>
+                            </TouchableOpacity>
+                        )}
 
                         {/* 2. Organizador de Hojas */}
                         <TouchableOpacity

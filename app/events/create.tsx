@@ -42,6 +42,8 @@ import {
     Link,
     Unlink,
     Notebook,
+    Share2,
+    Tag as TagIcon,
 } from '@tamagui/lucide-icons';
 import { format, addHours } from 'date-fns';
 import { es } from 'date-fns/locale';
@@ -54,7 +56,10 @@ import { VeyraSurface } from '../../src/components/ui/VeyraSurface';
 import { VeyraButton } from '../../src/components/ui/VeyraButton';
 import { VeyraIconButton } from '../../src/components/ui/VeyraIconButton';
 import { DatePickerModal, TimePickerModal } from '../../src/components/ui';
+import { RecurringDeleteModal } from '../../src/components/events/RecurringDeleteModal';
+import { ShareModal } from '../../src/components/collaboration/ShareModal';
 import { CalendarEvent, Note } from '../../src/types/db';
+import { parseInitialDate } from '../../src/hooks/useCreateReminder';
 
 const EVENT_COLORS = [
     { label: 'Azul', color: '#3B82F6' },
@@ -109,13 +114,15 @@ const WEEKDAYS = [
     { label: 'D', name: 'Domingo', day: 0 },
 ];
 
+const PRESET_TAGS = ['clase', 'universidad', 'trabajo', 'personal', 'salud', 'gym'];
+
 export default function CreateOrEditEventScreen() {
     const router = useRouter();
     const { insets, bottom: bottomInset } = useScreenInsets();
-    const { id, initialDate } = useLocalSearchParams<{ id?: string; initialDate?: string }>();
+    const { id, initialDate, occurrenceDate, tag, dayOfWeek } = useLocalSearchParams<{ id?: string; initialDate?: string; occurrenceDate?: string; tag?: string; dayOfWeek?: string }>();
     const { colors, typography, radii, accent, isDark } = useVeyraTheme();
 
-    const { events, createEvent, updateEvent, deleteEvent, linkNoteToEvent, unlinkNoteFromEvent } = useEventsStore();
+    const { events, createEvent, updateEvent, deleteEvent, deleteEventOccurrence, linkNoteToEvent, unlinkNoteFromEvent } = useEventsStore();
     const { notes, addNote } = useNotesStore();
 
     const isEditing = Boolean(id && id !== 'create');
@@ -126,6 +133,37 @@ export default function CreateOrEditEventScreen() {
     const [description, setDescription] = useState(existingEvent?.description || '');
     const [location, setLocation] = useState(existingEvent?.location || '');
     const [selectedColor, setSelectedColor] = useState(existingEvent?.color || EVENT_COLORS[0].color);
+    const [isRecurringDeleteModalVisible, setIsRecurringDeleteModalVisible] = useState(false);
+    const [isShareModalVisible, setIsShareModalVisible] = useState(false);
+
+    // Tags / Etiquetas
+    const [tags, setTags] = useState<string[]>(() => {
+        const cleanTag = tag ? tag.toLowerCase().replace(/^#/, '') : null;
+        if (!existingEvent?.tags) {
+            return cleanTag ? [cleanTag] : [];
+        }
+        try {
+            const parsed = JSON.parse(existingEvent.tags);
+            const list = Array.isArray(parsed) ? parsed : [];
+            if (cleanTag && !list.includes(cleanTag)) list.push(cleanTag);
+            return list;
+        } catch {
+            return cleanTag ? [cleanTag] : [];
+        }
+    });
+    const [customTagInput, setCustomTagInput] = useState('');
+
+    const handleAddTag = (tagToAdd: string) => {
+        const cleaned = tagToAdd.trim().toLowerCase().replace(/^#/, '');
+        if (cleaned && !tags.includes(cleaned)) {
+            setTags(prev => [...prev, cleaned]);
+        }
+        setCustomTagInput('');
+    };
+
+    const handleRemoveTag = (tagToRemove: string) => {
+        setTags(prev => prev.filter(t => t !== tagToRemove));
+    };
 
     // Múltiples avisos preventivos en pila
     const [selectedOffsets, setSelectedOffsets] = useState<number[]>(() => {
@@ -157,9 +195,10 @@ export default function CreateOrEditEventScreen() {
     };
 
     // Fechas y horas
-    const initialBaseDate = initialDate ? new Date(initialDate) : new Date();
+    const parsedOccurrenceDate = useMemo(() => (occurrenceDate ? new Date(occurrenceDate) : null), [occurrenceDate]);
+    const initialBaseDate = parsedOccurrenceDate || (initialDate ? parseInitialDate(initialDate) : new Date());
     const [eventDate, setEventDate] = useState<Date>(
-        existingEvent ? new Date(existingEvent.start_time_ms) : initialBaseDate
+        parsedOccurrenceDate || (existingEvent ? new Date(existingEvent.start_time_ms) : initialBaseDate)
     );
     const [startTime, setStartTime] = useState<Date>(() => {
         if (existingEvent) return new Date(existingEvent.start_time_ms);
@@ -259,6 +298,12 @@ export default function CreateOrEditEventScreen() {
 
         const notificationOffsetsJson = JSON.stringify(selectedOffsets);
         const primaryOffset = selectedOffsets.length > 0 ? selectedOffsets[0] : null;
+        const finalTags = [...tags];
+        const combinedText = `${title} ${description}`.toLowerCase();
+        if (/#clase\b/i.test(combinedText) && !finalTags.includes('clase')) {
+            finalTags.push('clase');
+        }
+        const tagsJson = finalTags.length > 0 ? JSON.stringify(finalTags) : undefined;
 
         if (isEditing && existingEvent) {
             await updateEvent(existingEvent.id, {
@@ -272,6 +317,7 @@ export default function CreateOrEditEventScreen() {
                 notification_offset_min: primaryOffset ?? undefined,
                 notification_offsets: notificationOffsetsJson,
                 note_id: linkedNoteId,
+                tags: tagsJson,
             });
         } else {
             await createEvent({
@@ -285,6 +331,7 @@ export default function CreateOrEditEventScreen() {
                 notificationOffsetMin: primaryOffset ?? undefined,
                 notificationOffsets: notificationOffsetsJson,
                 noteId: linkedNoteId,
+                tags: tagsJson,
             });
         }
 
@@ -293,21 +340,32 @@ export default function CreateOrEditEventScreen() {
 
     const handleDelete = () => {
         if (!existingEvent) return;
-        Alert.alert(
-            'Eliminar Evento',
-            '¿Estás seguro de que deseas eliminar este evento?',
-            [
-                { text: 'Cancelar', style: 'cancel' },
-                {
-                    text: 'Eliminar',
-                    style: 'destructive',
-                    onPress: async () => {
-                        await deleteEvent(existingEvent.id);
-                        handleBack();
+        if (isRecurring) {
+            setIsRecurringDeleteModalVisible(true);
+        } else {
+            Alert.alert(
+                'Eliminar Evento',
+                '¿Estás seguro de que deseas eliminar este evento?',
+                [
+                    { text: 'Cancelar', style: 'cancel' },
+                    {
+                        text: 'Eliminar',
+                        style: 'destructive',
+                        onPress: async () => {
+                            await deleteEvent(existingEvent.id);
+                            handleBack();
+                        },
                     },
-                },
-            ]
-        );
+                ]
+            );
+        }
+    };
+
+    const handleConfirmRecurringDelete = async (mode: 'this' | 'following' | 'all') => {
+        setIsRecurringDeleteModalVisible(false);
+        if (!existingEvent) return;
+        await deleteEventOccurrence(existingEvent.id, eventDate, mode);
+        handleBack();
     };
 
     const { height: screenHeight } = useWindowDimensions();
@@ -441,6 +499,14 @@ export default function CreateOrEditEventScreen() {
                     {isEditing ? 'Editar Evento' : 'Nuevo Evento'}
                 </Text>
                 <View style={styles.headerActions}>
+                    {isEditing && existingEvent && (
+                        <VeyraIconButton
+                            icon={<Share2 size={17} color={colors.textPrimary as any} />}
+                            onPress={() => setIsShareModalVisible(true)}
+                            variant="ghost"
+                            size="sm"
+                        />
+                    )}
                     {isEditing && (
                         <VeyraIconButton
                             icon={<Trash2 size={17} color={isDark ? '#FB7185' : '#E11D48'} />}
@@ -500,6 +566,115 @@ export default function CreateOrEditEventScreen() {
                         style={[styles.descInput, { color: colors.textSecondary }]}
                         multiline
                     />
+                </VeyraSurface>
+
+                {/* Etiquetas / Categorías */}
+                <VeyraSurface level={1} radius="lg" style={styles.section}>
+                    <View style={styles.rowIconLabel}>
+                        <TagIcon size={18} color={accent.primary as any} />
+                        <Text style={[styles.sectionTitleNoMargin, { color: colors.textSecondary }]}>
+                            ETIQUETAS / CATEGORÍAS
+                        </Text>
+                    </View>
+                    <Text style={[styles.helperText, { color: colors.textMuted, marginTop: 4, marginBottom: 8 }]}>
+                        Usa <Text style={{ color: accent.primary, fontWeight: '700' }}>#clase</Text> para que se sincronice con el widget de Horario de Clases.
+                    </Text>
+
+                    {/* Tags activos */}
+                    {tags.length > 0 && (
+                        <View style={styles.tagsContainer}>
+                            {tags.map(tag => (
+                                <View
+                                    key={tag}
+                                    style={[
+                                        styles.tagBadgeActive,
+                                        {
+                                            backgroundColor: tag === 'clase' ? `${accent.primary}25` : (isDark ? '#334155' : '#E2E8F0'),
+                                            borderColor: tag === 'clase' ? accent.primary : colors.borderSubtle,
+                                        },
+                                    ]}
+                                >
+                                    <Text
+                                        style={[
+                                            styles.tagBadgeText,
+                                            { color: tag === 'clase' ? accent.primary : colors.textPrimary, fontWeight: '600' },
+                                        ]}
+                                    >
+                                        #{tag}
+                                    </Text>
+                                    <TouchableOpacity
+                                        activeOpacity={0.7}
+                                        onPress={() => handleRemoveTag(tag)}
+                                        style={styles.tagRemoveBtn}
+                                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                                    >
+                                        <X size={12} color={colors.textSecondary as any} />
+                                    </TouchableOpacity>
+                                </View>
+                            ))}
+                        </View>
+                    )}
+
+                    {/* Input para agregar tag nuevo */}
+                    <View style={styles.tagInputRow}>
+                        <TextInput
+                            placeholder="Añadir etiqueta (ej: #estudio)"
+                            placeholderTextColor={colors.textMuted}
+                            value={customTagInput}
+                            onChangeText={setCustomTagInput}
+                            onSubmitEditing={() => handleAddTag(customTagInput)}
+                            returnKeyType="done"
+                            style={[
+                                styles.tagInputField,
+                                { color: colors.textPrimary, borderColor: colors.borderSubtle },
+                            ]}
+                        />
+                        {customTagInput.trim().length > 0 && (
+                            <TouchableOpacity
+                                activeOpacity={0.7}
+                                onPress={() => handleAddTag(customTagInput)}
+                                style={[styles.tagAddBtn, { backgroundColor: accent.primary }]}
+                            >
+                                <Plus size={16} color="#FFFFFF" />
+                            </TouchableOpacity>
+                        )}
+                    </View>
+
+                    {/* Chips rápidos sugeridos */}
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tagChipsRow}>
+                        {PRESET_TAGS.map(preset => {
+                            const isSelected = tags.includes(preset);
+                            return (
+                                <TouchableOpacity
+                                    key={preset}
+                                    activeOpacity={0.7}
+                                    onPress={() => isSelected ? handleRemoveTag(preset) : handleAddTag(preset)}
+                                    style={[
+                                        styles.tagChipPreset,
+                                        {
+                                            backgroundColor: isSelected
+                                                ? `${accent.primary}20`
+                                                : (isDark ? '#1E293B' : '#F1F5F9'),
+                                            borderColor: isSelected ? accent.primary : colors.borderSubtle,
+                                        },
+                                    ]}
+                                >
+                                    <Text
+                                        style={[
+                                            styles.tagChipPresetText,
+                                            {
+                                                color: isSelected ? accent.primary : colors.textSecondary,
+                                                fontWeight: isSelected ? '700' : '500',
+                                            },
+                                        ]}
+                                    >
+                                        #{preset}
+                                    </Text>
+                                    {isSelected && <Check size={12} color={accent.primary as any} style={{ marginLeft: 4 }} />}
+                                </TouchableOpacity>
+                            );
+                        })}
+                    </ScrollView>
                 </VeyraSurface>
 
                 {/* Fecha y Horario (Rango Inicio - Fin) */}
@@ -979,6 +1154,26 @@ export default function CreateOrEditEventScreen() {
                     setEndTime(selectedTime);
                 }}
             />
+
+            <RecurringDeleteModal
+                visible={isRecurringDeleteModalVisible}
+                eventTitle={title || existingEvent?.title}
+                occurrenceDate={eventDate}
+                onClose={() => setIsRecurringDeleteModalVisible(false)}
+                onConfirm={handleConfirmRecurringDelete}
+            />
+
+            {/* Modal de Compartir Evento */}
+            {isEditing && existingEvent && (
+                <ShareModal
+                    visible={isShareModalVisible}
+                    onClose={() => setIsShareModalVisible(false)}
+                    targetType="event"
+                    targetId={existingEvent.id}
+                    targetTitle={title.trim() || existingEvent.title || 'Evento'}
+                    isOwner={existingEvent.is_shared !== 1}
+                />
+            )}
                 </SafeAreaView>
             </Reanimated.View>
 
@@ -1419,5 +1614,62 @@ const styles = StyleSheet.create({
         textAlign: 'center',
         paddingVertical: 24,
         fontSize: 13,
+    },
+    tagsContainer: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        gap: 8,
+        marginBottom: 12,
+    },
+    tagBadgeActive: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingHorizontal: 10,
+        paddingVertical: 5,
+        borderRadius: 16,
+        borderWidth: 1,
+        gap: 6,
+    },
+    tagBadgeText: {
+        fontSize: 13,
+    },
+    tagRemoveBtn: {
+        padding: 2,
+    },
+    tagInputRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        marginBottom: 12,
+    },
+    tagInputField: {
+        flex: 1,
+        borderWidth: 1,
+        borderRadius: 10,
+        paddingHorizontal: 12,
+        paddingVertical: 8,
+        fontSize: 14,
+    },
+    tagAddBtn: {
+        width: 36,
+        height: 36,
+        borderRadius: 10,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    tagChipsRow: {
+        gap: 8,
+        paddingVertical: 2,
+    },
+    tagChipPreset: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingHorizontal: 12,
+        paddingVertical: 6,
+        borderRadius: 14,
+        borderWidth: 1,
+    },
+    tagChipPresetText: {
+        fontSize: 12,
     },
 });

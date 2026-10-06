@@ -5,6 +5,7 @@ import { Platform } from 'react-native';
 import { format } from 'date-fns';
 import { getSoundName } from '../constants/sounds';
 import i18n from '../lib/i18n';
+import { VeyraAlarm } from './veyraAlarm';
 
 export const DEFAULT_SOUND_SETTINGS = {
     normal: 'ping_brillante.wav',
@@ -22,6 +23,8 @@ const stripExtension = (filename: string): string => {
     const lastDot = filename.lastIndexOf('.');
     return lastDot !== -1 ? filename.substring(0, lastDot) : filename;
 };
+
+export const CURRENT_CHANNEL_VERSION = 'v6';
 
 export const NotificationService = {
     async setup() {
@@ -55,7 +58,7 @@ export const NotificationService = {
 
         try {
             const soundKey = stripExtension(soundFilename);
-            const channelId = `veyra_v5_${level}_${soundKey || 'default'}`;
+            const channelId = `veyra_${CURRENT_CHANNEL_VERSION}_${level}_${soundKey || 'default'}`;
             const soundLabel = getSoundName(soundFilename);
 
             let channelName = 'Normal';
@@ -137,14 +140,15 @@ export const NotificationService = {
                 const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient || (Constants as any).appOwnership === 'expo';
                 if (!isExpoGo) {
                     try {
-                        // Limpiar canales obsoletos (v1, v2, v3, v4) para garantizar configuración limpia
+                        // Limpiar canales obsoletos (v1, v2, v3, v4, v5) para garantizar configuración limpia
                         const existingChannels = await Notifications.getNotificationChannelsAsync();
                         for (const ch of existingChannels) {
                             if (
                                 ch.id.startsWith('veyra_v1_') ||
                                 ch.id.startsWith('veyra_v2_') ||
                                 ch.id.startsWith('veyra_v3_') ||
-                                ch.id.startsWith('veyra_v4_')
+                                ch.id.startsWith('veyra_v4_') ||
+                                ch.id.startsWith('veyra_v5_')
                             ) {
                                 console.log(`[NotificationService] 🧹 Eliminando canal obsoleto: ${ch.id}`);
                                 await Notifications.deleteNotificationChannelAsync(ch.id);
@@ -165,6 +169,24 @@ export const NotificationService = {
         } catch (e) {
             console.warn('[NotificationService] Error requesting notification permissions:', e);
             return false;
+        }
+    },
+
+    /**
+     * Comprueba permisos avanzados necesarios para recordatorios críticos en Android (alarmas exactas y pantalla completa)
+     */
+    async checkCriticalAlarmPermissions(): Promise<{ canExact: boolean; canFullScreen: boolean }> {
+        if (!VeyraAlarm.isAvailable()) {
+            return { canExact: true, canFullScreen: true };
+        }
+        try {
+            const [canExact, canFullScreen] = await Promise.all([
+                VeyraAlarm.canScheduleExactAlarms(),
+                VeyraAlarm.canUseFullScreenIntent(),
+            ]);
+            return { canExact, canFullScreen };
+        } catch {
+            return { canExact: true, canFullScreen: true };
         }
     },
 
@@ -340,11 +362,45 @@ export const NotificationService = {
             }
             console.log(`[NotificationService] 🔁 ${repeats} notificaciones de respaldo programadas a intervalos de ${interval / 60000}m`);
         }
+
+        // Programar en el motor nativo de alarmas exactas (Android AlarmManager) para recordatorios críticos
+        if (reminder.control_level === 'critical' && VeyraAlarm.isAvailable()) {
+            try {
+                console.log(`[NotificationService] 🚨 Programando alarma nativa exacta para [${reminder.id}]`);
+                await VeyraAlarm.schedule({
+                    id: reminder.id,
+                    triggerAt: trigger,
+                    title: reminder.title,
+                    description: descriptionBody,
+                    sound: soundFile,
+                    controlLevel: reminder.control_level,
+                });
+            } catch (alarmErr) {
+                console.warn('[NotificationService] Falló programación nativa de alarma exacta:', alarmErr);
+            }
+        }
+
         return notificationIds;
     },
 
     async cancelNotificationsForReminder(reminderId: string, storedIds?: string[]) {
         console.log(`[NotificationService] 🛑 Cancelando notificaciones para recordatorio: ${reminderId}`);
+        // Cancelar también cualquier alarma activa en el motor nativo
+        if (VeyraAlarm.isAvailable()) {
+            VeyraAlarm.cancel(reminderId).catch(() => {});
+        }
+        // Descartar notificaciones ya presentadas en la barra de estado
+        try {
+            const presented = await Notifications.getPresentedNotificationsAsync();
+            for (const notif of presented) {
+                const notifReminderId = notif.request.content.data?.reminderId;
+                if (notifReminderId === reminderId || notif.request.identifier === reminderId) {
+                    await Notifications.dismissNotificationAsync(notif.request.identifier);
+                }
+            }
+        } catch (dismissErr) {
+            console.warn('[NotificationService] Error descartando notificaciones presentadas:', dismissErr);
+        }
         if (storedIds && storedIds.length > 0) {
             await Promise.all(storedIds.map(id => Notifications.cancelScheduledNotificationAsync(id)));
             console.log(`[NotificationService] Canceladas ${storedIds.length} notificaciones por ID almacenado`);
@@ -519,6 +575,57 @@ export const NotificationService = {
     },
 
     /**
+     * Registra el token de notificaciones push de Expo en Supabase para el usuario autenticado.
+     * Permite recibir alertas colaborativas ("X completó la tarea", etc.).
+     */
+    async registerPushToken(userId: string): Promise<string | null> {
+        if (!userId) return null;
+        try {
+            const { status: existingStatus } = await Notifications.getPermissionsAsync();
+            let finalStatus = existingStatus;
+            if (existingStatus !== 'granted') {
+                const { status } = await Notifications.requestPermissionsAsync();
+                finalStatus = status;
+            }
+            if (finalStatus !== 'granted') {
+                console.log('[NotificationService] Permiso de notificaciones no concedido para push token');
+                return null;
+            }
+
+            const projectId = Constants.expoConfig?.extra?.eas?.projectId || '01983506-e77d-4420-9219-4d451f832e9a';
+            const tokenData = await Notifications.getExpoPushTokenAsync({ projectId });
+            const token = tokenData.data;
+
+            if (!token) return null;
+
+            const { supabase } = await import('../lib/supabase');
+            const platform = Platform.OS === 'ios' ? 'ios' : Platform.OS === 'android' ? 'android' : 'web';
+
+            const { error } = await supabase.from('push_tokens').upsert(
+                {
+                    user_id: userId,
+                    token,
+                    platform,
+                    device_id: Constants.installationId || undefined,
+                    updated_at: new Date().toISOString(),
+                },
+                { onConflict: 'user_id,token' }
+            );
+
+            if (error) {
+                console.warn('[NotificationService] Error al guardar push token en Supabase:', error.message);
+            } else {
+                console.log('[NotificationService] ✅ Push token registrado exitosamente en Supabase');
+            }
+
+            return token;
+        } catch (error) {
+            console.warn('[NotificationService] No se pudo registrar push token (entorno sin soporte push o emulador):', error);
+            return null;
+        }
+    },
+
+    /**
      * Cancela las notificaciones programadas de un evento.
      */
     async cancelEventNotifications(notificationIdsJson?: string) {
@@ -532,6 +639,26 @@ export const NotificationService = {
             }
         } catch (error) {
             console.warn('[NotificationService] Error canceling event notifications:', error);
+        }
+    },
+
+    /**
+     * Desregistra el push token al cerrar sesión.
+     */
+    async unregisterPushToken(userId: string): Promise<void> {
+        if (!userId) return;
+        try {
+            const projectId = Constants.expoConfig?.extra?.eas?.projectId || '01983506-e77d-4420-9219-4d451f832e9a';
+            const tokenData = await Notifications.getExpoPushTokenAsync({ projectId }).catch(() => null);
+            const token = tokenData?.data;
+
+            if (token) {
+                const { supabase } = await import('../lib/supabase');
+                await supabase.from('push_tokens').delete().match({ user_id: userId, token });
+                console.log('[NotificationService] Push token removido de Supabase');
+            }
+        } catch (error) {
+            console.warn('[NotificationService] Error al desregistrar push token:', error);
         }
     },
 };

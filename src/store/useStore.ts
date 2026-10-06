@@ -5,9 +5,20 @@ import { LayoutAnimation } from 'react-native';
 import { ReminderService } from '../services/reminderService';
 import { NotificationService } from '../services/notificationService';
 import { ComplianceService } from '../services/complianceService';
+import { WidgetService } from '../services/widgetService';
+import { CollaborationService } from '../services/collaborationService';
 import { Reminder, ControlLevel, ReminderStatus } from '../types/db';
 import { AccentTheme } from '../theme/accentColors';
 import { defaultLanguage } from '../lib/i18n';
+
+export const PREMIUM_WHITELIST_EMAILS = [
+    'ricardo.lopez.18.ralo@gmail.com',
+];
+
+export const isWhitelistedPremiumEmail = (email?: string | null): boolean => {
+    if (!email) return false;
+    return PREMIUM_WHITELIST_EMAILS.includes(email.toLowerCase().trim());
+};
 
 const safeParseArray = (jsonString: string | null | undefined): string[] => {
     if (!jsonString) return [];
@@ -24,7 +35,6 @@ interface AppState {
     history: Reminder[];
     isRemindersDirty: boolean;
     markRemindersDirty: (dirty: boolean) => void;
-    theme: 'light' | 'dark';
     isLoading: boolean;
     loadReminders: () => Promise<void>;
     loadHistory: () => Promise<void>;
@@ -46,15 +56,18 @@ interface AppState {
     snoozeReminder: (id: string, minutes: number, isMassSnooze?: boolean) => Promise<void>;
     snoozeRemindersBatch: (ids: string[], minutes: number) => Promise<void>;
     toggleTheme: () => void;
-    setTheme: (theme: 'light' | 'dark') => void;
+    theme: 'system' | 'light' | 'dark';
+    setTheme: (theme: 'system' | 'light' | 'dark') => void;
     onboardingCompleted: boolean;
     userProfile: 'student' | 'work' | 'personal' | 'custom' | null;
     userName: string | null;
     userEmail: string | null;
+    userAvatar?: string | null;
     completeOnboarding: () => void;
     setUserProfile: (profile: 'student' | 'work' | 'personal' | 'custom') => void;
     setUserName: (name: string) => void;
     setUserEmail: (email: string) => void;
+    setUserAvatar: (avatar: string | null) => void;
     defaultControlLevel: ControlLevel;
     isHydrated: boolean;
     session: any | null;
@@ -78,7 +91,7 @@ interface AppState {
     isSyncing: boolean;
     lastSyncTime: number | null;
     syncError: string | null;
-    triggerSync: () => Promise<void>;
+    triggerSync: (isInitialLogin?: boolean, isBackground?: boolean) => Promise<void>;
     streak: number;
     loadStreak: () => Promise<void>;
     accentTheme: AccentTheme;
@@ -89,6 +102,10 @@ interface AppState {
     setTabTransitionDirection: (direction: 'forward' | 'backward' | 'none') => void;
     mainActiveTab: 'reminders' | 'notes';
     setMainActiveTab: (tab: 'reminders' | 'notes') => void;
+    widgetTextScale: number;
+    setWidgetTextScale: (scale: number) => void;
+    widgetHighContrast: boolean;
+    setWidgetHighContrast: (enabled: boolean) => void;
 }
 
 export const useStore = create<AppState>()(
@@ -98,7 +115,7 @@ export const useStore = create<AppState>()(
             history: [],
             isRemindersDirty: true,
             markRemindersDirty: (dirty: boolean) => set({ isRemindersDirty: dirty }),
-            theme: 'light',
+            theme: 'system',
             isLoading: false,
 
             loadReminders: async () => {
@@ -106,6 +123,8 @@ export const useStore = create<AppState>()(
                 try {
                     const reminders = await ReminderService.getReminders();
                     set({ reminders, isRemindersDirty: false });
+                    WidgetService.sync(reminders).catch(() => {});
+                    WidgetService.syncSchedule().catch(() => {});
                 } catch (error: any) {
                     if (!error.message?.includes('no such table')) console.error(error);
                 } finally {
@@ -154,17 +173,26 @@ export const useStore = create<AppState>()(
 
             markAsCompleted: async (id) => {
                 try {
+                    // Limpiar inmediatamente notificaciones de la barra (tanto nativas como de expo)
+                    await NotificationService.cancelNotificationsForReminder(id);
+
                     let reminder = get().reminders.find(r => r.id === id);
                     if (!reminder) {
                         reminder = await ReminderService.getReminderById(id) || undefined;
                     }
                     if (!reminder) return;
 
-                    const storedIds = safeParseArray(reminder.notification_ids);
-                    await NotificationService.cancelNotificationsForReminder(id, storedIds);
-
                     await ReminderService.markAsCompleted(id);
                     await ComplianceService.logEvent(id, 'completed');
+
+                    if (reminder && (reminder.is_shared === 1 || reminder.shared_owner_id)) {
+                        CollaborationService.notifyChange({
+                            targetType: 'reminder',
+                            targetId: reminder.id,
+                            action: 'completed',
+                            itemTitle: reminder.title,
+                        });
+                    }
 
                     // Handle recurrence: create next occurrence
                     if (reminder.repeat_rule) {
@@ -235,6 +263,14 @@ export const useStore = create<AppState>()(
                     await ReminderService.updateReminder(id, { status: 'pending', last_modified_ms: Date.now() });
                     const reminder = await ReminderService.getReminderById(id);
                     if (reminder) {
+                        if (reminder.is_shared === 1 || reminder.shared_owner_id) {
+                            CollaborationService.notifyChange({
+                                targetType: 'reminder',
+                                targetId: reminder.id,
+                                action: 'uncompleted',
+                                itemTitle: reminder.title,
+                            });
+                        }
                         const notifIds = await NotificationService.scheduleReminderNotification(reminder, get().soundSettings);
                         if (notifIds.length > 0) {
                             await ReminderService.updateReminder(id, { notification_ids: JSON.stringify(notifIds) });
@@ -256,6 +292,14 @@ export const useStore = create<AppState>()(
                     const reminder = get().reminders.find(r => r.id === id);
 
                     if (reminder) {
+                        if (reminder.is_shared === 1 || reminder.shared_owner_id) {
+                            CollaborationService.notifyChange({
+                                targetType: 'reminder',
+                                targetId: reminder.id,
+                                action: 'edited',
+                                itemTitle: updates.title || reminder.title,
+                            });
+                        }
                         // Always cancel old notifications when updating critical fields
                         if (updates.due_date_ms || updates.title || updates.control_level) {
                             const storedIds = safeParseArray(reminder.notification_ids);
@@ -322,6 +366,15 @@ export const useStore = create<AppState>()(
                     await NotificationService.cancelNotificationsForReminder(id, storedIds);
                     await ReminderService.deleteReminder(id);
                     await ComplianceService.logEvent(id, 'failed');
+
+                    if (reminder && (reminder.is_shared === 1 || reminder.shared_owner_id)) {
+                        CollaborationService.notifyChange({
+                            targetType: 'reminder',
+                            targetId: reminder.id,
+                            action: 'deleted',
+                            itemTitle: reminder.title,
+                        });
+                    }
                     await get().loadReminders();
                     if (get().session?.user?.id && get().cloudSyncEnabled) {
                         get().triggerSync();
@@ -452,6 +505,14 @@ export const useStore = create<AppState>()(
                 }));
                 try {
                     await ReminderService.deleteForever(id);
+                    if (get().session?.user?.id && get().cloudSyncEnabled) {
+                        try {
+                            const { supabase } = await import('../lib/supabase');
+                            await supabase.from('reminders').delete().eq('id', id);
+                        } catch (cloudErr) {
+                            console.warn('[Sync] Could not delete reminder from cloud:', cloudErr);
+                        }
+                    }
                     await get().loadHistory();
                     if (get().session?.user?.id && get().cloudSyncEnabled) {
                         get().triggerSync();
@@ -470,6 +531,14 @@ export const useStore = create<AppState>()(
                 }));
                 try {
                     await ReminderService.deleteRemindersForever(ids);
+                    if (get().session?.user?.id && get().cloudSyncEnabled) {
+                        try {
+                            const { supabase } = await import('../lib/supabase');
+                            await supabase.from('reminders').delete().in('id', ids);
+                        } catch (cloudErr) {
+                            console.warn('[Sync] Could not delete reminders from cloud:', cloudErr);
+                        }
+                    }
                     await get().loadHistory();
                     if (get().session?.user?.id && get().cloudSyncEnabled) {
                         get().triggerSync();
@@ -481,11 +550,20 @@ export const useStore = create<AppState>()(
             },
 
             emptyRemindersTrash: async () => {
+                const deletedIds = get().history.filter(r => r.deleted === 1).map(r => r.id);
                 set(state => ({
                     history: state.history.filter(r => r.deleted === 0)
                 }));
                 try {
                     await ReminderService.emptyRemindersTrash();
+                    if (deletedIds.length > 0 && get().session?.user?.id && get().cloudSyncEnabled) {
+                        try {
+                            const { supabase } = await import('../lib/supabase');
+                            await supabase.from('reminders').delete().in('id', deletedIds);
+                        } catch (cloudErr) {
+                            console.warn('[Sync] Could not delete trash reminders from cloud:', cloudErr);
+                        }
+                    }
                     await get().loadHistory();
                     if (get().session?.user?.id && get().cloudSyncEnabled) {
                         get().triggerSync();
@@ -502,7 +580,10 @@ export const useStore = create<AppState>()(
                     if (!reminder) {
                         reminder = await ReminderService.getReminderById(id) || undefined;
                     }
-                    if (!reminder) return;
+                    if (!reminder) {
+                        await NotificationService.cancelNotificationsForReminder(id);
+                        return;
+                    }
 
                     const newTime = Date.now() + (minutes * 60 * 1000);
                     const storedIds = safeParseArray(reminder.notification_ids);
@@ -561,28 +642,62 @@ export const useStore = create<AppState>()(
             },
 
             toggleTheme: () => {
-                set((state) => ({ theme: state.theme === 'light' ? 'dark' : 'light' }));
+                set((state) => {
+                    const next = state.theme === 'dark' ? 'light' : 'dark';
+                    WidgetService.syncTheme(next, state.accentTheme).catch(() => {});
+                    return { theme: next };
+                });
             },
 
-            setTheme: (theme) => set({ theme }),
+            setTheme: (theme) => {
+                set({ theme });
+                WidgetService.syncTheme(theme, get().accentTheme).catch(() => {});
+            },
 
             onboardingCompleted: false,
             userProfile: null,
             userName: null,
-            userEmail: null,
+            userEmail: null as string | null,
+            userAvatar: null,
             completeOnboarding: () => set({ onboardingCompleted: true }),
             setUserProfile: (profile) => set({ userProfile: profile }),
             setUserName: (name) => set({ userName: name }),
-            setUserEmail: (email) => set({ userEmail: email }),
+            setUserEmail: (email) => {
+                const authenticatedEmail = get().session?.user?.email;
+                const isOwner = isWhitelistedPremiumEmail(authenticatedEmail || email);
+                set({
+                    userEmail: email,
+                    isPremium: isOwner ? true : (authenticatedEmail ? get().isPremium : false),
+                });
+            },
+            setUserAvatar: (avatar) => set({ userAvatar: avatar }),
             defaultControlLevel: 'normal',
             setDefaultControlLevel: (level: ControlLevel) => set({ defaultControlLevel: level }),
             isHydrated: false,
             session: null,
-            setSession: (session) => set({ session }),
+            setSession: (session) => {
+                const email = session?.user?.email ?? null;
+                const isOwner = isWhitelistedPremiumEmail(email);
+                set({
+                    session,
+                    userEmail: email,
+                    isPremium: isOwner ? true : false,
+                });
+
+                if (session?.user?.id) {
+                    NotificationService.registerPushToken(session.user.id).catch(err => {
+                        console.warn('[useStore] Error registering push token on session change:', err);
+                    });
+                }
+            },
             signOut: async () => {
+                const currentUserId = get().session?.user?.id;
+                if (currentUserId) {
+                    await NotificationService.unregisterPushToken(currentUserId).catch(() => {});
+                }
                 const { supabase } = await import('../lib/supabase');
                 await supabase.auth.signOut();
-                set({ session: null });
+                set({ session: null, userEmail: null, isPremium: false, lastSyncTime: null });
             },
             detailReminder: null,
             setDetailReminder: (reminder) => set({ detailReminder: reminder }),
@@ -598,47 +713,80 @@ export const useStore = create<AppState>()(
                 }
             })),
             isPremium: false,
-            setPremium: (status: boolean) => set({ isPremium: status }),
+            setPremium: (status: boolean) => {
+                const authEmail = get().session?.user?.email;
+                const isOwner = isWhitelistedPremiumEmail(authEmail);
+                set({ isPremium: isOwner ? true : status });
+            },
             language: defaultLanguage,
             setLanguage: (lang: string) => set({ language: lang }),
-            accentTheme: 'purple' as AccentTheme,
-            setAccentTheme: (accentTheme: AccentTheme) => set({ accentTheme }),
-            cloudSyncEnabled: false,
+            accentTheme: 'blue' as AccentTheme,
+            setAccentTheme: (accentTheme: AccentTheme) => {
+                set({ accentTheme });
+                WidgetService.syncTheme(get().theme || 'system', accentTheme).catch(() => {});
+                const session = get().session;
+                if (session?.user?.id) {
+                    import('../lib/supabase').then(({ supabase }) => {
+                        supabase.auth.updateUser({
+                            data: {
+                                settings: {
+                                    ...(session.user?.user_metadata?.settings || {}),
+                                    accentTheme,
+                                },
+                            },
+                        }).catch((e) => console.warn('[Accent] Could not sync accentTheme to cloud:', e));
+                    });
+                }
+            },
+            cloudSyncEnabled: true,
             setCloudSyncEnabled: (enabled: boolean) => set({ cloudSyncEnabled: enabled }),
             isSyncing: false,
             lastSyncTime: null,
             syncError: null,
-            triggerSync: async () => {
+            triggerSync: async (isInitialLogin = false, isBackground = false) => {
                 const state = get();
                 if (!state.session?.user?.id || state.isSyncing) return;
+
+                // Cooldown inteligente para aperturas automáticas y reanudación desde segundo plano:
+                // Si la sincronización es en segundo plano / automática (isBackground = true) y no es login inicial,
+                // omitimos si la última sincronización ocurrió hace menos de 2.5 minutos (150 segundos).
+                const BACKGROUND_SYNC_COOLDOWN_MS = 150 * 1000;
+                if (isBackground && !isInitialLogin && state.lastSyncTime) {
+                    const elapsed = Date.now() - state.lastSyncTime;
+                    if (elapsed < BACKGROUND_SYNC_COOLDOWN_MS) {
+                        return;
+                    }
+                }
+
                 set({ isSyncing: true, syncError: null });
                 try {
                     const { SyncService } = await import('../services/syncService');
-                    const result = await SyncService.syncAll(state.session.user.id);
+                    const result = await SyncService.syncAll(state.session.user.id, isInitialLogin);
+                    // Recargar datos locales inmediatamente para que todo lo descargado se refleje en la UI
+                    await get().loadReminders();
+                    await get().loadHistory();
+                    await get().loadStreak();
+                    try {
+                        const { useNotesStore } = await import('./useNotesStore');
+                        await useNotesStore.getState().loadNotes();
+                    } catch (e) {
+                        console.warn('[Sync] Could not reload notes store:', e);
+                    }
+                    try {
+                        const { useFoldersStore } = await import('./useFoldersStore');
+                        await useFoldersStore.getState().loadFolders();
+                    } catch (e) {
+                        console.warn('[Sync] Could not reload folders store:', e);
+                    }
+                    try {
+                        const { useEventsStore } = await import('./useEventsStore');
+                        await useEventsStore.getState().loadAllEvents();
+                    } catch (e) {
+                        console.warn('[Sync] Could not reload events store:', e);
+                    }
+
                     if (result.success) {
                         set({ lastSyncTime: Date.now(), isSyncing: false });
-                        // Recargar datos locales de recordatorios
-                        await get().loadReminders();
-                        await get().loadHistory();
-                        // Coordinar recarga de notas, carpetas y eventos para coherencia total
-                        try {
-                            const { useNotesStore } = await import('./useNotesStore');
-                            await useNotesStore.getState().loadNotes();
-                        } catch (e) {
-                            console.warn('[Sync] Could not reload notes store:', e);
-                        }
-                        try {
-                            const { useFoldersStore } = await import('./useFoldersStore');
-                            await useFoldersStore.getState().loadFolders();
-                        } catch (e) {
-                            console.warn('[Sync] Could not reload folders store:', e);
-                        }
-                        try {
-                            const { useEventsStore } = await import('./useEventsStore');
-                            await useEventsStore.getState().loadAllEvents();
-                        } catch (e) {
-                            console.warn('[Sync] Could not reload events store:', e);
-                        }
                     } else {
                         set({ syncError: result.errors.join(', '), isSyncing: false });
                     }
@@ -662,6 +810,16 @@ export const useStore = create<AppState>()(
             setTabTransitionDirection: (direction: 'forward' | 'backward' | 'none') => set({ tabTransitionDirection: direction }),
             mainActiveTab: 'reminders',
             setMainActiveTab: (tab: 'reminders' | 'notes') => set({ mainActiveTab: tab }),
+            widgetTextScale: 1.0,
+            setWidgetTextScale: (scale: number) => {
+                set({ widgetTextScale: scale });
+                WidgetService.setTextScale(scale).catch(() => {});
+            },
+            widgetHighContrast: false,
+            setWidgetHighContrast: (enabled: boolean) => {
+                set({ widgetHighContrast: enabled });
+                WidgetService.setHighContrast(enabled).catch(() => {});
+            },
         }),
         {
             name: 'app-storage',
@@ -681,9 +839,19 @@ export const useStore = create<AppState>()(
                 cloudSyncEnabled: state.cloudSyncEnabled,
                 lastSyncTime: state.lastSyncTime,
                 homeViewMode: state.homeViewMode,
+                widgetTextScale: state.widgetTextScale,
+                widgetHighContrast: state.widgetHighContrast,
             }),
             onRehydrateStorage: () => (state) => {
-                useStore.setState({ isHydrated: true });
+                const sessionEmail = state?.session?.user?.email;
+                // Si no hay sesión o el email guardado es el del propietario sin sesión activa, limpiarlo
+                const effectiveEmail = sessionEmail || (state?.userEmail && !isWhitelistedPremiumEmail(state.userEmail) ? state.userEmail : null);
+                const isOwner = isWhitelistedPremiumEmail(sessionEmail);
+                useStore.setState({
+                    isHydrated: true,
+                    userEmail: effectiveEmail,
+                    isPremium: isOwner ? true : (sessionEmail ? Boolean(state?.isPremium) : false),
+                });
             },
         }
     )

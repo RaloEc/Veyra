@@ -13,13 +13,15 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useTranslation } from 'react-i18next';
-import { Mail, Lock, ChevronLeft, Eye, EyeOff } from '@tamagui/lucide-icons';
+import { Mail, Lock, ChevronLeft, Eye, EyeOff, Shield, AlertCircle } from '@tamagui/lucide-icons';
 
 import { supabase } from '../src/lib/supabase';
 import { useVeyraTheme } from '../src/theme/useVeyraTheme';
 import { VeyraIconButton } from '../src/components/ui/VeyraIconButton';
 import { VeyraButton } from '../src/components/ui/VeyraButton';
 import { VeyraSurface } from '../src/components/ui/VeyraSurface';
+
+import { useStore } from '../src/store/useStore';
 
 export default function LoginScreen() {
     const router = useRouter();
@@ -30,7 +32,9 @@ export default function LoginScreen() {
     const params = useLocalSearchParams<{ initialEmail?: string }>();
     const [email, setEmail] = useState(params.initialEmail || '');
     const [password, setPassword] = useState('');
+    const [focusedField, setFocusedField] = useState<'email' | 'password' | null>(null);
     const [loading, setLoading] = useState(false);
+    const [loadingMessage, setLoadingMessage] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [showPassword, setShowPassword] = useState(false);
 
@@ -40,8 +44,9 @@ export default function LoginScreen() {
             return;
         }
         setLoading(true);
+        setLoadingMessage(null);
         setError(null);
-        const { error: authError } = await supabase.auth.signInWithPassword({
+        const { data, error: authError } = await supabase.auth.signInWithPassword({
             email: email.trim(),
             password,
         });
@@ -49,22 +54,51 @@ export default function LoginScreen() {
         if (authError) {
             setError(authError.message);
             setLoading(false);
+            setLoadingMessage(null);
         } else {
+            if (data?.session) {
+                const store = useStore.getState();
+                store.setSession(data.session);
+                store.setCloudSyncEnabled(true);
+
+                const metaName = data.session.user?.user_metadata?.full_name || data.session.user?.user_metadata?.name || data.session.user?.user_metadata?.settings?.userName;
+                if (metaName && !store.userName) {
+                    store.setUserName(metaName);
+                }
+
+                // Recuperar color de acento personalizado del usuario desde la nube
+                const metaAccent = data.session.user?.user_metadata?.settings?.accentTheme || data.session.user?.user_metadata?.accentTheme;
+                if (metaAccent) {
+                    store.setAccentTheme(metaAccent);
+                }
+
+                // Feedback al usuario mientras se recuperan sus datos de la nube
+                setLoadingMessage(t('auth.recovering_cloud_data', 'Recuperando datos de la nube...'));
+
+                try {
+                    // Sincronización completa inicial con timeout de seguridad (10s)
+                    await Promise.race([
+                        store.triggerSync(true),
+                        new Promise((resolve) => setTimeout(resolve, 10000)),
+                    ]);
+                } catch (syncErr) {
+                    console.warn('[Login] Initial sync warning:', syncErr);
+                }
+            }
             router.replace('/');
         }
     }
 
     return (
         <SafeAreaView style={[styles.screen, { backgroundColor: colors.bg }]} edges={['top', 'right', 'left']}>
-            {/* Header */}
-            <View style={[styles.header, { borderBottomColor: colors.borderSubtle }]}>
+            {/* Header minimalista y sin borde invasivo */}
+            <View style={styles.header}>
                 <VeyraIconButton
                     variant="ghost"
                     size="sm"
                     icon={<ChevronLeft size={24} color={colors.textPrimary} />}
                     onPress={() => router.back()}
                 />
-                <View style={{ flex: 1 }} />
             </View>
 
             <KeyboardAvoidingView
@@ -77,8 +111,17 @@ export default function LoginScreen() {
                     showsVerticalScrollIndicator={false}
                 >
                     <View style={styles.formContainer}>
-                        {/* Title group */}
+                        {/* Title group con branding de Veyra */}
                         <View style={styles.titleGroup}>
+                            <View style={styles.brandRow}>
+                                <View style={[styles.brandBadge, { backgroundColor: `${accent.primary}18`, borderColor: `${accent.primary}35` }]}>
+                                    <Shield size={12} color={accent.primary} />
+                                    <Text style={[styles.brandBadgeText, { color: accent.primary }]}>
+                                        VEYRA
+                                    </Text>
+                                </View>
+                            </View>
+
                             <Text style={[styles.heading, { color: colors.textPrimary, fontSize: typography.h1.fontSize }]}>
                                 {t('auth.login_title')}
                             </Text>
@@ -92,8 +135,8 @@ export default function LoginScreen() {
                             {/* Email */}
                             <View style={styles.inputGroup}>
                                 <View style={styles.inputLabelRow}>
-                                    <Mail size={14} color={colors.textMuted} />
-                                    <Text style={[styles.inputLabelText, { color: colors.textMuted, fontSize: typography.micro.fontSize }]}>
+                                    <Mail size={14} color={focusedField === 'email' ? accent.primary : colors.textMuted} />
+                                    <Text style={[styles.inputLabelText, { color: focusedField === 'email' ? accent.primary : colors.textMuted, fontSize: typography.micro.fontSize }]}>
                                         {t('auth.email')}
                                     </Text>
                                 </View>
@@ -102,6 +145,8 @@ export default function LoginScreen() {
                                     placeholderTextColor={colors.textMuted}
                                     value={email}
                                     onChangeText={setEmail}
+                                    onFocus={() => setFocusedField('email')}
+                                    onBlur={() => setFocusedField(null)}
                                     autoCapitalize="none"
                                     keyboardType="email-address"
                                     autoComplete="email"
@@ -109,7 +154,7 @@ export default function LoginScreen() {
                                         styles.inputField,
                                         {
                                             backgroundColor: colors.surfaceElevated,
-                                            borderColor: colors.borderSubtle,
+                                            borderColor: focusedField === 'email' ? accent.primary : colors.borderSubtle,
                                             color: colors.textPrimary,
                                             fontSize: typography.body.fontSize,
                                         },
@@ -121,8 +166,8 @@ export default function LoginScreen() {
                             {/* Password */}
                             <View style={styles.inputGroup}>
                                 <View style={styles.inputLabelRow}>
-                                    <Lock size={14} color={colors.textMuted} />
-                                    <Text style={[styles.inputLabelText, { color: colors.textMuted, fontSize: typography.micro.fontSize }]}>
+                                    <Lock size={14} color={focusedField === 'password' ? accent.primary : colors.textMuted} />
+                                    <Text style={[styles.inputLabelText, { color: focusedField === 'password' ? accent.primary : colors.textMuted, fontSize: typography.micro.fontSize }]}>
                                         {t('auth.password')}
                                     </Text>
                                 </View>
@@ -131,7 +176,7 @@ export default function LoginScreen() {
                                         styles.passwordFieldRow,
                                         {
                                             backgroundColor: colors.surfaceElevated,
-                                            borderColor: colors.borderSubtle,
+                                            borderColor: focusedField === 'password' ? accent.primary : colors.borderSubtle,
                                         },
                                     ]}
                                 >
@@ -140,6 +185,8 @@ export default function LoginScreen() {
                                         placeholderTextColor={colors.textMuted}
                                         value={password}
                                         onChangeText={setPassword}
+                                        onFocus={() => setFocusedField('password')}
+                                        onBlur={() => setFocusedField(null)}
                                         secureTextEntry={!showPassword}
                                         autoComplete="password"
                                         style={[
@@ -157,9 +204,9 @@ export default function LoginScreen() {
                                         hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                                     >
                                         {showPassword ? (
-                                            <EyeOff size={18} color={colors.textMuted} />
+                                            <EyeOff size={18} color={focusedField === 'password' ? accent.primary : colors.textMuted} />
                                         ) : (
-                                            <Eye size={18} color={colors.textMuted} />
+                                            <Eye size={18} color={focusedField === 'password' ? accent.primary : colors.textMuted} />
                                         )}
                                     </TouchableOpacity>
                                 </View>
@@ -187,10 +234,11 @@ export default function LoginScreen() {
                                         styles.errorCard,
                                         {
                                             backgroundColor: isDark ? 'rgba(239, 68, 68, 0.1)' : 'rgba(239, 68, 68, 0.05)',
-                                            borderColor: 'rgba(239, 68, 68, 0.25)',
+                                            borderColor: isDark ? 'rgba(239, 68, 68, 0.3)' : 'rgba(239, 68, 68, 0.2)',
                                         },
                                     ]}
                                 >
+                                    <AlertCircle size={16} color={isDark ? '#FB7185' : '#E11D48'} />
                                     <Text style={[styles.errorText, { color: isDark ? '#FB7185' : '#E11D48', fontSize: typography.caption.fontSize }]}>
                                         {error}
                                     </Text>
@@ -199,16 +247,26 @@ export default function LoginScreen() {
                         </View>
                     </View>
 
-                    {/* Zona inferior de interacción ergonómica One UI */}
+                    {/* Zona inferior de interacción ergonómica */}
                     <View style={styles.interactionZone}>
                         {/* Login Button */}
                         <VeyraButton
                             variant="primary"
                             size="lg"
                             label={t('auth.login_btn')}
+                            loading={loading}
                             disabled={loading}
                             onPress={signInWithEmail}
                         />
+
+                        {loadingMessage && (
+                            <View style={styles.loadingFeedbackRow}>
+                                <ActivityIndicator size="small" color={accent.primary} />
+                                <Text style={[styles.loadingFeedbackText, { color: colors.textSecondary, fontSize: typography.caption.fontSize }]}>
+                                    {loadingMessage}
+                                </Text>
+                            </View>
+                        )}
 
                         {/* Footer */}
                         <View style={styles.footerRow}>
@@ -238,19 +296,37 @@ const styles = StyleSheet.create({
     header: {
         paddingHorizontal: 16,
         paddingVertical: 8,
-        borderBottomWidth: 1,
     },
     scrollContent: {
         flexGrow: 1,
         justifyContent: 'space-between',
         paddingHorizontal: 24,
-        paddingTop: 24,
+        paddingTop: 12,
     },
     formContainer: {
         gap: 28,
     },
     titleGroup: {
         gap: 8,
+    },
+    brandRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginBottom: 4,
+    },
+    brandBadge: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+        paddingHorizontal: 10,
+        paddingVertical: 5,
+        borderRadius: 20,
+        borderWidth: 1,
+    },
+    brandBadgeText: {
+        fontSize: 11,
+        fontWeight: '800',
+        letterSpacing: 1.2,
     },
     heading: {
         fontWeight: '900',
@@ -296,12 +372,15 @@ const styles = StyleSheet.create({
         padding: 0,
     },
     errorCard: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
         padding: 12,
         borderWidth: 1,
     },
     errorText: {
+        flex: 1,
         fontWeight: '600',
-        textAlign: 'center',
     },
     interactionZone: {
         gap: 16,
@@ -312,7 +391,7 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         alignItems: 'center',
         gap: 6,
-        paddingTop: 20,
+        paddingTop: 16,
     },
     footerText: {
         fontWeight: '500',
@@ -326,5 +405,15 @@ const styles = StyleSheet.create({
     },
     forgotPasswordText: {
         fontWeight: '700',
+    },
+    loadingFeedbackRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 8,
+        paddingTop: 8,
+    },
+    loadingFeedbackText: {
+        fontWeight: '600',
     },
 });

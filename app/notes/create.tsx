@@ -73,6 +73,7 @@ export default function CreateNoteScreen() {
 
     const [isMoveModalVisible, setIsMoveModalVisible] = useState(false);
     const [isCreateFolderModalVisible, setIsCreateFolderModalVisible] = useState(false);
+    const [createFolderParentId, setCreateFolderParentId] = useState<string | null>(null);
 
     const toolbarPaddingBottom = Platform.OS === 'ios'
         ? (isKeyboardVisible ? 6 : Math.max(insets.bottom, 8))
@@ -241,6 +242,34 @@ export default function CreateNoteScreen() {
     );
 
     const pageLayoutsRef = useRef<{ [index: number]: number }>({});
+    const lastCursorY = useRef<number>(0);
+
+    const handleCursorPosition = useCallback((pageIndex: number, offsetY: number) => {
+        const pageY = pageLayoutsRef.current[pageIndex] || 0;
+        const cursorY = pageY + offsetY;
+        lastCursorY.current = cursorY;
+
+        if (scrollLayout === 'vertical' && verticalScrollRef.current) {
+            const currentY = currentScrollY.current;
+            const visibleHeight = windowHeight - (60 + toolbarHeight + (isKeyboardVisible ? lift : 0));
+            if (cursorY > currentY + visibleHeight - 40 || cursorY < currentY + 30) {
+                const targetY = Math.max(0, cursorY - 100);
+                verticalScrollRef.current.scrollTo({ y: targetY, animated: true });
+            }
+        }
+    }, [scrollLayout, windowHeight, toolbarHeight, isKeyboardVisible, lift]);
+
+    useEffect(() => {
+        if (isKeyboardVisible && lastCursorY.current > 0) {
+            const timer = setTimeout(() => {
+                if (scrollLayout === 'vertical' && verticalScrollRef.current) {
+                    const targetY = Math.max(0, lastCursorY.current - 100);
+                    verticalScrollRef.current.scrollTo({ y: targetY, animated: true });
+                }
+            }, 160);
+            return () => clearTimeout(timer);
+        }
+    }, [isKeyboardVisible, scrollLayout]);
 
     const handleSelectPage = (index: number) => {
         setCurrentPageIndex(index);
@@ -263,8 +292,8 @@ export default function CreateNoteScreen() {
                 style={{ flex: 1 }}
                 showsVerticalScrollIndicator={false}
                 contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom + 110 }]}
-                keyboardShouldPersistTaps="handled"
-                keyboardDismissMode="on-drag"
+                keyboardShouldPersistTaps="always"
+                keyboardDismissMode="none"
                 automaticallyAdjustKeyboardInsets={false}
                 nestedScrollEnabled={true}
                 scrollEnabled={!isDraggingImage}
@@ -338,6 +367,7 @@ export default function CreateNoteScreen() {
                                         }}
                                         onDragStateChange={setIsDraggingImage}
                                         onAutoScroll={handleAutoScroll}
+                                        onCursorPosition={(offsetY) => handleCursorPosition(index, offsetY)}
                                     />
                                 </View>
                             </View>
@@ -427,8 +457,8 @@ export default function CreateNoteScreen() {
                                     style={{ flex: 1 }}
                                     showsVerticalScrollIndicator={false}
                                     nestedScrollEnabled={true}
-                                    keyboardShouldPersistTaps="handled"
-                                    keyboardDismissMode="on-drag"
+                                    keyboardShouldPersistTaps="always"
+                                    keyboardDismissMode="none"
                                     automaticallyAdjustKeyboardInsets={false}
                                     scrollEnabled={!isDraggingImage}
                                     contentContainerStyle={{
@@ -487,6 +517,7 @@ export default function CreateNoteScreen() {
                                             }}
                                             onDragStateChange={setIsDraggingImage}
                                             onAutoScroll={handleAutoScroll}
+                                            onCursorPosition={(offsetY) => handleCursorPosition(index, offsetY)}
                                         />
                                     </View>
                                 </ScrollView>
@@ -534,7 +565,7 @@ export default function CreateNoteScreen() {
                             isEditing={true}
                             isDark={isDark}
                             flat={true}
-                            placeholder={t('create.placeholder_title')}
+                            placeholder={t('notes.placeholder_title', { defaultValue: 'Título' })}
                             inputStyle={styles.headerTitleInput}
                             onSubmit={() => {
                                 setIsNotesFocused(true);
@@ -783,7 +814,8 @@ export default function CreateNoteScreen() {
                     onSelectFolder={async (newFolderId) => {
                         setFolderId(newFolderId);
                     }}
-                    onCreateNewFolder={() => {
+                    onCreateNewFolder={(parentId) => {
+                        setCreateFolderParentId(parentId || null);
                         setIsCreateFolderModalVisible(true);
                     }}
                 />
@@ -791,9 +823,13 @@ export default function CreateNoteScreen() {
                 {/* Modal para crear nueva carpeta directamente desde la nota */}
                 <FolderModal
                     visible={isCreateFolderModalVisible}
-                    onClose={() => setIsCreateFolderModalVisible(false)}
-                    onSave={async (name, icon, color) => {
-                        const newF = await createFolder(name, icon, color);
+                    onClose={() => {
+                        setIsCreateFolderModalVisible(false);
+                        setCreateFolderParentId(null);
+                    }}
+                    parentFolder={createFolderParentId ? folders.find(f => f.id === createFolderParentId) : null}
+                    onSave={async (name, icon, color, isPinned, parentId) => {
+                        const newF = await createFolder(name, icon, color, isPinned, parentId);
                         if (newF) {
                             setFolderId(newF.id);
                         }

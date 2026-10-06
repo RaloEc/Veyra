@@ -1,12 +1,20 @@
-import React, { useState, useMemo, useRef } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
     View,
     Text,
     TouchableOpacity,
     StyleSheet,
-    Animated,
-    Easing,
+    Modal,
 } from 'react-native';
+import Animated, {
+    useSharedValue,
+    useAnimatedStyle,
+    withTiming,
+    Easing,
+    interpolate,
+    Extrapolation,
+} from 'react-native-reanimated';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import {
     format,
@@ -33,6 +41,7 @@ import {
     Search,
     Share2,
     X,
+    MoreVertical,
 } from '@tamagui/lucide-icons';
 
 import { Reminder, CalendarEvent } from '../../types/db';
@@ -65,14 +74,16 @@ export function CollapsibleCalendarHeader({
 }: CollapsibleCalendarHeaderProps) {
     const { t } = useTranslation();
     const { colors, accent, isDark } = useVeyraTheme();
+    const insets = useSafeAreaInsets();
     const locale = language === 'es' ? es : enUS;
 
+    const [isMenuVisible, setIsMenuVisible] = useState(false);
     const [isExpanded, setIsExpanded] = useState(false);
     const [currentMonth, setCurrentMonth] = useState<Date>(selectedDate || new Date());
-    const [cardHeight, setCardHeight] = useState<number>(310);
 
-    // Single shared animation value drives everything
-    const anim = useRef(new Animated.Value(0)).current;
+    // Reanimated shared values (UI thread 60/120 FPS)
+    const anim = useSharedValue(0);
+    const contentHeight = useSharedValue(330);
 
     const toggleExpand = () => {
         const nextExpanded = !isExpanded;
@@ -83,21 +94,17 @@ export function CollapsibleCalendarHeader({
             setCurrentMonth(target);
             onSelectDate(target);
 
-            Animated.timing(anim, {
-                toValue: 1,
-                duration: 260,
-                easing: Easing.bezier(0.2, 0.9, 0.3, 1),
-                useNativeDriver: false,
-            }).start();
+            anim.value = withTiming(1, {
+                duration: 290,
+                easing: Easing.bezier(0.16, 1, 0.3, 1),
+            });
         } else {
             onSelectDate(null);
 
-            Animated.timing(anim, {
-                toValue: 0,
-                duration: 220,
-                easing: Easing.bezier(0.3, 0, 0.2, 1),
-                useNativeDriver: false,
-            }).start();
+            anim.value = withTiming(0, {
+                duration: 230,
+                easing: Easing.bezier(0.25, 0.1, 0.25, 1),
+            });
         }
     };
 
@@ -148,37 +155,44 @@ export function CollapsibleCalendarHeader({
     const formattedDateText = useMemo(() => {
         const isCurrentDay = isToday(displayDate);
         const dateStr = format(displayDate, language === 'es' ? "EEEE, d 'de' MMMM" : 'EEEE, MMMM d', { locale });
-        return isCurrentDay ? (language === 'es' ? `Hoy • ${dateStr}` : `Today • ${dateStr}`) : dateStr;
+        const raw = isCurrentDay ? (language === 'es' ? `Hoy • ${dateStr}` : `Today • ${dateStr}`) : dateStr;
+        return raw.charAt(0).toUpperCase() + raw.slice(1);
     }, [displayDate, language, locale]);
 
-    // ── Derived animated values ───────────────────────────────────────────────
+    // ── Reanimated Styles (UI Thread 60/120 FPS) ─────────────────────────────
 
-    // Chevron rotates 180°
-    const chevronRotate = anim.interpolate({
-        inputRange: [0, 1],
-        outputRange: ['0deg', '180deg'],
+    const chevronAnimatedStyle = useAnimatedStyle(() => {
+        const rotate = interpolate(anim.value, [0, 1], [0, 180], Extrapolation.CLAMP);
+        return {
+            transform: [{ rotate: `${rotate}deg` }],
+        };
     });
 
-    // Panel slides from 0 → exact measured height
-    const panelHeight = anim.interpolate({
-        inputRange: [0, 1],
-        outputRange: [0, cardHeight],
+    const panelWrapperAnimatedStyle = useAnimatedStyle(() => {
+        const height = interpolate(anim.value, [0, 1], [0, contentHeight.value], Extrapolation.CLAMP);
+        const opacity = interpolate(anim.value, [0, 0.2, 1], [0, 0.6, 1], Extrapolation.CLAMP);
+
+        return {
+            height,
+            opacity,
+        };
     });
 
-    // Panel fades in/out cleanly
-    const panelOpacity = anim.interpolate({
-        inputRange: [0, 0.25, 1],
-        outputRange: [0, 0.5, 1],
-    });
+    const panelContentAnimatedStyle = useAnimatedStyle(() => {
+        const translateY = interpolate(anim.value, [0, 1], [-12, 0], Extrapolation.CLAMP);
+        const scale = interpolate(anim.value, [0, 1], [0.98, 1], Extrapolation.CLAMP);
 
-    const panelScale = anim.interpolate({
-        inputRange: [0, 1],
-        outputRange: [0.98, 1],
+        return {
+            transform: [
+                { translateY },
+                { scale },
+            ],
+        };
     });
 
     return (
         <View style={[styles.container, { borderBottomColor: colors.borderSubtle }]}>
-            {/* ─── FILA PRINCIPAL COMPACTA ─── */}
+            {/* ─── FILA PRINCIPAL COMPACTA (Opción 1: Acciones agrupadas + Reset integrado) ─── */}
             <View style={styles.headerRow}>
                 <TouchableOpacity
                     activeOpacity={0.7}
@@ -186,7 +200,7 @@ export function CollapsibleCalendarHeader({
                     style={styles.dateToggleBtn}
                 >
                     <View style={[styles.calendarIconBox, { backgroundColor: isDark ? 'rgba(59, 130, 246, 0.14)' : 'rgba(37, 99, 235, 0.08)' }]}>
-                        <CalendarIcon size={14} color={accent.primary} />
+                        <CalendarIcon size={14} color={accent.primary as any} />
                     </View>
 
                     <View style={styles.dateTextGroup}>
@@ -196,102 +210,84 @@ export function CollapsibleCalendarHeader({
                                 { color: selectedDate ? accent.primary : colors.textPrimary },
                             ]}
                             numberOfLines={1}
+                            ellipsizeMode="tail"
                         >
                             {formattedDateText}
                         </Text>
                     </View>
 
-                    <Animated.View style={{ transform: [{ rotate: chevronRotate }] }}>
-                        <ChevronDown size={15} color={colors.textSecondary} />
-                    </Animated.View>
-                </TouchableOpacity>
-
-                {/* Acciones derecha */}
-                <View style={styles.rightActions}>
                     {selectedDate && !isExpanded && (
                         <TouchableOpacity
-                            onPress={() => onSelectDate(null)}
-                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                            style={[styles.clearFilterChip, { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.06)' }]}
+                            onPress={(e) => {
+                                e.stopPropagation?.();
+                                onSelectDate(null);
+                            }}
+                            hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+                            style={[
+                                styles.clearDateBtn,
+                                { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.12)' : 'rgba(0, 0, 0, 0.07)' },
+                            ]}
                         >
-                            <Text style={[styles.clearFilterText, { color: colors.textSecondary }]}>
-                                {language === 'es' ? 'Ver todo' : 'Clear'}
-                            </Text>
-                            <X size={10} color={colors.textSecondary} />
+                            <X size={11} color={colors.textSecondary} />
                         </TouchableOpacity>
                     )}
 
+                    <Animated.View style={chevronAnimatedStyle}>
+                        <ChevronDown size={14} color={colors.textSecondary} />
+                    </Animated.View>
+                </TouchableOpacity>
+
+                {/* Acciones derecha: Mini-píldora unificada */}
+                <View
+                    style={[
+                        styles.actionsPill,
+                        {
+                            backgroundColor: isDark ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.035)',
+                            borderColor: colors.borderSubtle,
+                        },
+                    ]}
+                >
                     {onPressSearch && (
                         <TouchableOpacity
                             onPress={onPressSearch}
                             activeOpacity={0.7}
-                            style={[
-                                styles.actionBtn,
-                                {
-                                    backgroundColor: isDark ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.035)',
-                                    borderColor: colors.borderSubtle,
-                                },
-                            ]}
-                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                            hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                            style={styles.pillActionBtn}
                         >
-                            <Search size={16} color={colors.textSecondary} />
+                            <Search size={15} color={colors.textSecondary} />
                         </TouchableOpacity>
                     )}
 
-                    {onPressHistory && (
-                        <TouchableOpacity
-                            onPress={onPressHistory}
-                            activeOpacity={0.7}
-                            delayPressIn={0}
-                            style={[
-                                styles.actionBtn,
-                                {
-                                    backgroundColor: isDark ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.035)',
-                                    borderColor: colors.borderSubtle,
-                                },
-                            ]}
-                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                        >
-                            <History size={16} color={colors.textSecondary} />
-                        </TouchableOpacity>
-                    )}
-
-                    {hasTodayTasks && onPressShare && (
-                        <TouchableOpacity
-                            onPress={onPressShare}
-                            activeOpacity={0.7}
-                            style={[
-                                styles.actionBtn,
-                                {
-                                    backgroundColor: isDark ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.035)',
-                                    borderColor: colors.borderSubtle,
-                                },
-                            ]}
-                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                        >
-                            <Share2 size={16} color={colors.textSecondary} />
-                        </TouchableOpacity>
+                    {(onPressHistory || onPressShare) && (
+                        <>
+                            <View style={[styles.pillDivider, { backgroundColor: colors.borderSubtle }]} />
+                            <TouchableOpacity
+                                onPress={() => setIsMenuVisible(true)}
+                                activeOpacity={0.7}
+                                hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                                style={styles.pillActionBtn}
+                            >
+                                <MoreVertical size={15} color={colors.textSecondary} />
+                            </TouchableOpacity>
+                        </>
                     )}
                 </View>
             </View>
 
-            {/* ─── PANEL DEL CALENDARIO (siempre montado, animado por altura) ─── */}
+            {/* ─── PANEL DEL CALENDARIO (animado en UI thread con Reanimated) ─── */}
             <Animated.View
-                style={{
-                    height: panelHeight,
-                    opacity: panelOpacity,
-                    overflow: 'hidden',
-                    transform: [
-                        { scale: panelScale },
-                    ],
-                }}
+                style={[
+                    { overflow: 'hidden' },
+                    panelWrapperAnimatedStyle,
+                ]}
                 pointerEvents={isExpanded ? 'auto' : 'none'}
             >
-                <View
+                <Animated.View
+                    style={panelContentAnimatedStyle}
                     onLayout={(e) => {
                         const h = e.nativeEvent.layout.height;
-                        if (h > 50 && Math.abs(h - cardHeight) > 1) {
-                            setCardHeight(h);
+                        if (h > 50 && Math.abs(h - contentHeight.value) > 1) {
+                            contentHeight.value = h;
                         }
                     }}
                 >
@@ -452,15 +448,79 @@ export function CollapsibleCalendarHeader({
                         })}
                     </View>
                 </VeyraSurface>
-                </View>
+                </Animated.View>
             </Animated.View>
+
+            {/* Menú contextual de 3 puntos (Historial / Compartir) */}
+            <Modal
+                transparent
+                visible={isMenuVisible}
+                animationType="fade"
+                onRequestClose={() => setIsMenuVisible(false)}
+            >
+                <TouchableOpacity
+                    style={styles.menuModalBackdrop}
+                    activeOpacity={1}
+                    onPress={() => setIsMenuVisible(false)}
+                >
+                    <View style={[styles.menuModalCardWrap, { top: insets.top + 92 }]}>
+                        <VeyraSurface
+                            level={2}
+                            radius="lg"
+                            style={[
+                                styles.menuModalCard,
+                                {
+                                    borderColor: colors.borderSubtle,
+                                    shadowColor: '#000',
+                                    shadowOffset: { width: 0, height: 6 },
+                                    shadowOpacity: isDark ? 0.35 : 0.1,
+                                    shadowRadius: 14,
+                                    elevation: 10,
+                                },
+                            ]}
+                        >
+                            {onPressHistory && (
+                                <TouchableOpacity
+                                    style={styles.menuModalItem}
+                                    onPress={() => {
+                                        setIsMenuVisible(false);
+                                        onPressHistory();
+                                    }}
+                                    activeOpacity={0.7}
+                                >
+                                    <History size={16} color={colors.textSecondary} strokeWidth={2} />
+                                    <Text style={[styles.menuModalItemText, { color: colors.textPrimary }]}>
+                                        {language === 'es' ? 'Historial de recordatorios' : 'Reminder history'}
+                                    </Text>
+                                </TouchableOpacity>
+                            )}
+
+                            {onPressShare && (
+                                <TouchableOpacity
+                                    style={styles.menuModalItem}
+                                    onPress={() => {
+                                        setIsMenuVisible(false);
+                                        onPressShare();
+                                    }}
+                                    activeOpacity={0.7}
+                                >
+                                    <Share2 size={16} color={colors.textSecondary} strokeWidth={2} />
+                                    <Text style={[styles.menuModalItemText, { color: colors.textPrimary }]}>
+                                        {language === 'es' ? 'Compartir agenda' : 'Share agenda'}
+                                    </Text>
+                                </TouchableOpacity>
+                            )}
+                        </VeyraSurface>
+                    </View>
+                </TouchableOpacity>
+            </Modal>
         </View>
     );
 }
 
 const styles = StyleSheet.create({
     container: {
-        paddingHorizontal: 24,
+        paddingHorizontal: 16,
         paddingTop: 4,
         paddingBottom: 4,
         borderBottomWidth: StyleSheet.hairlineWidth,
@@ -470,12 +530,15 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         justifyContent: 'space-between',
         paddingVertical: 4,
+        gap: 8,
     },
     dateToggleBtn: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
+        gap: 6,
         flex: 1,
+        flexShrink: 1,
+        minWidth: 0,
         paddingVertical: 4,
     },
     calendarIconBox: {
@@ -486,39 +549,42 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
     },
     dateTextGroup: {
+        flexShrink: 1,
+        minWidth: 0,
         justifyContent: 'center',
     },
     dateTitleText: {
-        fontSize: 14,
+        fontSize: 13.5,
         fontWeight: '700',
         letterSpacing: -0.2,
     },
-    clearFilterChip: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 4,
-        paddingHorizontal: 6,
-        paddingVertical: 2,
-        borderRadius: 6,
-        marginLeft: 4,
-    },
-    clearFilterText: {
-        fontSize: 10.5,
-        fontWeight: '600',
-    },
-    rightActions: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 8,
-        marginLeft: 8,
-    },
-    actionBtn: {
-        width: 36,
-        height: 36,
-        borderRadius: 12,
-        borderWidth: 1,
+    clearDateBtn: {
+        width: 18,
+        height: 18,
+        borderRadius: 9,
         alignItems: 'center',
         justifyContent: 'center',
+        marginLeft: 2,
+    },
+    actionsPill: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        height: 32,
+        borderRadius: 16,
+        borderWidth: 1,
+        paddingHorizontal: 3,
+    },
+    pillActionBtn: {
+        width: 28,
+        height: 28,
+        borderRadius: 14,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    pillDivider: {
+        width: 1,
+        height: 14,
+        marginHorizontal: 1,
     },
     calendarDropdownCard: {
         marginTop: 6,
@@ -609,5 +675,38 @@ const styles = StyleSheet.create({
         width: 3.5,
         height: 3.5,
         borderRadius: 2,
+    },
+    menuModalBackdrop: {
+        flex: 1,
+        backgroundColor: 'rgba(0,0,0,0.25)',
+    },
+    menuModalCardWrap: {
+        position: 'absolute',
+        right: 16,
+        width: 230,
+    },
+    menuModalCard: {
+        borderRadius: 16,
+        borderWidth: 1,
+        paddingVertical: 6,
+        paddingHorizontal: 4,
+        overflow: 'hidden',
+    },
+    menuModalItem: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 12,
+        paddingVertical: 11,
+        paddingHorizontal: 12,
+        borderRadius: 10,
+    },
+    menuModalItemText: {
+        fontSize: 13.5,
+        fontWeight: '600',
+    },
+    menuModalDivider: {
+        height: StyleSheet.hairlineWidth,
+        marginVertical: 4,
+        marginHorizontal: 8,
     },
 });

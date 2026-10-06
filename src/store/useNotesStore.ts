@@ -2,6 +2,8 @@ import { create } from 'zustand';
 import { NoteService } from '../services/noteService';
 import { Note } from '../types/db';
 import { useStore } from './useStore';
+import { WidgetService } from '../services/widgetService';
+import { CollaborationService } from '../services/collaborationService';
 
 interface NotesState {
     notes: Note[];
@@ -43,6 +45,7 @@ export const useNotesStore = create<NotesState>((set, get) => ({
         try {
             const notes = await NoteService.getNotes();
             set({ notes, isNotesDirty: false });
+            WidgetService.syncNotes(notes).catch(() => {});
         } catch (error) {
             console.error('Failed to load notes', error);
         } finally {
@@ -111,6 +114,16 @@ export const useNotesStore = create<NotesState>((set, get) => ({
         }));
 
         try {
+            const note = get().notes.find(n => n.id === id);
+            if (note && (note.is_shared === 1 || note.shared_owner_id)) {
+                CollaborationService.notifyChange({
+                    targetType: 'note',
+                    targetId: note.id,
+                    action: 'edited',
+                    itemTitle: updates.title || note.title || 'Nota',
+                });
+            }
+
             await NoteService.updateNote(id, updates);
 
             if (useStore.getState().session?.user?.id && useStore.getState().cloudSyncEnabled) {
@@ -151,6 +164,16 @@ export const useNotesStore = create<NotesState>((set, get) => ({
         }));
 
         try {
+            const note = get().notes.find(n => n.id === id);
+            if (note && (note.is_shared === 1 || note.shared_owner_id)) {
+                CollaborationService.notifyChange({
+                    targetType: 'note',
+                    targetId: note.id,
+                    action: 'deleted',
+                    itemTitle: note.title || 'Nota',
+                });
+            }
+
             await NoteService.deleteNote(id);
 
             if (useStore.getState().session?.user?.id && useStore.getState().cloudSyncEnabled) {

@@ -44,9 +44,7 @@ export default function CreateScreen() {
     const router = useRouter();
     const { id, initialDate } = useLocalSearchParams<{ id?: string; initialDate?: string }>();
     const { colors, typography, accent, isDark } = useVeyraTheme();
-    const { insets, bottom: bottomInset } = useScreenInsets();
-    const { height: screenHeight } = useWindowDimensions();
-    const layoutHeight = useSharedValue(screenHeight);
+    const { insets } = useScreenInsets();
     const notesInputRef = useRef<TextInput>(null);
 
     const {
@@ -89,52 +87,19 @@ export default function CreateScreen() {
     }, []);
 
     const language = useStore(state => state.language);
-    const bottomPadding = Math.max(bottomInset, 10);
-    const barHeight = 58 + bottomPadding;
-    const barBgColor = colors.navBar || (isDark ? '#1B1B1B' : '#FFFFFF');
 
-    const morphProgress = useSharedValue(0);
     const isExiting = useRef(false);
+    const fadeProgress = useSharedValue(0);
 
     useEffect(() => {
-        morphProgress.value = withTiming(1, {
-            duration: 210,
-            easing: ReanimatedEasing.out(ReanimatedEasing.cubic),
+        fadeProgress.value = withTiming(1, {
+            duration: 220,
+            easing: ReanimatedEasing.bezier(0.25, 0.1, 0.25, 1),
         });
     }, []);
 
-    const containerAnimatedStyle = useAnimatedStyle(() => {
-        const totalHeight = layoutHeight.value > 0 ? layoutHeight.value : screenHeight;
-        return {
-            transform: [
-                {
-                    translateY: interpolate(
-                        morphProgress.value,
-                        [0, 1],
-                        [totalHeight - barHeight, 0],
-                        Extrapolation.CLAMP
-                    ),
-                },
-            ],
-        };
-    });
-
-    const formAnimatedStyle = useAnimatedStyle(() => ({
-        opacity: interpolate(
-            morphProgress.value,
-            [0.2, 0.9],
-            [0, 1],
-            Extrapolation.CLAMP
-        ),
-    }));
-
-    const morphPreviewAnimatedStyle = useAnimatedStyle(() => ({
-        opacity: interpolate(
-            morphProgress.value,
-            [0, 0.18],
-            [1, 0],
-            Extrapolation.CLAMP
-        ),
+    const screenAnimatedStyle = useAnimatedStyle(() => ({
+        opacity: fadeProgress.value,
     }));
 
     const navigateBack = () => {
@@ -148,11 +113,11 @@ export default function CreateScreen() {
     const handleBack = () => {
         if (isExiting.current) return;
         isExiting.current = true;
-        morphProgress.value = withTiming(
+        fadeProgress.value = withTiming(
             0,
             {
-                duration: 180,
-                easing: ReanimatedEasing.out(ReanimatedEasing.cubic),
+                duration: 220,
+                easing: ReanimatedEasing.bezier(0.25, 0.1, 0.25, 1),
             },
             (finished) => {
                 if (finished) {
@@ -160,17 +125,14 @@ export default function CreateScreen() {
                 }
             }
         );
-        setTimeout(() => {
-            navigateBack();
-        }, 150);
     };
 
     useFocusEffect(
         React.useCallback(() => {
             isExiting.current = false;
-            morphProgress.value = withTiming(1, {
-                duration: 210,
-                easing: ReanimatedEasing.out(ReanimatedEasing.cubic),
+            fadeProgress.value = withTiming(1, {
+                duration: 220,
+                easing: ReanimatedEasing.bezier(0.25, 0.1, 0.25, 1),
             });
 
             const onHardwareBack = () => {
@@ -191,29 +153,17 @@ export default function CreateScreen() {
     );
 
     return (
-        <View
-            style={[StyleSheet.absoluteFill, { backgroundColor: 'transparent' }]}
-            onLayout={(e) => {
-                const h = Math.round(e.nativeEvent.layout.height);
-                if (h > 0) {
-                    layoutHeight.value = h;
-                }
-            }}
+        <Reanimated.View
+            style={[
+                styles.screen,
+                {
+                    backgroundColor: colors.bg,
+                },
+                screenAnimatedStyle,
+            ]}
         >
-            <Reanimated.View
-                style={[
-                    styles.screen,
-                    {
-                        backgroundColor: colors.bg,
-                        borderTopColor: colors.borderSubtle,
-                    },
-                    containerAnimatedStyle,
-                ]}
-            >
-                {/* Formulario de Creación (se desvanece suavemente en el morph) */}
-                <Reanimated.View style={[{ flex: 1 }, formAnimatedStyle]}>
-                <SafeAreaView style={styles.screen} edges={['top', 'right', 'left']}>
-                    <View style={styles.container}>
+            <SafeAreaView style={styles.screen} edges={['top', 'right', 'left']}>
+                <View style={styles.container}>
                         {/* Header */}
                         <View
                             style={[
@@ -438,60 +388,12 @@ export default function CreateScreen() {
                 </View>
             </SafeAreaView>
         </Reanimated.View>
-
-            {/* Vista previa de la barra inferior (se fusiona hacia la barra inferior al colapsar) */}
-            <Reanimated.View
-                pointerEvents="none"
-                style={[
-                    styles.morphBottomBar,
-                    {
-                        height: barHeight,
-                        paddingBottom: bottomPadding,
-                        backgroundColor: barBgColor,
-                    },
-                    morphPreviewAnimatedStyle,
-                ]}
-            >
-                <View style={styles.morphBarContent}>
-                    {/* 1. Tab Recordatorios */}
-                    <View style={styles.morphTabButton}>
-                        <View style={styles.morphIconContainer}>
-                            <Bell size={22} color={accent.primary as any} strokeWidth={2.5} />
-                        </View>
-                        <Text style={[styles.morphTabLabel, { color: accent.primary }]}>
-                            {language === 'es' ? 'Recordatorios' : 'Reminders'}
-                        </Text>
-                    </View>
-
-                    {/* 2. FAB Central (+) */}
-                    <View style={styles.morphFabSlot}>
-                        <View style={[styles.morphFabButton, { backgroundColor: accent.primary }]}>
-                            <Plus size={24} color="#FFFFFF" strokeWidth={2.5} />
-                        </View>
-                    </View>
-
-                    {/* 3. Tab Notas */}
-                    <View style={styles.morphTabButton}>
-                        <View style={styles.morphIconContainer}>
-                            <Notebook size={22} color={colors.textMuted as any} strokeWidth={2} />
-                        </View>
-                        <Text style={[styles.morphTabLabel, { color: colors.textMuted }]}>
-                            {language === 'es' ? 'Notas' : 'Notes'}
-                        </Text>
-                    </View>
-                </View>
-            </Reanimated.View>
-        </Reanimated.View>
-    </View>
-);
+    );
 }
 
 const styles = StyleSheet.create({
     screen: {
         flex: 1,
-        borderTopLeftRadius: 24,
-        borderTopRightRadius: 24,
-        borderTopWidth: 1,
     },
     morphBottomBar: {
         position: 'absolute',

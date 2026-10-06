@@ -1,8 +1,8 @@
 diff --git a/node_modules/expo-notifications/android/src/main/java/expo/modules/notifications/notifications/presentation/builders/ExpoNotificationBuilder.kt b/node_modules/expo-notifications/android/src/main/java/expo/modules/notifications/notifications/presentation/builders/ExpoNotificationBuilder.kt
-index 610d303..d440a97 100644
+index 610d303..7699929 100644
 --- a/node_modules/expo-notifications/android/src/main/java/expo/modules/notifications/notifications/presentation/builders/ExpoNotificationBuilder.kt
 +++ b/node_modules/expo-notifications/android/src/main/java/expo/modules/notifications/notifications/presentation/builders/ExpoNotificationBuilder.kt
-@@ -139,13 +139,33 @@ open class ExpoNotificationBuilder(
+@@ -139,13 +139,43 @@ open class ExpoNotificationBuilder(
  
      val defaultAction =
        NotificationAction(NotificationResponse.DEFAULT_ACTION_IDENTIFIER, null, true)
@@ -15,14 +15,21 @@ index 610d303..d440a97 100644
 +    )
 +    builder.setContentIntent(contentIntent)
 +
-+    if (content.isSticky || priority >= NotificationCompat.PRIORITY_MAX) {
++    val isCriticalOrStrict = content.isSticky ||
++      priority >= NotificationCompat.PRIORITY_MAX ||
++      channelId?.contains("critical") == true ||
++      channelId?.contains("strict") == true
++
++    Log.d("Veyra", "FSI check: isSticky=${content.isSticky}, priority=$priority, channelId=$channelId -> shouldAttach=$isCriticalOrStrict")
++
++    if (isCriticalOrStrict) {
 +      val reminderId = if (content.body?.has("reminderId") == true) content.body?.optString("reminderId") else null
 +      val alarmIntent = android.content.Intent().apply {
 +        setClassName(context.packageName, "com.ralo.veyra.CriticalAlarmActivity")
 +        flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP
 +        reminderId?.let { putExtra("reminderId", it) }
 +        putExtra("title", content.title)
-+        putExtra("controlLevel", if (priority >= NotificationCompat.PRIORITY_MAX) "critical" else "strict")
++        putExtra("controlLevel", if (channelId?.contains("critical") == true || priority >= NotificationCompat.PRIORITY_MAX) "critical" else "strict")
 +      }
 +
 +      val fsiPendingIntent = android.app.PendingIntent.getActivity(
@@ -37,6 +44,9 @@ index 610d303..d440a97 100644
 +      builder.setFullScreenIntent(fsiPendingIntent, true)
 +      builder.setCategory(NotificationCompat.CATEGORY_ALARM)
 +      builder.setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
++      Log.d("Veyra", "FSI attached: true for reminderId: $reminderId (notification: ${notification.notificationRequest.identifier})")
++    } else {
++      Log.d("Veyra", "FSI attached: false (condition not met)")
 +    }
  
      if (notificationContent.containsImage()) {

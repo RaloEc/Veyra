@@ -3,7 +3,20 @@ import * as SQLite from 'expo-sqlite';
 let dbInstance: SQLite.SQLiteDatabase | null = null;
 let dbPromise: Promise<SQLite.SQLiteDatabase> | null = null;
 
-export const getDB = async (): Promise<SQLite.SQLiteDatabase> => {
+export const resetDB = () => {
+  try {
+    if (dbInstance) {
+      dbInstance.closeAsync().catch(() => {});
+    }
+  } catch {}
+  dbInstance = null;
+  dbPromise = null;
+};
+
+export const getDB = async (forceReconnect = false): Promise<SQLite.SQLiteDatabase> => {
+  if (forceReconnect) {
+    resetDB();
+  }
   if (dbInstance) return dbInstance;
   if (!dbPromise) {
     dbPromise = (async () => {
@@ -17,12 +30,38 @@ export const getDB = async (): Promise<SQLite.SQLiteDatabase> => {
         dbInstance = db;
         return db;
       } catch (err) {
+        dbInstance = null;
         dbPromise = null;
         throw err;
       }
     })();
   }
   return dbPromise;
+};
+
+/**
+ * Ejecuta una operación de base de datos con recuperación automática
+ * si el objeto nativo compartido fue liberado por el sistema o Fast Refresh.
+ */
+export const withDB = async <T>(operation: (db: SQLite.SQLiteDatabase) => Promise<T>): Promise<T> => {
+  try {
+    const db = await getDB();
+    return await operation(db);
+  } catch (err: any) {
+    const isReleasedError =
+      err?.message?.includes('released') ||
+      err?.message?.includes('NativeStatement') ||
+      err?.message?.includes('already closed') ||
+      err?.message?.includes('cannot be cast');
+
+    if (isReleasedError) {
+      console.warn('[DB] Handle nativo liberado o desincronizado, recuperando conexión fresca...');
+      resetDB();
+      const freshDb = await getDB(true);
+      return await operation(freshDb);
+    }
+    throw err;
+  }
 };
 
 export const initDatabase = async () => {
@@ -93,6 +132,12 @@ export const initDatabase = async () => {
   try {
     await db.execAsync('ALTER TABLE reminders ADD COLUMN subtasks TEXT;');
   } catch (e) { }
+  try {
+    await db.execAsync('ALTER TABLE reminders ADD COLUMN is_shared INTEGER DEFAULT 0;');
+  } catch (e) { }
+  try {
+    await db.execAsync('ALTER TABLE reminders ADD COLUMN shared_owner_id TEXT;');
+  } catch (e) { }
 
   // Compliance Events & Notification Attempts
   await db.execAsync(`
@@ -119,6 +164,7 @@ export const initDatabase = async () => {
     CREATE TABLE IF NOT EXISTS folders (
       id TEXT PRIMARY KEY,
       user_id TEXT,
+      parent_id TEXT,
       name TEXT NOT NULL,
       icon TEXT,
       color TEXT,
@@ -134,6 +180,15 @@ export const initDatabase = async () => {
   // Migrations for folders
   try {
     await db.execAsync('ALTER TABLE folders ADD COLUMN is_pinned INTEGER DEFAULT 0;');
+  } catch (e) { }
+  try {
+    await db.execAsync('ALTER TABLE folders ADD COLUMN parent_id TEXT;');
+  } catch (e) { }
+  try {
+    await db.execAsync('ALTER TABLE folders ADD COLUMN is_shared INTEGER DEFAULT 0;');
+  } catch (e) { }
+  try {
+    await db.execAsync('ALTER TABLE folders ADD COLUMN shared_owner_id TEXT;');
   } catch (e) { }
 
   // Notes Table
@@ -168,10 +223,23 @@ export const initDatabase = async () => {
   try {
     await db.execAsync('ALTER TABLE notes ADD COLUMN event_id TEXT;');
   } catch (e) { }
+  try {
+    await db.execAsync('ALTER TABLE notes ADD COLUMN is_shared INTEGER DEFAULT 0;');
+  } catch (e) { }
+  try {
+    await db.execAsync('ALTER TABLE notes ADD COLUMN shared_owner_id TEXT;');
+  } catch (e) { }
 
   // Set last_modified_ms for existing notes that don't have it
   await db.runAsync(
     `UPDATE notes SET last_modified_ms = updated_at_ms WHERE last_modified_ms IS NULL`
+  );
+  // Asegurar que created_at_ms y updated_at_ms nunca sean nulos ni 0
+  await db.runAsync(
+    `UPDATE notes SET created_at_ms = updated_at_ms WHERE (created_at_ms IS NULL OR created_at_ms = 0) AND updated_at_ms > 0`
+  );
+  await db.runAsync(
+    `UPDATE notes SET updated_at_ms = created_at_ms WHERE (updated_at_ms IS NULL OR updated_at_ms = 0) AND created_at_ms > 0`
   );
 
   // Events Table
@@ -190,6 +258,7 @@ export const initDatabase = async () => {
       notification_offsets TEXT,
       notification_ids TEXT,
       note_id TEXT,
+      tags TEXT,
       created_at_ms INTEGER NOT NULL,
       updated_at_ms INTEGER NOT NULL,
       last_modified_ms INTEGER,
@@ -201,6 +270,15 @@ export const initDatabase = async () => {
   // Migrations for events
   try {
     await db.execAsync('ALTER TABLE events ADD COLUMN notification_offsets TEXT;');
+  } catch (e) { }
+  try {
+    await db.execAsync('ALTER TABLE events ADD COLUMN is_shared INTEGER DEFAULT 0;');
+  } catch (e) { }
+  try {
+    await db.execAsync('ALTER TABLE events ADD COLUMN shared_owner_id TEXT;');
+  } catch (e) { }
+  try {
+    await db.execAsync('ALTER TABLE events ADD COLUMN tags TEXT;');
   } catch (e) { }
 
   // Sync metadata table to track last sync timestamps
@@ -217,6 +295,7 @@ export const initDatabase = async () => {
     await db.execAsync(`
       CREATE INDEX IF NOT EXISTS idx_folders_updated_at ON folders (updated_at_ms);
       CREATE INDEX IF NOT EXISTS idx_folders_last_modified ON folders (last_modified_ms);
+      CREATE INDEX IF NOT EXISTS idx_folders_parent_id ON folders (parent_id);
       CREATE INDEX IF NOT EXISTS idx_notes_updated_at ON notes (updated_at_ms);
       CREATE INDEX IF NOT EXISTS idx_notes_last_modified ON notes (last_modified_ms);
       CREATE INDEX IF NOT EXISTS idx_notes_folder_id ON notes (folder_id);

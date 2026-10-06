@@ -20,6 +20,7 @@ import {
 import { Text } from 'tamagui';
 import { ImageEditor } from 'expo-dynamic-image-crop';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import {
     RotateCcw, FlipHorizontal, FlipVertical, X, Check, Undo2, Redo2,
     Crop, Sliders, ChevronLeft,
@@ -369,7 +370,8 @@ export function ImageCropperModal({
                 else onClose();
             }}
         >
-            <View style={[styles.root, { backgroundColor: bg }]}>
+            <GestureHandlerRootView style={{ flex: 1 }}>
+                <View style={[styles.root, { backgroundColor: bg }]}>
 
                 {/* ── MAIN PHASE ─────────────────────────────────────────── */}
                 {phase === 'main' && (
@@ -711,7 +713,8 @@ export function ImageCropperModal({
                     scrollEnabled={false}
                 />
             </View>
-        </Modal>
+        </GestureHandlerRootView>
+    </Modal>
     );
 }
 

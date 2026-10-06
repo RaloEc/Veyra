@@ -48,6 +48,7 @@ import {
     ChevronRight,
     ChevronDown,
     Paperclip,
+    Users,
 } from '@tamagui/lucide-icons';
 
 import { Subtask, Reminder } from '../../src/types/db';
@@ -61,6 +62,8 @@ import {
     VeyraBadge,
     VeyraDivider,
 } from '../../src/components/ui';
+import { ShareModal } from '../../src/components/collaboration/ShareModal';
+import { CollaboratorsAvatars } from '../../src/components/collaboration/CollaboratorsAvatars';
 import Reanimated, {
     SharedTransition,
 } from 'react-native-reanimated';
@@ -177,6 +180,11 @@ export default function ReminderDetailScreen() {
     const [isOptionsModalVisible, setIsOptionsModalVisible] = useState(false);
     const [isSnoozeModalVisible, setIsSnoozeModalVisible] = useState(false);
     const [isRescheduleModalVisible, setIsRescheduleModalVisible] = useState(false);
+    const [isShareModalVisible, setIsShareModalVisible] = useState(false);
+
+    const handleShareReminder = () => {
+        setIsShareModalVisible(true);
+    };
 
     // Quick Add Subtask State
     const [isAddingSubtask, setIsAddingSubtask] = useState(false);
@@ -404,8 +412,8 @@ export default function ReminderDetailScreen() {
         });
     };
 
-    // Share Reminder
-    const handleShareReminder = async () => {
+    // Share Reminder as plain text
+    const handleNativeShareReminder = async () => {
         if (!reminder) return;
         try {
             const dateStr = format(dueDate, language === 'es' ? "EEEE d 'de' MMMM, yyyy • HH:mm" : "EEEE, MMMM d, yyyy • HH:mm", { locale });
@@ -518,6 +526,14 @@ export default function ReminderDetailScreen() {
                 />
 
                 <View style={styles.headerRightActions}>
+                    {reminder && (
+                        <CollaboratorsAvatars
+                            targetType="reminder"
+                            targetId={reminder.id}
+                            onPress={handleShareReminder}
+                        />
+                    )}
+
                     <VeyraIconButton
                         variant="ghost"
                         size="sm"
@@ -1141,9 +1157,23 @@ export default function ReminderDetailScreen() {
                                 handleShareReminder();
                             }}
                         >
+                            <Users size={18} color={accent.primary} />
+                            <Text style={[styles.sheetOptionText, { color: colors.textPrimary }]}>
+                                {language === 'es' ? 'Colaborar / Invitar personas' : 'Collaborate / Invite people'}
+                            </Text>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                            style={[styles.sheetOptionRow, { borderBottomColor: colors.borderSubtle }]}
+                            activeOpacity={0.7}
+                            onPress={() => {
+                                setIsOptionsModalVisible(false);
+                                handleNativeShareReminder();
+                            }}
+                        >
                             <Share2 size={18} color={accent.primary} />
                             <Text style={[styles.sheetOptionText, { color: colors.textPrimary }]}>
-                                {language === 'es' ? 'Compartir' : 'Share'}
+                                {language === 'es' ? 'Exportar como texto' : 'Export as text'}
                             </Text>
                         </TouchableOpacity>
 
@@ -1173,6 +1203,18 @@ export default function ReminderDetailScreen() {
                 swipeToCloseEnabled={true}
                 doubleTapToZoomEnabled={true}
             />
+
+            {/* ─── MODAL DE COLABORACIÓN Y RECURSOS COMPARTIDOS ─── */}
+            {reminder && (
+                <ShareModal
+                    visible={isShareModalVisible}
+                    onClose={() => setIsShareModalVisible(false)}
+                    targetType="reminder"
+                    targetId={reminder.id}
+                    targetTitle={reminder.title}
+                    isOwner={reminder.is_shared !== 1}
+                />
+            )}
             </SafeAreaView>
         </Reanimated.View>
     );

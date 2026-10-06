@@ -27,7 +27,8 @@ interface FolderModalProps {
     visible: boolean;
     onClose: () => void;
     folderToEdit?: Folder | null;
-    onSave: (name: string, icon: string, color: string, isPinned?: boolean) => Promise<void>;
+    parentFolder?: Folder | null;
+    onSave: (name: string, icon: string, color: string, isPinned?: boolean, parentId?: string | null) => Promise<void>;
     onDelete?: (folderId: string) => void;
 }
 
@@ -35,6 +36,7 @@ export const FolderModal: React.FC<FolderModalProps> = ({
     visible,
     onClose,
     folderToEdit,
+    parentFolder,
     onSave,
     onDelete,
 }) => {
@@ -51,6 +53,8 @@ export const FolderModal: React.FC<FolderModalProps> = ({
     const [isSubmitting, setIsSubmitting] = useState(false);
 
     const isEdit = Boolean(folderToEdit);
+    const effectiveParentFolder = parentFolder || (isEdit && folderToEdit?.parent_id ? folders.find(f => f.id === folderToEdit.parent_id) : null);
+    const isSubfolder = Boolean(effectiveParentFolder);
 
     const handleTogglePin = (value: boolean) => {
         if (value) {
@@ -97,7 +101,10 @@ export const FolderModal: React.FC<FolderModalProps> = ({
 
         setIsSubmitting(true);
         try {
-            await onSave(trimmed, selectedIcon, selectedColor, isPinned);
+            const targetParentId = isEdit
+                ? (folderToEdit?.parent_id || null)
+                : (effectiveParentFolder ? effectiveParentFolder.id : null);
+            await onSave(trimmed, selectedIcon, selectedColor, isSubfolder ? false : isPinned, targetParentId);
             onClose();
         } catch (error) {
             console.error('Error saving folder:', error);
@@ -173,12 +180,18 @@ export const FolderModal: React.FC<FolderModalProps> = ({
                             <Text style={[styles.headerTitle, { color: colors.textPrimary }]}>
                                 {isEdit
                                     ? (language === 'es' ? 'Editar Carpeta' : 'Edit Folder')
-                                    : (language === 'es' ? 'Nueva Carpeta' : 'New Folder')}
+                                    : isSubfolder
+                                        ? (language === 'es' ? 'Nueva Subcarpeta' : 'New Subfolder')
+                                        : (language === 'es' ? 'Nueva Carpeta' : 'New Folder')}
                             </Text>
                             <Text style={[styles.headerSubtitle, { color: colors.textMuted }]}>
-                                {language === 'es'
-                                    ? 'Organiza tus notas con icono y color'
-                                    : 'Organize your notes with icon & color'}
+                                {isSubfolder
+                                    ? (language === 'es'
+                                        ? `Dentro de "${effectiveParentFolder?.name}"`
+                                        : `Inside "${effectiveParentFolder?.name}"`)
+                                    : (language === 'es'
+                                        ? 'Organiza tus notas con icono y color'
+                                        : 'Organize your notes with icon & color')}
                             </Text>
                         </View>
                         <TouchableOpacity
@@ -333,47 +346,49 @@ export const FolderModal: React.FC<FolderModalProps> = ({
                             </View>
                         </View>
 
-                        {/* Switch Fijar en Acceso Rápido */}
-                        <View
-                            style={[
-                                styles.pinRow,
-                                {
-                                    backgroundColor: isDark ? '#20232B' : '#F8FAFC',
-                                    borderColor: colors.borderSubtle,
-                                },
-                            ]}
-                        >
-                            <View style={styles.pinRowLeft}>
-                                <View
-                                    style={[
-                                        styles.pinIconBox,
-                                        { backgroundColor: isPinned ? `${selectedColor}25` : (isDark ? '#262933' : '#F1F5F9') },
-                                    ]}
-                                >
-                                    <Pin
-                                        size={18}
-                                        color={isPinned ? selectedColor : (colors.textMuted as any)}
-                                        strokeWidth={2.2}
-                                    />
+                        {/* Switch Fijar en Acceso Rápido (solo para carpetas raíz) */}
+                        {!isSubfolder && (
+                            <View
+                                style={[
+                                    styles.pinRow,
+                                    {
+                                        backgroundColor: isDark ? '#20232B' : '#F8FAFC',
+                                        borderColor: colors.borderSubtle,
+                                    },
+                                ]}
+                            >
+                                <View style={styles.pinRowLeft}>
+                                    <View
+                                        style={[
+                                            styles.pinIconBox,
+                                            { backgroundColor: isPinned ? `${selectedColor}25` : (isDark ? '#262933' : '#F1F5F9') },
+                                        ]}
+                                    >
+                                        <Pin
+                                            size={18}
+                                            color={isPinned ? selectedColor : (colors.textMuted as any)}
+                                            strokeWidth={2.2}
+                                        />
+                                    </View>
+                                    <View style={styles.pinTextCol}>
+                                        <Text style={[styles.pinTitle, { color: colors.textPrimary }]}>
+                                            {language === 'es' ? 'Fijar en Acceso Rápido' : 'Pin to Quick Access'}
+                                        </Text>
+                                        <Text style={[styles.pinSubtitle, { color: colors.textMuted }]}>
+                                            {language === 'es'
+                                                ? 'Mostrar en la barra superior (máx. 3)'
+                                                : 'Show in top filter bar (max 3)'}
+                                        </Text>
+                                    </View>
                                 </View>
-                                <View style={styles.pinTextCol}>
-                                    <Text style={[styles.pinTitle, { color: colors.textPrimary }]}>
-                                        {language === 'es' ? 'Fijar en Acceso Rápido' : 'Pin to Quick Access'}
-                                    </Text>
-                                    <Text style={[styles.pinSubtitle, { color: colors.textMuted }]}>
-                                        {language === 'es'
-                                            ? 'Mostrar en la barra superior (máx. 3)'
-                                            : 'Show in top filter bar (max 3)'}
-                                    </Text>
-                                </View>
+                                <Switch
+                                    value={isPinned}
+                                    onValueChange={handleTogglePin}
+                                    trackColor={{ false: isDark ? '#333A48' : '#E2E8F0', true: selectedColor }}
+                                    thumbColor="#FFFFFF"
+                                />
                             </View>
-                            <Switch
-                                value={isPinned}
-                                onValueChange={handleTogglePin}
-                                trackColor={{ false: isDark ? '#333A48' : '#E2E8F0', true: selectedColor }}
-                                thumbColor="#FFFFFF"
-                            />
-                        </View>
+                        )}
 
                         {/* Botón Eliminar si está editando */}
                         {isEdit && onDelete && (

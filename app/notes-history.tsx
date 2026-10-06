@@ -217,7 +217,7 @@ export default function NotesHistoryScreen() {
     };
 
     const renderItem = ({ item }: { item: Note }) => {
-        const date = item.updated_at_ms || item.created_at_ms;
+        const date = item.created_at_ms || item.updated_at_ms;
         const plainText = extractPlainTextFromPages(item.content);
         const previewText = plainText.length > 120 ? plainText.substring(0, 120) + '...' : plainText;
         const isSelected = selectedItems.includes(item.id);

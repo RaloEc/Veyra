@@ -1,6 +1,14 @@
 import { getDB } from '../db';
 import { Reminder, ReminderStatus, ControlLevel } from '../types/db';
 import * as Crypto from 'expo-crypto';
+import { WidgetService } from './widgetService';
+
+function triggerWidgetSync() {
+    WidgetService.sync().catch(err => {
+        console.warn('[ReminderService] Widget sync notice:', err);
+    });
+    WidgetService.syncSchedule().catch(() => {});
+}
 
 export const ReminderService = {
     async createReminder(
@@ -48,6 +56,8 @@ export const ReminderService = {
             [id, newReminder.user_id, title, description || null, dueDate, controlLevel, priority, 'pending', dueDate, 0, newReminder.max_retries, now, 0, repeatRule || null, attachments || null, links || null, subtasks || null]
         );
 
+        triggerWidgetSync();
+
         return newReminder;
     },
 
@@ -90,6 +100,7 @@ export const ReminderService = {
             `UPDATE reminders SET status = 'completed', last_modified_ms = ? WHERE id = ?`,
             [now, id]
         );
+        triggerWidgetSync();
         // TODO: Add Compliance Event
     },
 
@@ -120,6 +131,7 @@ export const ReminderService = {
             `UPDATE reminders SET ${sets.join(', ')} WHERE id = ?`,
             params
         );
+        triggerWidgetSync();
     },
 
     async deleteReminder(id: string): Promise<void> {
@@ -129,6 +141,7 @@ export const ReminderService = {
             `UPDATE reminders SET deleted = 1, deleted_at_ms = ?, last_modified_ms = ? WHERE id = ?`,
             [now, now, id]
         );
+        triggerWidgetSync();
     },
 
     async restoreReminder(id: string): Promise<void> {
@@ -138,6 +151,7 @@ export const ReminderService = {
             `UPDATE reminders SET deleted = 0, deleted_at_ms = NULL, last_modified_ms = ? WHERE id = ?`,
             [now, id]
         );
+        triggerWidgetSync();
     },
 
     async restoreReminders(ids: string[]): Promise<void> {
@@ -149,6 +163,7 @@ export const ReminderService = {
             `UPDATE reminders SET deleted = 0, deleted_at_ms = NULL, last_modified_ms = ? WHERE id IN (${placeholders})`,
             [now, ...ids]
         );
+        triggerWidgetSync();
     },
 
     async reactivateReminder(id: string): Promise<void> {
@@ -158,6 +173,7 @@ export const ReminderService = {
             `UPDATE reminders SET status = 'pending', last_modified_ms = ? WHERE id = ?`,
             [now, id]
         );
+        triggerWidgetSync();
     },
 
     async reactivateReminders(ids: string[]): Promise<void> {

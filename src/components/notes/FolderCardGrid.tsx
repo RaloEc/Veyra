@@ -32,6 +32,8 @@ import { useStore } from '../../store/useStore';
 interface FolderCardGridProps {
     folders: Folder[];
     noteCounts: Record<string, number>;
+    subfolderCounts?: Record<string, number>;
+    headerTitle?: string;
     onSelectFolder: (folderId: string, originRect?: { x: number; y: number; width: number; height: number }) => void;
     onEditFolder: (folder: Folder) => void;
     onCreateFolder: () => void;
@@ -45,6 +47,7 @@ interface FolderCardGridProps {
 interface FolderMiniCardProps {
     folder: Folder;
     count: number;
+    subfolderCount?: number;
     isDark: boolean;
     colors: any;
     accent: any;
@@ -60,6 +63,7 @@ interface FolderMiniCardProps {
 const FolderMiniCard: React.FC<FolderMiniCardProps> = React.memo(({
     folder,
     count,
+    subfolderCount = 0,
     isDark,
     colors,
     accent,
@@ -114,6 +118,16 @@ const FolderMiniCard: React.FC<FolderMiniCardProps> = React.memo(({
         }
     };
 
+    const noteCountText = count === 1
+        ? (language === 'es' ? '1 nota' : '1 note')
+        : (language === 'es' ? `${count} notas` : `${count} notes`);
+
+    const subfolderText = subfolderCount > 0
+        ? (subfolderCount === 1
+            ? (language === 'es' ? '1 carpeta' : '1 folder')
+            : (language === 'es' ? `${subfolderCount} carpetas` : `${subfolderCount} folders`))
+        : null;
+
     return (
         <View ref={cardRef} collapsable={false} style={styles.cardWrapper}>
             <Animated.View style={[{ width: '100%' }, animatedStyle]}>
@@ -162,10 +176,8 @@ const FolderMiniCard: React.FC<FolderMiniCardProps> = React.memo(({
                         >
                             {folder.name}
                         </Text>
-                        <Text style={[styles.folderCount, { color: colors.textMuted }]}>
-                            {count === 1
-                                ? (language === 'es' ? '1 nota' : '1 note')
-                                : (language === 'es' ? `${count} notas` : `${count} notes`)}
+                        <Text numberOfLines={1} style={[styles.folderCount, { color: colors.textMuted }]}>
+                            {subfolderText ? `${noteCountText} • ${subfolderText}` : noteCountText}
                         </Text>
                     </View>
 
@@ -208,6 +220,8 @@ const PAGE_SIZE = 6; // 3 filas x 2 columnas = 6 carpetas por página
 export const FolderCardGrid: React.FC<FolderCardGridProps> = ({
     folders,
     noteCounts,
+    subfolderCounts,
+    headerTitle,
     onSelectFolder,
     onEditFolder,
     onCreateFolder,
@@ -306,6 +320,10 @@ export const FolderCardGrid: React.FC<FolderCardGridProps> = ({
         );
     }
 
+    const defaultTitle = language === 'es'
+        ? `CARPETAS (${sanitizedFolders.length})`
+        : `FOLDERS (${sanitizedFolders.length})`;
+
     return (
         <View
             style={styles.container}
@@ -324,9 +342,7 @@ export const FolderCardGrid: React.FC<FolderCardGridProps> = ({
                     activeOpacity={0.7}
                 >
                     <Text style={[styles.headerTitle, { color: isSelectionMode ? accent.primary : colors.textSecondary }]}>
-                        {language === 'es'
-                            ? `CARPETAS (${sanitizedFolders.length})`
-                            : `FOLDERS (${sanitizedFolders.length})`}
+                        {headerTitle || defaultTitle}
                     </Text>
                     <View style={styles.chevronBox}>
                         {isCollapsed ? (
@@ -380,6 +396,7 @@ export const FolderCardGrid: React.FC<FolderCardGridProps> = ({
                                         <FolderMiniCard
                                             folder={folder}
                                             count={noteCounts[folder.id] || 0}
+                                            subfolderCount={subfolderCounts?.[folder.id] || 0}
                                             isDark={isDark}
                                             colors={colors}
                                             accent={accent}

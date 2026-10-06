@@ -1,3 +1,4 @@
+import { useColorScheme } from 'react-native';
 import { useStore } from '../store/useStore';
 
 export type AccentTheme = 'purple' | 'blue' | 'red' | 'green' | 'amber' | 'pink';
@@ -36,8 +37,8 @@ const ACCENT_PALETTES: Record<AccentTheme, { light: AccentPalette; dark: AccentP
 };
 
 export const ACCENT_OPTIONS: { key: AccentTheme; lightColor: string; darkColor: string }[] = [
-    { key: 'purple', lightColor: '#8B5CF6', darkColor: '#A78BFA' },
     { key: 'blue', lightColor: '#3B82F6', darkColor: '#60A5FA' },
+    { key: 'purple', lightColor: '#8B5CF6', darkColor: '#A78BFA' },
     { key: 'red', lightColor: '#E11D48', darkColor: '#FB7185' },
     { key: 'green', lightColor: '#10B981', darkColor: '#34D399' },
     { key: 'amber', lightColor: '#F59E0B', darkColor: '#FBBF24' },
@@ -45,12 +46,16 @@ export const ACCENT_OPTIONS: { key: AccentTheme; lightColor: string; darkColor: 
 ];
 
 export function getAccentPalette(accentTheme: AccentTheme, mode: 'light' | 'dark'): AccentPalette {
-    return ACCENT_PALETTES[accentTheme]?.[mode] ?? ACCENT_PALETTES.purple[mode];
+    return ACCENT_PALETTES[accentTheme]?.[mode] ?? ACCENT_PALETTES.blue[mode];
 }
 
 export function useAccentColor(): AccentPalette & { accent: string } {
+    const systemScheme = useColorScheme();
     const theme = useStore(state => state.theme);
+    const resolvedMode: 'light' | 'dark' = theme === 'system'
+        ? (systemScheme === 'dark' ? 'dark' : 'light')
+        : (theme === 'dark' ? 'dark' : 'light');
     const accentTheme = useStore(state => state.accentTheme);
-    const palette = getAccentPalette(accentTheme || 'purple', theme);
+    const palette = getAccentPalette(accentTheme || 'blue', resolvedMode);
     return { ...palette, accent: palette.primary };
 }

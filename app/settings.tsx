@@ -31,6 +31,12 @@ import {
     Database,
     Sparkles,
     ShieldAlert,
+    Shield,
+    Smartphone,
+    FileText,
+    Layers,
+    GraduationCap,
+    Eye,
 } from '@tamagui/lucide-icons';
 import * as IntentLauncher from 'expo-intent-launcher';
 import * as Application from 'expo-application';
@@ -46,6 +52,7 @@ import { VeyraIconButton } from '../src/components/ui/VeyraIconButton';
 import { VeyraSectionHeader } from '../src/components/ui/VeyraSectionHeader';
 import { VeyraDivider } from '../src/components/ui/VeyraDivider';
 import { AlarmPermissionsModal } from '../src/components/settings/AlarmPermissionsModal';
+import { WidgetService } from '../src/services/widgetService';
 
 export default function SettingsScreen() {
     const router = useRouter();
@@ -54,6 +61,7 @@ export default function SettingsScreen() {
     const {
         theme,
         toggleTheme,
+        setTheme,
         defaultControlLevel,
         setDefaultControlLevel,
         soundSettings,
@@ -68,7 +76,18 @@ export default function SettingsScreen() {
         session,
         accentTheme,
         setAccentTheme,
+        widgetTextScale,
+        setWidgetTextScale,
+        widgetHighContrast,
+        setWidgetHighContrast,
     } = useStore();
+
+    const TEXT_SCALE_OPTIONS = [
+        { scale: 0.85, key: 'compact', pct: '85%' },
+        { scale: 1.0, key: 'normal', pct: '100%' },
+        { scale: 1.15, key: 'large', pct: '115%' },
+        { scale: 1.30, key: 'extra', pct: '130%' },
+    ] as const;
 
     const [notificationsEnabled, setNotificationsEnabled] = useState(true);
     const [soundEnabled, setSoundEnabled] = useState(true);
@@ -162,19 +181,78 @@ export default function SettingsScreen() {
                 {/* General Section */}
                 <VeyraSectionHeader title={t('settings.general')} />
                 <VeyraSurface level={1} radius="lg" style={styles.groupCard}>
-                    <SettingsRow
-                        icon={isDark ? Moon : Sun}
-                        iconColor={isDark ? '#A78BFA' : '#F59E0B'}
-                        label={t('settings.dark_mode')}
-                        rightElement={
-                            <Switch
-                                value={isDark}
-                                onValueChange={toggleTheme}
-                                trackColor={{ false: colors.surfaceElevated, true: accent.primary }}
-                                thumbColor="#FFFFFF"
-                            />
-                        }
-                    />
+                    {/* Selector de Tema: Sistema / Claro / Oscuro */}
+                    <View style={{ paddingVertical: 12 }}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                                {theme === 'system' ? (
+                                    <Smartphone size={18} color="#3B82F6" />
+                                ) : isDark ? (
+                                    <Moon size={18} color="#A78BFA" />
+                                ) : (
+                                    <Sun size={18} color="#F59E0B" />
+                                )}
+                                <Text style={[styles.rowLabel, { color: colors.textPrimary, fontSize: typography.body.fontSize }]}>
+                                    {t('settings.theme', 'Tema de la App')}
+                                </Text>
+                            </View>
+                            <Text style={[styles.rowValue, { color: colors.textSecondary, fontSize: typography.caption.fontSize }]}>
+                                {theme === 'system'
+                                    ? `${t('settings.theme_system', 'Sistema')} (${isDark ? t('settings.theme_dark', 'Oscuro') : t('settings.theme_light', 'Claro')})`
+                                    : theme === 'dark'
+                                    ? t('settings.theme_dark', 'Oscuro')
+                                    : t('settings.theme_light', 'Claro')}
+                            </Text>
+                        </View>
+
+                        {/* Segmented Control */}
+                        <View style={{
+                            flexDirection: 'row',
+                            backgroundColor: colors.surfaceElevated,
+                            borderRadius: 10,
+                            padding: 3,
+                            gap: 4
+                        }}>
+                            {[
+                                { key: 'system' as const, label: t('settings.theme_system', 'Sistema'), icon: Smartphone },
+                                { key: 'light' as const, label: t('settings.theme_light', 'Claro'), icon: Sun },
+                                { key: 'dark' as const, label: t('settings.theme_dark', 'Oscuro'), icon: Moon },
+                            ].map(item => {
+                                const isSelected = theme === item.key;
+                                const ItemIcon = item.icon;
+                                return (
+                                    <TouchableOpacity
+                                        key={item.key}
+                                        onPress={() => setTheme(item.key)}
+                                        activeOpacity={0.7}
+                                        style={{
+                                            flex: 1,
+                                            flexDirection: 'row',
+                                            alignItems: 'center',
+                                            justifyContent: 'center',
+                                            paddingVertical: 8,
+                                            borderRadius: 8,
+                                            backgroundColor: isSelected ? (isDark ? colors.surfaceCard : '#FFFFFF') : 'transparent',
+                                            shadowColor: isSelected ? '#000000' : 'transparent',
+                                            shadowOpacity: isSelected ? 0.08 : 0,
+                                            shadowRadius: 3,
+                                            elevation: isSelected ? 2 : 0,
+                                            gap: 6
+                                        }}
+                                    >
+                                        <ItemIcon size={14} color={isSelected ? accent.primary : colors.textMuted} />
+                                        <Text style={{
+                                            fontSize: 12,
+                                            fontWeight: isSelected ? '700' : '500',
+                                            color: isSelected ? colors.textPrimary : colors.textMuted
+                                        }}>
+                                            {item.label}
+                                        </Text>
+                                    </TouchableOpacity>
+                                );
+                            })}
+                        </View>
+                    </View>
                     <VeyraDivider />
                     <SettingsRow
                         icon={Globe}
@@ -393,6 +471,341 @@ export default function SettingsScreen() {
                     })}
                 </VeyraSurface>
 
+                {/* Widgets de Android */}
+                {Platform.OS === 'android' && (
+                    <>
+                        <VeyraSectionHeader title={language === 'es' ? 'Widgets de Inicio' : 'Home Widgets'} />
+                        <VeyraSurface level={1} radius="lg" style={styles.groupCard}>
+                            <SettingsRow
+                                icon={Sparkles}
+                                iconColor={accent.primary}
+                                label={language === 'es' ? 'Añadir widget "Hoy"' : 'Add "Today" widget'}
+                                value={language === 'es' ? 'Agenda & Eventos' : 'Agenda & Events'}
+                                onPress={async () => {
+                                    const success = await WidgetService.requestPin();
+                                    if (success) {
+                                        Alert.alert(
+                                            language === 'es' ? 'Widget Hoy de Veyra' : 'Veyra Today Widget',
+                                            language === 'es'
+                                                ? 'Sigue las instrucciones del sistema para colocar el widget en tu pantalla.'
+                                                : 'Follow the system prompt to place the widget on your home screen.'
+                                        );
+                                    } else {
+                                        Alert.alert(
+                                            language === 'es' ? 'Widget' : 'Widget',
+                                            language === 'es'
+                                                ? 'Puedes añadir el widget manteniendo presionada tu pantalla de inicio y seleccionando Veyra > Hoy.'
+                                                : 'You can add the widget by long-pressing your home screen and selecting Veyra > Today.'
+                                        );
+                                    }
+                                }}
+                            />
+                            <VeyraDivider />
+                            <SettingsRow
+                                icon={FileText}
+                                iconColor="#8B5CF6"
+                                label={language === 'es' ? 'Añadir widget "Notas"' : 'Add "Notes" widget'}
+                                value={language === 'es' ? 'Notas rápidas' : 'Quick notes'}
+                                onPress={async () => {
+                                    const success = await WidgetService.requestPinNotes();
+                                    if (success) {
+                                        Alert.alert(
+                                            language === 'es' ? 'Widget de Notas' : 'Notes Widget',
+                                            language === 'es'
+                                                ? 'Sigue las instrucciones del sistema para colocar el widget en tu pantalla.'
+                                                : 'Follow the system prompt to place the widget on your home screen.'
+                                        );
+                                    } else {
+                                        Alert.alert(
+                                            language === 'es' ? 'Widget' : 'Widget',
+                                            language === 'es'
+                                                ? 'Puedes añadir el widget manteniendo presionada tu pantalla de inicio y seleccionando Veyra > Notas.'
+                                                : 'You can add the widget by long-pressing your home screen and selecting Veyra > Notes.'
+                                        );
+                                    }
+                                }}
+                            />
+                            <VeyraDivider />
+                            <SettingsRow
+                                icon={Layers}
+                                iconColor="#EC4899"
+                                label={language === 'es' ? 'Añadir widget "Agenda & Notas"' : 'Add "Agenda & Notes" widget'}
+                                value={language === 'es' ? 'Dúo con pestañas' : 'Tabbed Duo'}
+                                onPress={async () => {
+                                    const success = await WidgetService.requestPinCombo();
+                                    if (success) {
+                                        Alert.alert(
+                                            language === 'es' ? 'Widget Agenda y Notas' : 'Agenda & Notes Widget',
+                                            language === 'es'
+                                                ? 'Sigue las instrucciones del sistema para colocar el widget en tu pantalla.'
+                                                : 'Follow the system prompt to place the widget on your home screen.'
+                                        );
+                                    } else {
+                                        Alert.alert(
+                                            language === 'es' ? 'Widget' : 'Widget',
+                                            language === 'es'
+                                                ? 'Puedes añadir el widget manteniendo presionada tu pantalla de inicio y seleccionando Veyra > Agenda y Notas.'
+                                                : 'You can add the widget by long-pressing your home screen and selecting Veyra > Agenda and Notes.'
+                                        );
+                                    }
+                                }}
+                            />
+                            <VeyraDivider />
+                            <SettingsRow
+                                icon={Zap}
+                                iconColor="#F59E0B"
+                                label={language === 'es' ? 'Añadir widget "Acciones Rápidas"' : 'Add "Quick Actions" widget'}
+                                value={language === 'es' ? 'Accesos directos' : 'Shortcuts'}
+                                onPress={async () => {
+                                    const success = await WidgetService.requestPinQuick();
+                                    if (success) {
+                                        Alert.alert(
+                                            language === 'es' ? 'Widget Acciones Rápidas' : 'Quick Actions Widget',
+                                            language === 'es'
+                                                ? 'Sigue las instrucciones del sistema para colocar el widget en tu pantalla.'
+                                                : 'Follow the system prompt to place the widget on your home screen.'
+                                        );
+                                    } else {
+                                        Alert.alert(
+                                            language === 'es' ? 'Widget' : 'Widget',
+                                            language === 'es'
+                                                ? 'Puedes añadir el widget manteniendo presionada tu pantalla de inicio y seleccionando Veyra > Acciones Rápidas.'
+                                                : 'You can add the widget by long-pressing your home screen and selecting Veyra > Quick Actions.'
+                                        );
+                                    }
+                                }}
+                            />
+                            <VeyraDivider />
+                            <SettingsRow
+                                icon={GraduationCap}
+                                iconColor="#3B82F6"
+                                label={language === 'es' ? 'Añadir widget "Horario de Clases"' : 'Add "Class Schedule" widget'}
+                                value={language === 'es' ? 'Clases de hoy' : "Today's classes"}
+                                onPress={async () => {
+                                    const success = await WidgetService.requestPinSchedule();
+                                    if (success) {
+                                        Alert.alert(
+                                            language === 'es' ? 'Widget Horario de Clases' : 'Class Schedule Widget',
+                                            language === 'es'
+                                                ? 'Sigue las instrucciones del sistema para colocar el widget en tu pantalla.'
+                                                : 'Follow the system prompt to place the widget on your home screen.'
+                                        );
+                                    } else {
+                                        Alert.alert(
+                                            language === 'es' ? 'Widget' : 'Widget',
+                                            language === 'es'
+                                                ? 'Puedes añadir el widget manteniendo presionada tu pantalla de inicio y seleccionando Veyra > Horario de Clases.'
+                                                : 'You can add the widget by long-pressing your home screen and selecting Veyra > Class Schedule.'
+                                        );
+                                    }
+                                }}
+                            />
+                            <VeyraDivider />
+                            <SettingsRow
+                                icon={RefreshCw}
+                                iconColor="#10B981"
+                                label={language === 'es' ? 'Sincronizar widgets ahora' : 'Sync widgets now'}
+                                onPress={async () => {
+                                    const success = await WidgetService.syncAll();
+                                    if (success) {
+                                        Alert.alert(
+                                            language === 'es' ? 'Widgets actualizados' : 'Widgets updated',
+                                            language === 'es'
+                                                ? 'La agenda y las notas de los widgets se han sincronizado con éxito.'
+                                                : 'Widget agenda and notes have been synced successfully.'
+                                        );
+                                    }
+                                }}
+                            />
+                        </VeyraSurface>
+
+                        {/* Accesibilidad y Apariencia de Widgets */}
+                        <VeyraSectionHeader
+                            title={t('settings.widgets_accessibility_title', 'Accesibilidad de Widgets')}
+                            style={{ marginTop: 8 }}
+                        />
+                        <VeyraSurface level={1} radius="lg" style={[styles.groupCard, { paddingVertical: 14 }]}>
+                            {/* Selector de escala de texto */}
+                            <View style={{ marginBottom: 12 }}>
+                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 4 }}>
+                                    <Eye size={18} color={accent.primary} strokeWidth={2.2} />
+                                    <Text style={[typography.body, { color: colors.textPrimary, fontWeight: '700' }]}>
+                                        {t('settings.widgets_text_size', 'Tamaño del texto')}
+                                    </Text>
+                                </View>
+                                <Text style={[typography.caption, { color: colors.textMuted, marginBottom: 12 }]}>
+                                    {t('settings.widgets_text_size_desc', 'Ajusta la escala del texto para todos los widgets del launcher')}
+                                </Text>
+
+                                <View style={styles.scaleChipsRow}>
+                                    {TEXT_SCALE_OPTIONS.map((opt) => {
+                                        const isSelected = Math.abs((widgetTextScale ?? 1.0) - opt.scale) < 0.05;
+                                        return (
+                                            <TouchableOpacity
+                                                key={opt.key}
+                                                activeOpacity={0.7}
+                                                onPress={() => setWidgetTextScale(opt.scale)}
+                                                style={[
+                                                    styles.scaleChip,
+                                                    {
+                                                        backgroundColor: isSelected ? accent.primary : colors.surfaceElevated,
+                                                        borderColor: isSelected ? accent.primary : colors.borderSubtle,
+                                                    }
+                                                ]}
+                                            >
+                                                <Text
+                                                    style={[
+                                                        typography.caption,
+                                                        {
+                                                            color: isSelected ? '#FFFFFF' : colors.textPrimary,
+                                                            fontWeight: isSelected ? '700' : '500',
+                                                        }
+                                                    ]}
+                                                >
+                                                    {t(`settings.widgets_scale_${opt.key}`, opt.key)}
+                                                </Text>
+                                                <Text
+                                                    style={{
+                                                        fontSize: 10,
+                                                        color: isSelected ? 'rgba(255, 255, 255, 0.85)' : colors.textMuted,
+                                                        fontWeight: '600',
+                                                        marginTop: 1,
+                                                    }}
+                                                >
+                                                    {opt.pct}
+                                                </Text>
+                                            </TouchableOpacity>
+                                        );
+                                    })}
+                                </View>
+                            </View>
+
+                            <VeyraDivider />
+
+                            {/* Switch de Alto Contraste */}
+                            <View style={[styles.accessibilityRow, { marginVertical: 12 }]}>
+                                <View style={{ flex: 1, paddingRight: 12 }}>
+                                    <Text style={[typography.body, { color: colors.textPrimary, fontWeight: '700' }]}>
+                                        {t('settings.widgets_high_contrast', 'Modo Alto Contraste')}
+                                    </Text>
+                                    <Text style={[typography.caption, { color: colors.textMuted, marginTop: 2 }]}>
+                                        {t('settings.widgets_high_contrast_desc', 'Fondos puros y contornos reforzados para máxima legibilidad')}
+                                    </Text>
+                                </View>
+                                <Switch
+                                    value={widgetHighContrast ?? false}
+                                    onValueChange={setWidgetHighContrast}
+                                    trackColor={{ false: colors.surfaceElevated, true: accent.primary }}
+                                    thumbColor="#FFFFFF"
+                                />
+                            </View>
+
+                            <VeyraDivider />
+
+                            {/* Previsualización en vivo */}
+                            <View style={{ marginTop: 12 }}>
+                                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                                    <Text style={[typography.caption, { color: colors.textMuted, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5 }]}>
+                                        {t('settings.widgets_preview_title', 'Vista previa del widget')}
+                                    </Text>
+                                    <Text style={{ fontSize: 11, color: accent.primary, fontWeight: '700' }}>
+                                        {Math.round((widgetTextScale ?? 1.0) * 100)}% {widgetHighContrast ? '• Alto Contraste' : ''}
+                                    </Text>
+                                </View>
+
+                                <View
+                                    style={[
+                                        styles.previewWidgetContainer,
+                                        {
+                                            backgroundColor: widgetHighContrast ? (isDark ? '#000000' : '#FFFFFF') : (isDark ? '#111215' : '#FFFFFF'),
+                                            borderColor: widgetHighContrast ? (isDark ? '#64748B' : '#000000') : colors.borderSubtle,
+                                            borderWidth: widgetHighContrast ? 1.5 : 1,
+                                        }
+                                    ]}
+                                >
+                                    <View style={styles.previewWidgetHeader}>
+                                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                                            <Sparkles size={13} color={widgetHighContrast ? (isDark ? '#FFFFFF' : '#000000') : accent.primary} />
+                                            <Text
+                                                style={{
+                                                    fontSize: Math.round(11 * (widgetTextScale ?? 1.0)),
+                                                    fontWeight: '700',
+                                                    color: widgetHighContrast ? (isDark ? '#FFFFFF' : '#000000') : colors.textPrimary,
+                                                }}
+                                            >
+                                                Veyra · Hoy
+                                            </Text>
+                                        </View>
+                                        <View
+                                            style={[
+                                                styles.previewBadge,
+                                                {
+                                                    backgroundColor: widgetHighContrast
+                                                        ? (isDark ? '#1E293B' : '#E2E8F0')
+                                                        : (isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.05)')
+                                                }
+                                            ]}
+                                        >
+                                            <Text
+                                                style={{
+                                                    fontSize: Math.round(9 * (widgetTextScale ?? 1.0)),
+                                                    fontWeight: '700',
+                                                    color: widgetHighContrast ? (isDark ? '#FFFFFF' : '#000000') : accent.primary,
+                                                }}
+                                            >
+                                                10:30 AM
+                                            </Text>
+                                        </View>
+                                    </View>
+
+                                    <View
+                                        style={[
+                                            styles.previewWidgetItem,
+                                            {
+                                                backgroundColor: widgetHighContrast ? (isDark ? '#121212' : '#F1F5F9') : (isDark ? '#1C1E22' : '#F8FAFC'),
+                                                borderColor: widgetHighContrast ? (isDark ? '#334155' : '#CBD5E1') : 'transparent',
+                                                borderWidth: widgetHighContrast ? 1 : 0,
+                                            }
+                                        ]}
+                                    >
+                                        <View
+                                            style={[
+                                                styles.previewItemBar,
+                                                {
+                                                    backgroundColor: widgetHighContrast ? (isDark ? '#FFFFFF' : '#000000') : accent.primary,
+                                                }
+                                            ]}
+                                        />
+                                        <View style={{ flex: 1, paddingLeft: 8 }}>
+                                            <Text
+                                                numberOfLines={1}
+                                                style={{
+                                                    fontSize: Math.round(13 * (widgetTextScale ?? 1.0)),
+                                                    fontWeight: '700',
+                                                    color: widgetHighContrast ? (isDark ? '#FFFFFF' : '#000000') : colors.textPrimary,
+                                                }}
+                                            >
+                                                {t('settings.widgets_preview_sample_title', 'Revisar avance del proyecto')}
+                                            </Text>
+                                            <Text
+                                                numberOfLines={1}
+                                                style={{
+                                                    fontSize: Math.round(10 * (widgetTextScale ?? 1.0)),
+                                                    fontWeight: '500',
+                                                    color: widgetHighContrast ? (isDark ? '#CBD5E1' : '#334155') : colors.textMuted,
+                                                    marginTop: 1,
+                                                }}
+                                            >
+                                                {t('settings.widgets_preview_sample_sub', 'Hoy 10:30 AM · Prioridad Alta')}
+                                            </Text>
+                                        </View>
+                                    </View>
+                                </View>
+                            </View>
+                        </VeyraSurface>
+                    </>
+                )}
+
                 {/* Datos de Demostración y Pruebas */}
                 <VeyraSectionHeader title={language === 'es' ? 'Datos de Demostración' : 'Demo & Test Data'} />
                 <VeyraSurface level={1} radius="lg" style={styles.groupCard}>
@@ -414,6 +827,28 @@ export default function SettingsScreen() {
                                 console.error('Error generating sample data:', error);
                             }
                         }}
+                    />
+                </VeyraSurface>
+
+                {/* Legal & Privacidad */}
+                <VeyraSectionHeader title={language === 'es' ? 'Legal & Privacidad' : 'Legal & Privacy'} style={{ marginTop: 8 }} />
+                <VeyraSurface level={1} radius="lg" style={styles.groupCard}>
+                    <SettingsRow
+                        icon={Shield}
+                        iconColor="#10B981"
+                        label={language === 'es' ? 'Política de Privacidad' : 'Privacy Policy'}
+                        value={language === 'es' ? 'Protección de datos' : 'Data protection'}
+                        isLink
+                        onPress={() => router.push({ pathname: '/legal', params: { tab: 'privacy' } })}
+                    />
+                    <VeyraDivider />
+                    <SettingsRow
+                        icon={FileText}
+                        iconColor="#3B82F6"
+                        label={language === 'es' ? 'Términos y Condiciones' : 'Terms & Conditions'}
+                        value={language === 'es' ? 'Condiciones de uso (EULA)' : 'Terms of use'}
+                        isLink
+                        onPress={() => router.push({ pathname: '/legal', params: { tab: 'terms' } })}
                     />
                 </VeyraSurface>
 
@@ -597,6 +1032,52 @@ const styles = StyleSheet.create({
         height: 6,
         borderRadius: 3,
         backgroundColor: '#FFFFFF',
+    },
+    scaleChipsRow: {
+        flexDirection: 'row',
+        gap: 8,
+        justifyContent: 'space-between',
+    },
+    scaleChip: {
+        flex: 1,
+        paddingVertical: 9,
+        paddingHorizontal: 4,
+        borderRadius: 12,
+        borderWidth: 1,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    accessibilityRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+    },
+    previewWidgetContainer: {
+        padding: 12,
+        borderRadius: 16,
+        marginTop: 4,
+    },
+    previewWidgetHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginBottom: 8,
+    },
+    previewBadge: {
+        paddingHorizontal: 8,
+        paddingVertical: 3,
+        borderRadius: 8,
+    },
+    previewWidgetItem: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        padding: 8,
+        borderRadius: 10,
+    },
+    previewItemBar: {
+        width: 3.5,
+        height: 26,
+        borderRadius: 2,
     },
     versionText: {
         textAlign: 'center',

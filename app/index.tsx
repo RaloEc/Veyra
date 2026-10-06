@@ -65,6 +65,7 @@ import {
     Plus,
     MapPin,
     Layers,
+    Users,
 } from '@tamagui/lucide-icons';
 import * as Sharing from 'expo-sharing';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -72,6 +73,7 @@ import * as IntentLauncher from 'expo-intent-launcher';
 
 import { useStore } from '../src/store/useStore';
 import { useEventsStore } from '../src/store/useEventsStore';
+import { useSelectionStore } from '../src/store/useSelectionStore';
 import { Reminder, CalendarEvent } from '../src/types/db';
 import { isEventOccurringOnDate } from '../src/services/eventService';
 import { extractPlainTextFromPages } from '../src/utils/pageUtils';
@@ -91,7 +93,8 @@ import {
 } from '../src/components/ui';
 import NotesScreen from './notes/index';
 import { TopBar } from '../src/components/TopBar';
-import { BottomTabBar } from '../src/components/layout/BottomTabBar';
+import { RecurringDeleteModal } from '../src/components/events/RecurringDeleteModal';
+import { ShareEventsModal } from '../src/components/events/ShareEventsModal';
 
 export type TimelineItem =
     | { type: 'event'; event: CalendarEvent; time_ms: number }
@@ -141,34 +144,51 @@ function calculateRiskInfo(dueDate: number, now: number, isDark: boolean, textSe
 
 interface AgendaEventRowProps {
     event: CalendarEvent;
+    itemTime?: number;
     isLast: boolean;
+    isSelected?: boolean;
+    isSelectionMode?: boolean;
     now: number;
     language: string;
     isDark: boolean;
     colors: any;
-    onPress: (id: string) => void;
+    accent: any;
+    onPress: (id: string, itemTime?: number) => void;
+    onLongPress?: (id: string) => void;
     onPressNote: (noteId: string) => void;
-    onEdit: (id: string) => void;
+    onEdit: (id: string, itemTime?: number) => void;
     onDeleteDismiss: (id: string) => void;
+    onRequestRecurringDelete?: (event: CalendarEvent, itemTime?: number) => void;
 }
 
 const AgendaEventRow = React.memo(function AgendaEventRow({
     event,
+    itemTime,
     isLast,
+    isSelected = false,
+    isSelectionMode = false,
     now,
     language,
     isDark,
     colors,
+    accent,
     onPress,
+    onLongPress,
     onPressNote,
     onEdit,
     onDeleteDismiss,
+    onRequestRecurringDelete,
 }: AgendaEventRowProps) {
+    const isRecurring = Boolean(event.repeat_rule && event.repeat_rule !== 'null');
     const evColor = event.color || '#3B82F6';
     const startStr = format(new Date(event.start_time_ms), 'HH:mm');
     const endStr = format(new Date(event.end_time_ms), 'HH:mm');
     const isOngoing = useMemo(() => {
         const today = new Date(now);
+        const targetDate = itemTime ? new Date(itemTime) : new Date(event.start_time_ms);
+        if (!isSameDay(targetDate, today)) {
+            return false;
+        }
         if (!isEventOccurringOnDate(event, today)) return false;
         const s = new Date(today);
         const origS = new Date(event.start_time_ms);
@@ -177,7 +197,7 @@ const AgendaEventRow = React.memo(function AgendaEventRow({
         const origE = new Date(event.end_time_ms);
         e.setHours(origE.getHours(), origE.getMinutes(), origE.getSeconds(), origE.getMilliseconds());
         return now >= s.getTime() && now <= e.getTime();
-    }, [event, now]);
+    }, [event, now, itemTime]);
 
     const measuredHeight = useRef(0);
     const translateX = useSharedValue(0);
@@ -225,8 +245,8 @@ const AgendaEventRow = React.memo(function AgendaEventRow({
             duration: 220,
             easing: ReanimatedEasing.bezier(0.25, 1, 0.5, 1),
         });
-        onEdit(event.id);
-    }, [event.id, onEdit]);
+        onEdit(event.id, itemTime);
+    }, [event.id, itemTime, onEdit]);
 
     const panGesture = Gesture.Pan()
         .activeOffsetX([-15, 15])
@@ -240,8 +260,16 @@ const AgendaEventRow = React.memo(function AgendaEventRow({
             'worklet';
             if (isDismissingSV.value) return;
             if (e.translationX < -105) {
-                isDismissingSV.value = true;
-                runOnJS(triggerDismiss)();
+                if (isRecurring && onRequestRecurringDelete) {
+                    translateX.value = withTiming(0, {
+                        duration: 220,
+                        easing: ReanimatedEasing.bezier(0.25, 1, 0.5, 1),
+                    });
+                    runOnJS(onRequestRecurringDelete)(event, itemTime);
+                } else {
+                    isDismissingSV.value = true;
+                    runOnJS(triggerDismiss)();
+                }
             } else if (e.translationX > 105) {
                 runOnJS(triggerEdit)();
             } else {
@@ -342,7 +370,9 @@ const AgendaEventRow = React.memo(function AgendaEventRow({
                         style={[
                             styles.swipeFrontRow,
                             {
-                                backgroundColor: isOngoing
+                                backgroundColor: isSelected
+                                    ? (isDark ? 'rgba(59, 130, 246, 0.15)' : 'rgba(59, 130, 246, 0.08)')
+                                    : isOngoing
                                     ? (isDark ? 'rgba(59, 130, 246, 0.12)' : 'rgba(59, 130, 246, 0.06)')
                                     : (isDark ? '#1C1F26' : '#FFFFFF'),
                             },
@@ -353,7 +383,12 @@ const AgendaEventRow = React.memo(function AgendaEventRow({
                             activeOpacity={0.7}
                             onPress={() => {
                                 if (!isDismissing.current) {
-                                    onPress(event.id);
+                                    onPress(event.id, itemTime);
+                                }
+                            }}
+                            onLongPress={() => {
+                                if (onLongPress) {
+                                    onLongPress(event.id);
                                 }
                             }}
                             style={[
@@ -363,6 +398,19 @@ const AgendaEventRow = React.memo(function AgendaEventRow({
                                 },
                             ]}
                         >
+                            {isSelectionMode ? (
+                                <View
+                                    style={[
+                                        styles.selectionCheck,
+                                        {
+                                            backgroundColor: isSelected ? accent.primary : 'transparent',
+                                            borderColor: isSelected ? accent.primary : colors.borderMedium,
+                                        },
+                                    ]}
+                                >
+                                    {isSelected && <Check size={12} color="#FFFFFF" strokeWidth={3} />}
+                                </View>
+                            ) : null}
                             <View style={styles.agendaRowContent}>
                                 <View style={styles.agendaRowTitleLine}>
                                     <Text
@@ -421,7 +469,7 @@ const AgendaEventRow = React.memo(function AgendaEventRow({
 
                             <TouchableOpacity
                                 hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                                onPress={() => onEdit(event.id)}
+                                onPress={() => onEdit(event.id, itemTime)}
                                 style={styles.agendaRowActionBtn}
                             >
                                 <Edit3 size={13} color={colors.textMuted} />
@@ -734,6 +782,11 @@ const AgendaReminderRow = React.memo(function AgendaReminderRow({
                                     >
                                         {item.title}
                                     </Text>
+                                    {(item.is_shared === 1 || item.shared_owner_id) && (
+                                        <View style={{ marginLeft: 6, opacity: 0.85 }}>
+                                            <Users size={12} color={accent.primary as any} strokeWidth={2.4} />
+                                        </View>
+                                    )}
                                 </View>
 
                                 <View style={styles.agendaRowMetaLine}>
@@ -869,6 +922,8 @@ export default function HomeScreen() {
         setDetailReminder,
         language,
         toggleSubtask,
+        loadStreak,
+        triggerSync,
     } = useStore();
 
     const {
@@ -877,6 +932,7 @@ export default function HomeScreen() {
         loadAllEvents,
         loadEventsForDate,
         deleteEvent,
+        deleteEventOccurrence,
     } = useEventsStore();
 
     const { colors, typography, radii, spacing, accent, isDark, getControlLevelColor } = useVeyraTheme();
@@ -888,10 +944,13 @@ export default function HomeScreen() {
     const [galleryIndex, setGalleryIndex] = useState(0);
     const [showLeftArrow, setShowLeftArrow] = useState(false);
     const [showRightArrow, setShowRightArrow] = useState(false);
-    const [isDeleteConfirmVisible, setIsDeleteConfirmVisible] = useState(false);
     const [selectedReminders, setSelectedReminders] = useState<string[]>([]);
-    const isSelectionMode = selectedReminders.length > 0;
+    const [selectedEvents, setSelectedEvents] = useState<string[]>([]);
+    const totalSelectedCount = selectedReminders.length + selectedEvents.length;
+    const isSelectionMode = totalSelectedCount > 0;
     const [isBulkDeleteConfirmVisible, setIsBulkDeleteConfirmVisible] = useState(false);
+    const [isShareEventsModalVisible, setIsShareEventsModalVisible] = useState(false);
+    const [recurringDeleteTarget, setRecurringDeleteTarget] = useState<{ event: CalendarEvent; itemTime?: number } | null>(null);
     const [isSnoozeModalVisible, setIsSnoozeModalVisible] = useState(false);
     const [selectedCalendarDate, setSelectedCalendarDate] = useState<Date | null>(null);
     const [expandedSubtaskCardIds, setExpandedSubtaskCardIds] = useState<Record<string, boolean>>({});
@@ -1015,20 +1074,6 @@ export default function HomeScreen() {
     }, [sortedReminders]);
 
     const nowMs = now;
-    // Ongoing event right now
-    const liveEvent = useMemo(() => {
-        const today = new Date(nowMs);
-        return events.find(e => {
-            if (!isEventOccurringOnDate(e, today)) return false;
-            const s = new Date(today);
-            const origS = new Date(e.start_time_ms);
-            s.setHours(origS.getHours(), origS.getMinutes(), origS.getSeconds(), origS.getMilliseconds());
-            const end = new Date(today);
-            const origE = new Date(e.end_time_ms);
-            end.setHours(origE.getHours(), origE.getMinutes(), origE.getSeconds(), origE.getMilliseconds());
-            return nowMs >= s.getTime() && nowMs <= end.getTime();
-        }) || null;
-    }, [events, nowMs]);
 
     // One UI Integrated Daily Briefing Context
     const locale = language === 'es' ? es : enUS;
@@ -1304,9 +1349,12 @@ export default function HomeScreen() {
         }
     };
 
-    // Selection Handling
     const toggleSelection = (id: string) => {
         setSelectedReminders(prev => (prev.includes(id) ? prev.filter(rId => rId !== id) : [...prev, id]));
+    };
+
+    const toggleEventSelection = (id: string) => {
+        setSelectedEvents(prev => (prev.includes(id) ? prev.filter(eId => eId !== id) : [...prev, id]));
     };
 
     const setCardOrigin = useCardTransitionStore(state => state.setOrigin);
@@ -1337,13 +1385,17 @@ export default function HomeScreen() {
     };
 
     const pendingReminders = useMemo(() => reminders.filter(r => r.status === 'pending'), [reminders]);
-    const isAllSelected = pendingReminders.length > 0 && selectedReminders.length === pendingReminders.length;
+    const isAllSelected = (pendingReminders.length > 0 || events.length > 0) &&
+        selectedReminders.length === pendingReminders.length &&
+        selectedEvents.length === events.length;
 
     const toggleSelectAll = () => {
         if (isAllSelected) {
             setSelectedReminders([]);
+            setSelectedEvents([]);
         } else {
             setSelectedReminders(pendingReminders.map(r => r.id));
+            setSelectedEvents(events.map(e => e.id));
         }
     };
 
@@ -1412,6 +1464,68 @@ export default function HomeScreen() {
             });
         } catch (e) {}
     };
+
+    // Sincronizar selección de recordatorios y eventos con el dock morpheado
+    useEffect(() => {
+        if (totalSelectedCount > 0 && mainActiveTab === 'reminders') {
+            useSelectionStore.getState().setSelection({
+                title: `${totalSelectedCount} ${language === 'es' ? (totalSelectedCount === 1 ? 'seleccionado' : 'seleccionados') : 'selected'}`,
+                isAllSelected,
+                selectAllText: isAllSelected
+                    ? (language === 'es' ? 'Deseleccionar' : 'Deselect')
+                    : (language === 'es' ? 'Todos' : 'All'),
+                onToggleSelectAll: toggleSelectAll,
+                onClose: () => {
+                    setSelectedReminders([]);
+                    setSelectedEvents([]);
+                },
+                actions: [
+                    ...(selectedReminders.length > 0 ? [
+                        {
+                            id: 'complete',
+                            label: language === 'es' ? 'Completar' : 'Complete',
+                            icon: (color: string) => <Check size={16} color={color} strokeWidth={2.5} />,
+                            onPress: handleCompleteSelected,
+                            color: isDark ? '#34D399' : '#059669',
+                            bg: isDark ? 'rgba(52, 211, 153, 0.15)' : 'rgba(5, 150, 105, 0.12)',
+                        },
+                        {
+                            id: 'snooze',
+                            label: language === 'es' ? 'Posponer' : 'Snooze',
+                            icon: (color: string) => <Clock size={16} color={color} strokeWidth={2.4} />,
+                            onPress: () => setIsSnoozeModalVisible(true),
+                            color: isDark ? '#FBBF24' : '#F59E0B',
+                            bg: isDark ? 'rgba(251, 191, 36, 0.15)' : 'rgba(245, 158, 11, 0.12)',
+                        },
+                    ] : []),
+                    {
+                        id: 'share',
+                        label: language === 'es' ? 'Compartir' : 'Share',
+                        icon: (color: string) => <Share2 size={16} color={accent.primary} strokeWidth={2.4} />,
+                        onPress: () => {
+                            if (selectedEvents.length > 0) {
+                                setIsShareEventsModalVisible(true);
+                            } else {
+                                handleShareSelected();
+                            }
+                        },
+                        color: accent.primary,
+                        bg: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)',
+                    },
+                    {
+                        id: 'delete',
+                        label: language === 'es' ? 'Eliminar' : 'Delete',
+                        icon: (color: string) => <Trash2 size={16} color={color} strokeWidth={2.4} />,
+                        onPress: () => setIsBulkDeleteConfirmVisible(true),
+                        color: isDark ? '#FB7185' : '#E11D48',
+                        bg: isDark ? 'rgba(251, 113, 133, 0.15)' : 'rgba(225, 29, 72, 0.12)',
+                    },
+                ],
+            });
+        } else if (mainActiveTab === 'reminders') {
+            useSelectionStore.getState().clearSelection();
+        }
+    }, [totalSelectedCount, selectedReminders.length, selectedEvents.length, isAllSelected, language, isDark, accent.primary, mainActiveTab, toggleSelectAll]);
 
     useEffect(() => {
         const backAction = () => {
@@ -1574,51 +1688,55 @@ export default function HomeScreen() {
         deleteReminder(id);
     }, [deleteReminder]);
 
-    const handlePressEvent = useCallback((id: string) => {
-        router.push({ pathname: '/events/create', params: { id } });
-    }, [router]);
+    const handlePressEvent = useCallback((id: string, itemTime?: number) => {
+        if (totalSelectedCount > 0) {
+            toggleEventSelection(id);
+            return;
+        }
+        router.push({
+            pathname: '/events/create',
+            params: {
+                id,
+                occurrenceDate: itemTime ? new Date(itemTime).toISOString() : undefined,
+            },
+        });
+    }, [router, totalSelectedCount]);
+
+    const handleLongPressEvent = useCallback((id: string) => {
+        toggleEventSelection(id);
+    }, []);
 
     const handlePressNote = useCallback((noteId: string) => {
         useStore.getState().setMainActiveTab('notes');
         router.push({ pathname: '/notes', params: { openNoteId: noteId } });
     }, [router]);
 
-    const handleEditEvent = useCallback((id: string) => {
-        router.push({ pathname: '/events/create', params: { id } });
+    const handleEditEvent = useCallback((id: string, itemTime?: number) => {
+        router.push({
+            pathname: '/events/create',
+            params: {
+                id,
+                occurrenceDate: itemTime ? new Date(itemTime).toISOString() : undefined,
+            },
+        });
     }, [router]);
 
     const handleDeleteEventDismiss = useCallback((id: string) => {
         deleteEvent(id);
     }, [deleteEvent]);
 
-    // ─── Header Component Memoizado (Live event banner) ─────────────────────────
-    const listHeaderElement = useMemo(() => {
-        if (!liveEvent || searchQuery.trim().length > 0) return null;
-        return (
-            <TouchableOpacity
-                activeOpacity={0.85}
-                onPress={() => router.push({ pathname: '/events/create', params: { id: liveEvent.id } })}
-                style={[
-                    styles.liveEventBanner,
-                    {
-                        backgroundColor: isDark ? 'rgba(59, 130, 246, 0.16)' : '#EFF6FF',
-                        borderColor: isDark ? 'rgba(59, 130, 246, 0.35)' : 'rgba(59, 130, 246, 0.25)',
-                    },
-                ]}
-            >
-                <View style={styles.liveEventPulseDot} />
-                <Text style={[styles.liveEventLabel, { color: '#3B82F6' }]}>
-                    {language === 'es' ? 'EN CURSO' : 'LIVE'}
-                </Text>
-                <Text style={[styles.liveEventTitle, { color: colors.textPrimary }]} numberOfLines={1}>
-                    {liveEvent.title}
-                </Text>
-                <Text style={[styles.liveEventTime, { color: colors.textSecondary }]}>
-                    {format(new Date(liveEvent.start_time_ms), 'HH:mm')} - {format(new Date(liveEvent.end_time_ms), 'HH:mm')}
-                </Text>
-            </TouchableOpacity>
-        );
-    }, [liveEvent, isDark, colors, language, router, searchQuery]);
+    const handleRequestRecurringDelete = useCallback((event: CalendarEvent, itemTime?: number) => {
+        setRecurringDeleteTarget({ event, itemTime });
+    }, []);
+
+    const handleConfirmRecurringDelete = useCallback(async (mode: 'this' | 'following' | 'all') => {
+        if (!recurringDeleteTarget) return;
+        const { event, itemTime } = recurringDeleteTarget;
+        const occurrenceDate = itemTime ? new Date(itemTime) : new Date(event.start_time_ms);
+        setRecurringDeleteTarget(null);
+        await deleteEventOccurrence(event.id, occurrenceDate, mode);
+    }, [recurringDeleteTarget, deleteEventOccurrence]);
+
 
     // ─── Empty Calm State ───────────────────────────────────────────────────────
     const listEmptyElement = useMemo(() => {
@@ -1788,17 +1906,23 @@ export default function HomeScreen() {
                             if (timelineItem.type === 'event') {
                                 return (
                                     <AgendaEventRow
-                                        key={`event-${timelineItem.event.id}`}
+                                        key={`event-${timelineItem.event.id}-${timelineItem.time_ms}`}
                                         event={timelineItem.event}
+                                        itemTime={timelineItem.time_ms}
                                         isLast={idx === section.data.length - 1}
+                                        isSelected={selectedEvents.includes(timelineItem.event.id)}
+                                        isSelectionMode={isSelectionMode}
                                         now={now}
                                         language={language}
                                         isDark={isDark}
                                         colors={colors}
+                                        accent={accent}
                                         onPress={handlePressEvent}
+                                        onLongPress={handleLongPressEvent}
                                         onPressNote={handlePressNote}
                                         onEdit={handleEditEvent}
                                         onDeleteDismiss={handleDeleteEventDismiss}
+                                        onRequestRecurringDelete={handleRequestRecurringDelete}
                                     />
                                 );
                             } else {
@@ -2088,169 +2212,17 @@ export default function HomeScreen() {
                 <ScrollView
                     showsVerticalScrollIndicator={false}
                     contentContainerStyle={{
-                        paddingBottom: insets.bottom + (isSelectionMode ? 220 : 110),
+                        paddingBottom: insets.bottom + (isSelectionMode ? 130 : 90),
                         paddingTop: 8,
                         paddingHorizontal: 20,
                     }}
                 >
-                    {listHeaderElement}
                     {listData.sections.length === 0
                         ? listEmptyElement
                         : listData.sections.map((section) => renderSectionBlock({ item: section }))}
                 </ScrollView>
             </Animated.View>
-
-            {/* Quick Action: Posponer Vencidos (solo en vista normal y sin selección) */}
-            {!isSelectionMode && !selectedCalendarDate && listData.overdueCount > 0 && (
-                <View
-                    style={[
-                        styles.snoozeAllContainer,
-                        { bottom: insets.bottom + 88 },
-                    ]}
-                >
-                    <VeyraButton
-                        variant="secondary"
-                        size="sm"
-                        radius="pill"
-                        label={t('home.snooze_overdue')}
-                        iconLeft={<Zap size={14} color={accent.primary} />}
-                        onPress={async () => {
-                            const overdue = reminders.filter(r => isPast(r.due_date_ms) && r.status === 'pending');
-                            for (const r of overdue) await snoozeReminder(r.id, 10, true);
-                        }}
-                    />
-                </View>
-            )}
-
-            {/* Píldora Flotante Contextual para Recordatorios — One UI Ergonomics */}
-            <Animated.View
-                pointerEvents={isSelectionMode ? 'auto' : 'none'}
-                style={[
-                    styles.floatingSelectionPill,
-                    {
-                        backgroundColor: colors.navBar || (isDark ? '#1B1B1B' : '#FFFFFF'),
-                        borderColor: colors.borderSubtle,
-                        bottom: Math.max(insets.bottom, 10) + 72,
-                        opacity: pillOpacity,
-                        transform: [
-                            { translateY: pillTranslateY },
-                            { scale: pillScale },
-                        ],
-                    },
-                ]}
-            >
-                {/* Cabecera de la píldora: Contador y Seleccionar todos */}
-                <View style={styles.pillHeaderRow}>
-                    <View style={styles.pillCounterContainer}>
-                        <TouchableOpacity
-                            onPress={() => setSelectedReminders([])}
-                            style={[
-                                styles.pillCloseBtn,
-                                { backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)' },
-                            ]}
-                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                            activeOpacity={0.7}
-                        >
-                            <X size={13} color={colors.textSecondary} />
-                        </TouchableOpacity>
-                        <Text style={[styles.pillTitle, { color: colors.textPrimary }]}>
-                            {selectedReminders.length} {language === 'es' ? (selectedReminders.length === 1 ? 'seleccionado' : 'seleccionados') : 'selected'}
-                        </Text>
-                    </View>
-
-                    <TouchableOpacity
-                        onPress={toggleSelectAll}
-                        style={[
-                            styles.pillSelectAllBtn,
-                            {
-                                backgroundColor: isAllSelected ? accent.primary + '18' : (isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)'),
-                                borderColor: isAllSelected ? accent.primary : colors.borderSubtle,
-                            },
-                        ]}
-                        activeOpacity={0.7}
-                    >
-                        {isAllSelected ? (
-                            <CheckSquare size={13} color={accent.primary} />
-                        ) : (
-                            <Square size={13} color={colors.textSecondary} />
-                        )}
-                        <Text style={[styles.pillSelectAllText, { color: isAllSelected ? accent.primary : colors.textSecondary }]}>
-                            {isAllSelected ? (language === 'es' ? 'Deseleccionar' : 'Deselect') : (language === 'es' ? 'Todos' : 'All')}
-                        </Text>
-                    </TouchableOpacity>
-                </View>
-
-                {/* Divisor sutil */}
-                <View style={[styles.pillDivider, { backgroundColor: colors.borderSubtle }]} />
-
-                {/* Acciones principales */}
-                <View style={styles.pillActionsRow}>
-                    {/* 1. Completar */}
-                    <TouchableOpacity
-                        style={styles.pillActionBtn}
-                        onPress={handleCompleteSelected}
-                        activeOpacity={0.7}
-                    >
-                        <Animated.View
-                            style={[
-                                styles.pillActionIconCircle,
-                                {
-                                    backgroundColor: isDark ? 'rgba(52, 211, 153, 0.15)' : 'rgba(5, 150, 105, 0.12)',
-                                    transform: [{ scale: completeButtonAnim }],
-                                },
-                            ]}
-                        >
-                            <Check size={16} color={isDark ? '#34D399' : '#059669'} />
-                        </Animated.View>
-                        <Text style={[styles.pillActionLabel, { color: colors.textSecondary }]}>
-                            {language === 'es' ? 'Completar' : 'Complete'}
-                        </Text>
-                    </TouchableOpacity>
-
-                    {/* 2. Posponer */}
-                    <TouchableOpacity
-                        style={styles.pillActionBtn}
-                        onPress={() => setIsSnoozeModalVisible(true)}
-                        activeOpacity={0.7}
-                    >
-                        <View style={[styles.pillActionIconCircle, { backgroundColor: isDark ? 'rgba(251, 191, 36, 0.15)' : 'rgba(245, 158, 11, 0.12)' }]}>
-                            <Clock size={16} color={isDark ? '#FBBF24' : '#F59E0B'} />
-                        </View>
-                        <Text style={[styles.pillActionLabel, { color: colors.textSecondary }]}>
-                            {language === 'es' ? 'Posponer' : 'Snooze'}
-                        </Text>
-                    </TouchableOpacity>
-
-                    {/* 3. Compartir */}
-                    <TouchableOpacity
-                        style={styles.pillActionBtn}
-                        onPress={handleShareSelected}
-                        activeOpacity={0.7}
-                    >
-                        <View style={[styles.pillActionIconCircle, { backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)' }]}>
-                            <Share2 size={16} color={accent.primary} />
-                        </View>
-                        <Text style={[styles.pillActionLabel, { color: colors.textSecondary }]}>
-                            {language === 'es' ? 'Compartir' : 'Share'}
-                        </Text>
-                    </TouchableOpacity>
-
-                    {/* 4. Eliminar */}
-                    <TouchableOpacity
-                        style={styles.pillActionBtn}
-                        onPress={() => setIsBulkDeleteConfirmVisible(true)}
-                        activeOpacity={0.7}
-                    >
-                        <View style={[styles.pillActionIconCircle, { backgroundColor: isDark ? 'rgba(251, 113, 133, 0.15)' : 'rgba(225, 29, 72, 0.12)' }]}>
-                            <Trash2 size={16} color={isDark ? '#FB7185' : '#E11D48'} />
-                        </View>
-                        <Text style={[styles.pillActionLabel, { color: colors.textSecondary }]}>
-                            {language === 'es' ? 'Eliminar' : 'Delete'}
-                        </Text>
-                    </TouchableOpacity>
-                </View>
-                </Animated.View>
-            </Reanimated.View>
+        </Reanimated.View>
 
             {/* 2. VISTA DE NOTAS */}
                 <Reanimated.View
@@ -2352,14 +2324,44 @@ export default function HomeScreen() {
                                 label={t('home.delete')}
                                 onPress={async () => {
                                     setIsBulkDeleteConfirmVisible(false);
-                                    await deleteReminders(selectedReminders);
+                                    if (selectedReminders.length > 0) {
+                                        await deleteReminders(selectedReminders);
+                                    }
+                                    if (selectedEvents.length > 0) {
+                                        for (const evId of selectedEvents) {
+                                            await deleteEvent(evId);
+                                        }
+                                    }
                                     setSelectedReminders([]);
+                                    setSelectedEvents([]);
+                                    useSelectionStore.getState().clearSelection();
                                 }}
                             />
                         </View>
                     </VeyraSurface>
                 </View>
             )}
+
+            {/* Modal para Compartir Eventos Múltiples */}
+            <ShareEventsModal
+                visible={isShareEventsModalVisible}
+                onClose={() => {
+                    setIsShareEventsModalVisible(false);
+                    setSelectedEvents([]);
+                    setSelectedReminders([]);
+                    useSelectionStore.getState().clearSelection();
+                }}
+                events={events.filter(e => selectedEvents.includes(e.id))}
+            />
+
+            {/* Recurring Event Delete Confirm Modal */}
+            <RecurringDeleteModal
+                visible={Boolean(recurringDeleteTarget)}
+                eventTitle={recurringDeleteTarget?.event.title}
+                occurrenceDate={recurringDeleteTarget?.itemTime ? new Date(recurringDeleteTarget.itemTime) : undefined}
+                onClose={() => setRecurringDeleteTarget(null)}
+                onConfirm={handleConfirmRecurringDelete}
+            />
 
             <ImageViewing
                 images={galleryImages}
@@ -2933,11 +2935,7 @@ const styles = StyleSheet.create({
         flex: 1,
         lineHeight: 18,
     },
-    snoozeAllContainer: {
-        position: 'absolute',
-        alignSelf: 'center',
-        zIndex: 100,
-    },
+
     modalOverlay: {
         zIndex: 1000,
         justifyContent: 'center',

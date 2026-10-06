@@ -2,6 +2,12 @@ import { getDB } from '../db';
 import { Note } from '../types/db';
 import * as Crypto from 'expo-crypto';
 
+function triggerNotesWidgetSync() {
+    import('./widgetService').then(({ WidgetService }) => {
+        WidgetService.syncNotes().catch(() => {});
+    }).catch(() => {});
+}
+
 export const NoteService = {
     async createNote(
         title?: string,
@@ -46,6 +52,7 @@ export const NoteService = {
             );
         }
 
+        triggerNotesWidgetSync();
         return newNote;
     },
 
@@ -58,6 +65,7 @@ export const NoteService = {
             `UPDATE notes SET folder_id = ?, updated_at_ms = ?, last_modified_ms = ? WHERE id IN (${placeholders})`,
             [folderId || null, now, now, ...ids]
         );
+        triggerNotesWidgetSync();
     },
 
     async getNotes(includeDeleted: boolean = false): Promise<Note[]> {
@@ -118,6 +126,7 @@ export const NoteService = {
             `UPDATE notes SET ${sets.join(', ')} WHERE id = ?`,
             params
         );
+        triggerNotesWidgetSync();
     },
 
     async updateNotes(
@@ -152,6 +161,7 @@ export const NoteService = {
             `UPDATE notes SET ${sets.join(', ')} WHERE id IN (${placeholders})`,
             params
         );
+        triggerNotesWidgetSync();
     },
 
     async deleteNote(id: string): Promise<void> {
@@ -161,6 +171,7 @@ export const NoteService = {
             `UPDATE notes SET deleted = 1, updated_at_ms = ?, last_modified_ms = ? WHERE id = ?`,
             [now, now, id]
         );
+        triggerNotesWidgetSync();
     },
 
     async deleteNotes(ids: string[]): Promise<void> {
@@ -172,6 +183,7 @@ export const NoteService = {
             `UPDATE notes SET deleted = 1, updated_at_ms = ?, last_modified_ms = ? WHERE id IN (${placeholders})`,
             [now, now, ...ids]
         );
+        triggerNotesWidgetSync();
     },
 
     async restoreNote(id: string): Promise<void> {
@@ -181,6 +193,7 @@ export const NoteService = {
             `UPDATE notes SET deleted = 0, updated_at_ms = ?, last_modified_ms = ? WHERE id = ?`,
             [now, now, id]
         );
+        triggerNotesWidgetSync();
     },
 
     async restoreNotes(ids: string[]): Promise<void> {
@@ -192,11 +205,13 @@ export const NoteService = {
             `UPDATE notes SET deleted = 0, updated_at_ms = ?, last_modified_ms = ? WHERE id IN (${placeholders})`,
             [now, now, ...ids]
         );
+        triggerNotesWidgetSync();
     },
 
     async deleteNoteForever(id: string): Promise<void> {
         const db = await getDB();
         await db.runAsync(`DELETE FROM notes WHERE id = ?`, [id]);
+        triggerNotesWidgetSync();
     },
 
     async deleteNotesForever(ids: string[]): Promise<void> {
@@ -204,10 +219,12 @@ export const NoteService = {
         const db = await getDB();
         const placeholders = ids.map(() => '?').join(', ');
         await db.runAsync(`DELETE FROM notes WHERE id IN (${placeholders})`, ids);
+        triggerNotesWidgetSync();
     },
 
     async emptyNotesTrash(): Promise<void> {
         const db = await getDB();
         await db.runAsync(`DELETE FROM notes WHERE deleted = 1`);
+        triggerNotesWidgetSync();
     }
 };

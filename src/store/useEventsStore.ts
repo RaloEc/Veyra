@@ -3,6 +3,7 @@ import { CalendarEvent } from '../types/db';
 import { EventService, CreateEventInput } from '../services/eventService';
 import { NotificationService } from '../services/notificationService';
 import { useStore } from './useStore';
+import { WidgetService } from '../services/widgetService';
 
 interface EventsState {
     events: CalendarEvent[];
@@ -17,6 +18,7 @@ interface EventsState {
     createEvent: (input: CreateEventInput) => Promise<CalendarEvent | null>;
     updateEvent: (id: string, updates: Partial<CalendarEvent>) => Promise<void>;
     deleteEvent: (id: string) => Promise<void>;
+    deleteEventOccurrence: (id: string, occurrenceDate: Date, mode: 'this' | 'following' | 'all') => Promise<void>;
     linkNoteToEvent: (eventId: string, noteId: string) => Promise<void>;
     unlinkNoteFromEvent: (eventId: string) => Promise<void>;
 }
@@ -39,6 +41,8 @@ export const useEventsStore = create<EventsState>((set, get) => ({
         try {
             const events = await EventService.getAllEvents(false);
             set({ events, isEventsDirty: false });
+            WidgetService.syncAgenda(undefined, events).catch(() => {});
+            WidgetService.syncSchedule().catch(() => {});
         } catch (error) {
             console.error('[useEventsStore] Failed to load all events:', error);
         } finally {
@@ -76,6 +80,10 @@ export const useEventsStore = create<EventsState>((set, get) => ({
             await get().loadAllEvents();
             await get().loadEventsForDate(get().selectedDate);
 
+            if (useStore.getState().session?.user?.id && useStore.getState().cloudSyncEnabled) {
+                useStore.getState().triggerSync();
+            }
+
             return newEvent;
         } catch (error) {
             console.error('[useEventsStore] Failed to create event:', error);
@@ -104,6 +112,10 @@ export const useEventsStore = create<EventsState>((set, get) => ({
 
             await get().loadAllEvents();
             await get().loadEventsForDate(get().selectedDate);
+
+            if (useStore.getState().session?.user?.id && useStore.getState().cloudSyncEnabled) {
+                useStore.getState().triggerSync();
+            }
         } catch (error) {
             console.error('[useEventsStore] Failed to update event:', error);
         }
@@ -118,8 +130,26 @@ export const useEventsStore = create<EventsState>((set, get) => ({
             await EventService.deleteEvent(id);
             await get().loadAllEvents();
             await get().loadEventsForDate(get().selectedDate);
+
+            if (useStore.getState().session?.user?.id && useStore.getState().cloudSyncEnabled) {
+                useStore.getState().triggerSync();
+            }
         } catch (error) {
             console.error('[useEventsStore] Failed to delete event:', error);
+        }
+    },
+
+    deleteEventOccurrence: async (id: string, occurrenceDate: Date, mode: 'this' | 'following' | 'all') => {
+        try {
+            await EventService.deleteEventOccurrence(id, occurrenceDate, mode);
+            await get().loadAllEvents();
+            await get().loadEventsForDate(get().selectedDate);
+
+            if (useStore.getState().session?.user?.id && useStore.getState().cloudSyncEnabled) {
+                useStore.getState().triggerSync();
+            }
+        } catch (error) {
+            console.error('[useEventsStore] Failed to delete event occurrence:', error);
         }
     },
 
@@ -128,6 +158,9 @@ export const useEventsStore = create<EventsState>((set, get) => ({
             await EventService.linkNoteToEvent(eventId, noteId);
             await get().loadAllEvents();
             await get().loadEventsForDate(get().selectedDate);
+            if (useStore.getState().session?.user?.id && useStore.getState().cloudSyncEnabled) {
+                useStore.getState().triggerSync();
+            }
         } catch (error) {
             console.error('[useEventsStore] Failed to link note to event:', error);
         }
@@ -138,6 +171,9 @@ export const useEventsStore = create<EventsState>((set, get) => ({
             await EventService.unlinkNoteFromEvent(eventId);
             await get().loadAllEvents();
             await get().loadEventsForDate(get().selectedDate);
+            if (useStore.getState().session?.user?.id && useStore.getState().cloudSyncEnabled) {
+                useStore.getState().triggerSync();
+            }
         } catch (error) {
             console.error('[useEventsStore] Failed to unlink note from event:', error);
         }

@@ -1,21 +1,29 @@
 import { getDB } from '../db';
 import { CalendarEvent } from '../types/db';
 import * as Crypto from 'expo-crypto';
-import { startOfDay, getDay, isSameDay } from 'date-fns';
+import { startOfDay, getDay, isSameDay, format } from 'date-fns';
 
 export interface CreateEventInput {
     title: string;
     description?: string;
     startTimeMs: number;
     endTimeMs: number;
-    repeatRule?: string; // JSON: { type: 'none' | 'weekly', days?: number[] }
+    repeatRule?: string; // JSON: { type: 'none' | 'weekly', days?: number[], exceptions?: string[], until_ms?: number }
     location?: string;
     color?: string;
     notificationOffsetMin?: number;
     notificationOffsets?: string; // JSON array of numbers, e.g. "[5, 15, 1440]"
     notificationIds?: string;
     noteId?: string | null;
+    tags?: string; // JSON array of string tags, e.g. '["clase"]'
     userId?: string;
+}
+
+function triggerWidgetSync() {
+    import('./widgetService').then(({ WidgetService }) => {
+        WidgetService.syncAgenda().catch(() => {});
+        WidgetService.syncSchedule().catch(() => {});
+    }).catch(() => {});
 }
 
 /**
@@ -38,6 +46,20 @@ export function isEventOccurringOnDate(event: CalendarEvent, targetDate: Date): 
 
     try {
         const rule = JSON.parse(event.repeat_rule);
+
+        // Si la serie tiene una fecha límite (until_ms) y el inicio de este día es posterior
+        if (rule.until_ms !== undefined && rule.until_ms !== null && targetDayStart > rule.until_ms) {
+            return false;
+        }
+
+        // Si este día específico está en la lista de excepciones (fechas excluidas)
+        if (Array.isArray(rule.exceptions)) {
+            const dateStr = format(targetDate, 'yyyy-MM-dd');
+            if (rule.exceptions.includes(dateStr)) {
+                return false;
+            }
+        }
+
         if (rule.type === 'weekly' && Array.isArray(rule.days)) {
             const targetDayOfWeek = getDay(targetDate); // 0 = Dom, 1 = Lun, ..., 6 = Sáb
             return rule.days.includes(targetDayOfWeek);
@@ -82,6 +104,7 @@ export const EventService = {
             notification_offsets: initialOffsets,
             notification_ids: input.notificationIds || undefined,
             note_id: input.noteId || null,
+            tags: input.tags || undefined,
             created_at_ms: now,
             updated_at_ms: now,
             last_modified_ms: now,
@@ -89,8 +112,8 @@ export const EventService = {
         };
 
         await db.runAsync(
-            `INSERT INTO events (id, user_id, title, description, start_time_ms, end_time_ms, repeat_rule, location, color, notification_offset_min, notification_offsets, notification_ids, note_id, created_at_ms, updated_at_ms, last_modified_ms, deleted)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+            `INSERT INTO events (id, user_id, title, description, start_time_ms, end_time_ms, repeat_rule, location, color, notification_offset_min, notification_offsets, notification_ids, note_id, tags, created_at_ms, updated_at_ms, last_modified_ms, deleted)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
             [
                 id,
                 input.userId || null,
@@ -105,6 +128,7 @@ export const EventService = {
                 newEvent.notification_offsets || null,
                 newEvent.notification_ids || null,
                 newEvent.note_id || null,
+                newEvent.tags || null,
                 now,
                 now,
                 now,
@@ -119,6 +143,7 @@ export const EventService = {
             );
         }
 
+        triggerWidgetSync();
         return newEvent;
     },
 
@@ -164,6 +189,7 @@ export const EventService = {
                 );
             }
         }
+        triggerWidgetSync();
     },
 
     async deleteEvent(id: string): Promise<void> {
@@ -178,12 +204,49 @@ export const EventService = {
             `UPDATE notes SET event_id = NULL, updated_at_ms = ?, last_modified_ms = ? WHERE event_id = ?`,
             [now, now, id]
         );
+        triggerWidgetSync();
+    },
+
+    async deleteEventOccurrence(id: string, occurrenceDate: Date, mode: 'this' | 'following' | 'all'): Promise<void> {
+        const event = await this.getEventById(id);
+        if (!event) return;
+
+        if (mode === 'all' || !event.repeat_rule || event.repeat_rule === 'null') {
+            await this.deleteEvent(id);
+            return;
+        }
+
+        try {
+            const rule = JSON.parse(event.repeat_rule);
+            const dateStr = format(occurrenceDate, 'yyyy-MM-dd');
+            const targetDayStart = startOfDay(occurrenceDate).getTime();
+            const eventDayStart = startOfDay(new Date(event.start_time_ms)).getTime();
+
+            if (mode === 'this') {
+                const exceptions: string[] = Array.isArray(rule.exceptions) ? [...rule.exceptions] : [];
+                if (!exceptions.includes(dateStr)) {
+                    exceptions.push(dateStr);
+                }
+                rule.exceptions = exceptions;
+                await this.updateEvent(id, { repeat_rule: JSON.stringify(rule) });
+            } else if (mode === 'following') {
+                if (targetDayStart <= eventDayStart) {
+                    await this.deleteEvent(id);
+                } else {
+                    rule.until_ms = targetDayStart - 1;
+                    await this.updateEvent(id, { repeat_rule: JSON.stringify(rule) });
+                }
+            }
+        } catch (error) {
+            console.error('[EventService] Failed to delete event occurrence:', error);
+        }
     },
 
     async deleteEventForever(id: string): Promise<void> {
         const db = await getDB();
         await db.runAsync(`DELETE FROM events WHERE id = ?`, [id]);
         await db.runAsync(`UPDATE notes SET event_id = NULL WHERE event_id = ?`, [id]);
+        triggerWidgetSync();
     },
 
     async getAllEvents(includeDeleted: boolean = false): Promise<CalendarEvent[]> {

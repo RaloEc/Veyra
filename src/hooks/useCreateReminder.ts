@@ -12,6 +12,39 @@ import { useRouter } from 'expo-router';
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 import { useTranslation } from 'react-i18next';
 
+/**
+ * Parsea de forma segura una fecha inicial recibida en milisegundos o formato ISO string.
+ * Evita el bug donde parseInt("2026-09-26...", 10) retornaba 2026 (convirtiéndose en dic 1969 en época Unix).
+ */
+export const parseInitialDate = (raw?: string | number | null): Date => {
+    if (raw === undefined || raw === null || raw === '') {
+        return new Date();
+    }
+    if (typeof raw === 'number') {
+        const d = new Date(raw);
+        return !isNaN(d.getTime()) && d.getFullYear() >= 2000 ? d : new Date();
+    }
+    const trimmed = String(raw).trim();
+    if (!trimmed) {
+        return new Date();
+    }
+    // Si viene compuesto únicamente por dígitos (timestamp numérico en ms)
+    if (/^\d+$/.test(trimmed)) {
+        const ms = parseInt(trimmed, 10);
+        // Validar que sea un timestamp realista en milisegundos (posterior al año 2000)
+        if (ms > 946684800000) {
+            const d = new Date(ms);
+            if (!isNaN(d.getTime())) return d;
+        }
+    }
+    // Si viene como string ISO (ej: "2026-09-26T18:54:00.000Z") o estándar de fecha
+    const d = new Date(trimmed);
+    if (!isNaN(d.getTime()) && d.getFullYear() >= 2000) {
+        return d;
+    }
+    return new Date();
+};
+
 export const useCreateReminder = (id?: string, initialDateMs?: number | string) => {
     const { t } = useTranslation();
     const router = useRouter();
@@ -59,21 +92,28 @@ export const useCreateReminder = (id?: string, initialDateMs?: number | string) 
         }
     });
     const [status, setStatus] = useState<string>(() => cachedReminder?.status || 'pending');
+
     const [date, setDate] = useState(() => {
         if (cachedReminder) return new Date(cachedReminder.due_date_ms);
-        if (initialDateMs) {
-            const parsedMs = typeof initialDateMs === 'string' ? parseInt(initialDateMs, 10) : initialDateMs;
-            if (!isNaN(parsedMs)) {
-                const targetDate = new Date(parsedMs);
-                const now = new Date();
-                // Si la fecha inicial es de un día futuro pero las horas están a medianoche, mantener hora actual o próxima
-                if (targetDate.getHours() === 0 && targetDate.getMinutes() === 0) {
-                    targetDate.setHours(now.getHours(), now.getMinutes());
-                }
-                return targetDate;
-            }
+
+        const now = new Date();
+        let targetDate = initialDateMs ? parseInitialDate(initialDateMs) : new Date(now);
+
+        // Si la fecha inicial viene a medianoche (00:00:00), asignarle una hora razonable
+        if (targetDate.getHours() === 0 && targetDate.getMinutes() === 0) {
+            targetDate.setHours(now.getHours() + 1, 0, 0, 0);
+        } else if (
+            targetDate.getFullYear() === now.getFullYear() &&
+            targetDate.getMonth() === now.getMonth() &&
+            targetDate.getDate() === now.getDate() &&
+            targetDate.getTime() <= now.getTime()
+        ) {
+            // Si la fecha es "Hoy" pero la hora ya pasó o es exactamente ahora,
+            // programarlo a 1 hora hacia adelante para que no esté vencido de inmediato
+            targetDate = new Date(now.getTime() + 60 * 60 * 1000);
         }
-        return new Date();
+
+        return targetDate;
     });
     const [controlLevel, setControlLevel] = useState<ControlLevel>(() => cachedReminder?.control_level || defaultControlLevel);
     const [showPicker, setShowPicker] = useState(false);

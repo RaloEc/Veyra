@@ -43,6 +43,7 @@ import * as NavigationBar from 'expo-navigation-bar';
 
 import { useCreateNote } from '../../src/hooks/useCreateNote';
 import { useStore } from '../../src/store/useStore';
+import { useNotesStore } from '../../src/store/useNotesStore';
 import { useFoldersStore } from '../../src/store/useFoldersStore';
 import { useEventsStore } from '../../src/store/useEventsStore';
 import { useCardTransitionStore } from '../../src/store/cardTransitionStore';
@@ -69,6 +70,9 @@ import { FolderIconRenderer } from '../../src/components/notes/FolderIconRendere
 import { MoveToFolderModal } from '../../src/components/notes/MoveToFolderModal';
 import { FolderModal } from '../../src/components/notes/FolderModal';
 import { NoteOptionsMenu } from '../../src/components/notes/NoteOptionsMenu';
+import { ShareModal } from '../../src/components/collaboration/ShareModal';
+import { ActivityHistoryModal } from '../../src/components/collaboration/ActivityHistoryModal';
+import { CollaboratorsAvatars } from '../../src/components/collaboration/CollaboratorsAvatars';
 import { exportNoteToPdf } from '../../src/utils/pdfExportUtils';
 
 export default function NoteDetailAndEditScreen() {
@@ -87,6 +91,11 @@ export default function NoteDetailAndEditScreen() {
     const [isPagesModalVisible, setIsPagesModalVisible] = useState(false);
     const [isOptionsMenuVisible, setIsOptionsMenuVisible] = useState(false);
     const [isExportingPdf, setIsExportingPdf] = useState(false);
+    const [isShareModalVisible, setIsShareModalVisible] = useState(false);
+    const [isHistoryModalVisible, setIsHistoryModalVisible] = useState(false);
+
+    const currentNote = useNotesStore(state => state.notes.find(n => n.id === id));
+    const isOwner = currentNote ? currentNote.is_shared !== 1 : true;
 
     const folders = useFoldersStore(state => state.folders);
     const createFolder = useFoldersStore(state => state.createFolder);
@@ -94,6 +103,7 @@ export default function NoteDetailAndEditScreen() {
 
     const [isMoveModalVisible, setIsMoveModalVisible] = useState(false);
     const [isCreateFolderModalVisible, setIsCreateFolderModalVisible] = useState(false);
+    const [createFolderParentId, setCreateFolderParentId] = useState<string | null>(null);
 
     const { lift, isKeyboardVisible } = useAdaptiveKeyboard(insets.bottom);
 
@@ -113,6 +123,20 @@ export default function NoteDetailAndEditScreen() {
     const bodyAnim = useRef(new Animated.Value(1)).current;
 
     const isExiting = useRef(false);
+
+    // Transición de opacidad fluida idéntica al crossfade entre Recordatorios y Notas
+    const fadeProgress = useSharedValue(0);
+
+    useEffect(() => {
+        fadeProgress.value = withTiming(1, {
+            duration: 220,
+            easing: ReanimatedEasing.bezier(0.25, 0.1, 0.25, 1),
+        });
+    }, []);
+
+    const screenAnimatedStyle = useAnimatedStyle(() => ({
+        opacity: fadeProgress.value,
+    }));
 
 
     useEffect(() => {
@@ -276,7 +300,14 @@ export default function NoteDetailAndEditScreen() {
         } else {
             if (isExiting.current) return;
             isExiting.current = true;
-            router.back();
+            fadeProgress.value = withTiming(0, {
+                duration: 220,
+                easing: ReanimatedEasing.bezier(0.25, 0.1, 0.25, 1),
+            }, (finished) => {
+                if (finished) {
+                    runOnJS(router.back)();
+                }
+            });
         }
     };
 
@@ -308,6 +339,36 @@ export default function NoteDetailAndEditScreen() {
 
     const otherAttachments = attachments.filter(item => !imageAttachments.includes(item));
     const pageLayoutsRef = useRef<{ [index: number]: number }>({});
+    const lastCursorY = useRef<number>(0);
+
+    const handleCursorPosition = useCallback((pageIndex: number, offsetY: number) => {
+        const pageY = pageLayoutsRef.current[pageIndex] || 0;
+        const cursorY = pageY + offsetY;
+        lastCursorY.current = cursorY;
+
+        if (scrollLayout === 'vertical' && verticalScrollRef.current) {
+            const currentY = currentScrollY.current;
+            const visibleHeight = windowHeight - (60 + toolbarHeight + (isKeyboardVisible ? lift : 0));
+            // Si el cursor se encuentra por debajo de la zona visible o por encima de ella, scrollear suavemente
+            if (cursorY > currentY + visibleHeight - 40 || cursorY < currentY + 30) {
+                const targetY = Math.max(0, cursorY - 100);
+                verticalScrollRef.current.scrollTo({ y: targetY, animated: true });
+            }
+        }
+    }, [scrollLayout, windowHeight, toolbarHeight, isKeyboardVisible, lift]);
+
+    // Cuando el teclado se despliega por primera vez, asegurar que la posición actual del cursor esté a la vista
+    useEffect(() => {
+        if (isKeyboardVisible && lastCursorY.current > 0) {
+            const timer = setTimeout(() => {
+                if (scrollLayout === 'vertical' && verticalScrollRef.current) {
+                    const targetY = Math.max(0, lastCursorY.current - 100);
+                    verticalScrollRef.current.scrollTo({ y: targetY, animated: true });
+                }
+            }, 160);
+            return () => clearTimeout(timer);
+        }
+    }, [isKeyboardVisible, scrollLayout]);
 
     const handleSelectPage = (index: number) => {
         setCurrentPageIndex(index);
@@ -330,8 +391,8 @@ export default function NoteDetailAndEditScreen() {
                 style={{ flex: 1 }}
                 showsVerticalScrollIndicator={false}
                 contentContainerStyle={[styles.scrollContent, { paddingBottom: isEditMode ? insets.bottom + 110 : insets.bottom + 80 }]}
-                keyboardShouldPersistTaps="handled"
-                keyboardDismissMode="on-drag"
+                keyboardShouldPersistTaps="always"
+                keyboardDismissMode="none"
                 automaticallyAdjustKeyboardInsets={false}
                 nestedScrollEnabled={true}
                 scrollEnabled={!isDraggingImage}
@@ -369,7 +430,7 @@ export default function NoteDetailAndEditScreen() {
                             setTitle={setTitle}
                             isEditing={true}
                             flat={true}
-                            placeholder={t('create.placeholder_title')}
+                            placeholder={t('notes.placeholder_title', { defaultValue: 'Título' })}
                             inputStyle={[styles.viewTitle, { color: colors.textPrimary, fontSize: typography.h1.fontSize }]}
                             onSubmit={() => activeEditorRef.current?.focusContentEditor()}
                         />
@@ -467,6 +528,7 @@ export default function NoteDetailAndEditScreen() {
                                             }}
                                             onDragStateChange={setIsDraggingImage}
                                             onAutoScroll={handleAutoScroll}
+                                            onCursorPosition={(offsetY) => handleCursorPosition(index, offsetY)}
                                         />
                                     )}
                                 </View>
@@ -563,7 +625,7 @@ export default function NoteDetailAndEditScreen() {
                             setTitle={setTitle}
                             isEditing={true}
                             flat={true}
-                            placeholder={t('create.placeholder_title')}
+                            placeholder={t('notes.placeholder_title', { defaultValue: 'Título' })}
                             inputStyle={[styles.viewTitle, { color: colors.textPrimary, fontSize: typography.h2.fontSize }]}
                             onSubmit={() => activeEditorRef.current?.focusContentEditor()}
                         />
@@ -602,8 +664,8 @@ export default function NoteDetailAndEditScreen() {
                                     style={{ flex: 1 }}
                                     showsVerticalScrollIndicator={false}
                                     nestedScrollEnabled={true}
-                                    keyboardShouldPersistTaps="handled"
-                                    keyboardDismissMode="on-drag"
+                                    keyboardShouldPersistTaps="always"
+                                    keyboardDismissMode="none"
                                     automaticallyAdjustKeyboardInsets={false}
                                     scrollEnabled={!isDraggingImage}
                                     contentContainerStyle={{
@@ -682,6 +744,7 @@ export default function NoteDetailAndEditScreen() {
                                                 }}
                                                 onDragStateChange={setIsDraggingImage}
                                                 onAutoScroll={handleAutoScroll}
+                                                onCursorPosition={(offsetY) => handleCursorPosition(index, offsetY)}
                                             />
                                         )}
                                     </View>
@@ -730,8 +793,9 @@ export default function NoteDetailAndEditScreen() {
     };
 
     return (
-        <SafeAreaView style={[styles.screen, { backgroundColor: colors.bg }]} edges={['top', 'right', 'left']}>
-            <View style={styles.container}>
+        <Reanimated.View style={[{ flex: 1, backgroundColor: colors.bg }, screenAnimatedStyle]}>
+            <SafeAreaView style={[styles.screen, { backgroundColor: colors.bg }]} edges={['top', 'right', 'left']}>
+                <View style={styles.container}>
                 {/* Header Superior */}
                 <Animated.View
                     style={[
@@ -750,6 +814,15 @@ export default function NoteDetailAndEditScreen() {
                     />
 
                     <View style={styles.headerActions}>
+                        {/* Colaboradores de la nota */}
+                        {!isCreating && id && (
+                            <CollaboratorsAvatars
+                                targetType="note"
+                                targetId={id}
+                                onPress={() => setIsShareModalVisible(true)}
+                            />
+                        )}
+
                         {/* Selector de Carpeta */}
                         <TouchableOpacity
                             style={[
@@ -995,7 +1068,8 @@ export default function NoteDetailAndEditScreen() {
                         onSelectFolder={async (newFolderId) => {
                             setFolderId(newFolderId);
                         }}
-                        onCreateNewFolder={() => {
+                        onCreateNewFolder={(parentId) => {
+                            setCreateFolderParentId(parentId || null);
                             setIsCreateFolderModalVisible(true);
                         }}
                     />
@@ -1003,9 +1077,13 @@ export default function NoteDetailAndEditScreen() {
                     {/* Modal para crear nueva carpeta directamente desde la nota */}
                     <FolderModal
                         visible={isCreateFolderModalVisible}
-                        onClose={() => setIsCreateFolderModalVisible(false)}
-                        onSave={async (name, icon, color) => {
-                            const newF = await createFolder(name, icon, color);
+                        onClose={() => {
+                            setIsCreateFolderModalVisible(false);
+                            setCreateFolderParentId(null);
+                        }}
+                        parentFolder={createFolderParentId ? folders.find(f => f.id === createFolderParentId) : null}
+                        onSave={async (name, icon, color, isPinned, parentId) => {
+                            const newF = await createFolder(name, icon, color, isPinned, parentId);
                             if (newF) {
                                 setFolderId(newF.id);
                             }
@@ -1044,6 +1122,14 @@ export default function NoteDetailAndEditScreen() {
                     onMoveFolder={() => setIsMoveModalVisible(true)}
                     folderName={currentFolder?.name}
                     onDelete={isEditing ? handleDelete : undefined}
+                    onShare={!isCreating && id ? () => {
+                        setIsOptionsMenuVisible(false);
+                        setIsShareModalVisible(true);
+                    } : undefined}
+                    onViewHistory={!isCreating && id ? () => {
+                        setIsOptionsMenuVisible(false);
+                        setIsHistoryModalVisible(true);
+                    } : undefined}
                     isEditMode={isEditMode}
                     onToggleEditMode={() => {
                         if (isEditMode) {
@@ -1053,6 +1139,29 @@ export default function NoteDetailAndEditScreen() {
                         }
                     }}
                 />
+
+                {/* Modal de Colaboración y Recursos Compartidos */}
+                {!isCreating && id && (
+                    <ShareModal
+                        visible={isShareModalVisible}
+                        onClose={() => setIsShareModalVisible(false)}
+                        targetType="note"
+                        targetId={id}
+                        targetTitle={title || t('notes.untitled', { defaultValue: 'Nota sin título' })}
+                        isOwner={isOwner}
+                    />
+                )}
+
+                {/* Modal de Historial de Cambios / Actividad */}
+                {!isCreating && id && (
+                    <ActivityHistoryModal
+                        visible={isHistoryModalVisible}
+                        onClose={() => setIsHistoryModalVisible(false)}
+                        targetType="note"
+                        targetId={id}
+                        targetTitle={title || t('notes.untitled', { defaultValue: 'Nota sin título' })}
+                    />
+                )}
 
                 <ImageViewing
                     images={imageAttachments.map(img => ({ uri: img.uri }))}
@@ -1064,6 +1173,7 @@ export default function NoteDetailAndEditScreen() {
                 />
             </View>
         </SafeAreaView>
+    </Reanimated.View>
     );
 }
 
