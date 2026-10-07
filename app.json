@@ -13,6 +13,7 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.ralo.veyra",
       "associatedDomains": [
+        "applinks:veyra-lake.vercel.app",
         "applinks:veyra.app"
       ]
     },
@@ -39,6 +40,16 @@
           "action": "VIEW",
           "autoVerify": true,
           "data": [
+            {
+              "scheme": "https",
+              "host": "veyra-lake.vercel.app",
+              "pathPrefix": "/join"
+            },
+            {
+              "scheme": "https",
+              "host": "veyra.app",
+              "pathPrefix": "/join"
+            },
             {
               "scheme": "veyra",
               "host": "*"

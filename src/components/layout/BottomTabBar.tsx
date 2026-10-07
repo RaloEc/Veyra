@@ -79,6 +79,8 @@ import { useScreenInsets } from '../../hooks/useScreenInsets';
 import { useStore } from '../../store/useStore';
 import { useFoldersStore } from '../../store/useFoldersStore';
 import { useSelectionStore } from '../../store/useSelectionStore';
+import { useShareEventsStore } from '../../store/useShareEventsStore';
+import { ShareEventsMorphCard } from '../events/ShareEventsMorphCard';
 import { useVeyraTheme } from '../../theme/useVeyraTheme';
 import { useAIQuickAdd } from '../../hooks/useAIQuickAdd';
 import { AIActionProposal, ReminderIntent, EventIntent, NoteIntent } from '../../lib/ai/schemas';
@@ -218,6 +220,12 @@ export function BottomTabBar() {
     const selection = useSelectionStore();
     const isSelecting = selection.active && selection.actions.length > 0;
     const morphProgress = useSharedValue(0);
+
+    // Estado del modo Compartir Eventos (Morph del Dock)
+    const shareEventsState = useShareEventsStore();
+    const isSharingEvents = shareEventsState.isOpen && shareEventsState.events.length > 0;
+    const shareEventsList = shareEventsState.events;
+    const shareMorphProgress = useSharedValue(0);
 
     // Estado del modo Creación (Morph del Dock)
     const [isCreating, setIsCreating] = useState(false);
@@ -374,6 +382,27 @@ export function BottomTabBar() {
         });
     }, [isSelecting]);
 
+    // Sincronizar morph de compartir eventos
+    useEffect(() => {
+        if (isSharingEvents) {
+            shareMorphProgress.value = withSpring(1, {
+                damping: 19,
+                stiffness: 220,
+                mass: 0.8,
+            });
+            backdropOpacity.value = withTiming(1, { duration: 200, easing: Easing.out(Easing.cubic) });
+        } else {
+            shareMorphProgress.value = withSpring(0, {
+                damping: 19,
+                stiffness: 220,
+                mass: 0.8,
+            });
+            if (!isCreating) {
+                backdropOpacity.value = withTiming(0, { duration: 180, easing: Easing.out(Easing.cubic) });
+            }
+        }
+    }, [isSharingEvents, isCreating]);
+
     // Adaptar altura de creación según contenido y estado de plegado/desplegado (Totalmente dinámico sin scroll)
     useEffect(() => {
         const hasAttachments = pendingAttachments.length > 0;
@@ -521,7 +550,7 @@ export function BottomTabBar() {
     }));
 
     const backdropAnimatedStyle = useAnimatedStyle(() => ({
-        opacity: backdropOpacity.value * (isDark ? 0.45 : 0.22),
+        opacity: backdropOpacity.value * (isDark ? 0.28 : 0.12),
     }));
 
     // Morph suave entre icono Micrófono y Enviar
@@ -570,18 +599,23 @@ export function BottomTabBar() {
     const dockAnimatedStyle = useAnimatedStyle(() => {
         const pSel = morphProgress.value;
         const pCreate = createMorphProgress.value;
+        const pShare = shareMorphProgress.value;
 
         // Ancho
         const widthCreate = interpolate(pCreate, [0, 1], [normalDockWidth, morphedDockWidth], Extrapolation.CLAMP);
-        const finalWidth = interpolate(pSel, [0, 1], [widthCreate, morphedDockWidth], Extrapolation.CLAMP);
+        const widthSel = interpolate(pSel, [0, 1], [widthCreate, morphedDockWidth], Extrapolation.CLAMP);
+        const finalWidth = interpolate(pShare, [0, 1], [widthSel, morphedDockWidth], Extrapolation.CLAMP);
 
         // Alto
+        const shareCardHeight = Math.min(screenHeight - bottomOffset - 36, 400);
         const heightCreate = interpolate(pCreate, [0, 1], [56, createHeightShared.value], Extrapolation.CLAMP);
-        const finalHeight = interpolate(pSel, [0, 1], [heightCreate, 108], Extrapolation.CLAMP);
+        const heightSel = interpolate(pSel, [0, 1], [heightCreate, 108], Extrapolation.CLAMP);
+        const finalHeight = interpolate(pShare, [0, 1], [heightSel, shareCardHeight], Extrapolation.CLAMP);
 
         // Radio de borde
         const radiusCreate = interpolate(pCreate, [0, 1], [28, 22], Extrapolation.CLAMP);
-        const finalRadius = interpolate(pSel, [0, 1], [radiusCreate, 22], Extrapolation.CLAMP);
+        const radiusSel = interpolate(pSel, [0, 1], [radiusCreate, 22], Extrapolation.CLAMP);
+        const finalRadius = interpolate(pShare, [0, 1], [radiusSel, 24], Extrapolation.CLAMP);
 
         return {
             width: finalWidth,
@@ -592,8 +626,8 @@ export function BottomTabBar() {
 
     // Navegación normal (Tabs)
     const normalTabsAnimatedStyle = useAnimatedStyle(() => {
-        const p = Math.max(morphProgress.value, createMorphProgress.value);
-        const shouldHide = p >= 0.35 || isCreatingShared.value;
+        const p = Math.max(morphProgress.value, createMorphProgress.value, shareMorphProgress.value);
+        const shouldHide = p >= 0.35 || isCreatingShared.value || isSharingEvents;
         return {
             opacity: interpolate(p, [0, 0.35], [1, 0], Extrapolation.CLAMP),
             display: shouldHide ? 'none' : 'flex',
@@ -608,11 +642,27 @@ export function BottomTabBar() {
     // Menú de Selección Múltiple
     const selectionMenuAnimatedStyle = useAnimatedStyle(() => {
         const p = morphProgress.value;
+        const pShare = shareMorphProgress.value;
         return {
-            opacity: interpolate(p, [0.42, 1], [0, 1], Extrapolation.CLAMP),
+            opacity: interpolate(p, [0.42, 1], [0, 1], Extrapolation.CLAMP) * (1 - pShare),
             transform: [
-                { scale: interpolate(p, [0.42, 1], [0.88, 1], Extrapolation.CLAMP) },
+                { scale: interpolate(p, [0.42, 1], [0.88, 1], Extrapolation.CLAMP) * (1 - pShare * 0.08) },
                 { translateY: interpolate(p, [0.42, 1], [-8, 0], Extrapolation.CLAMP) },
+            ],
+        };
+    });
+
+    // Tarjeta de Compartir Eventos Morpheada
+    const shareCardAnimatedStyle = useAnimatedStyle(() => {
+        const p = shareMorphProgress.value;
+        const isVisible = p > 0.05 || isSharingEvents;
+        return {
+            opacity: interpolate(p, [0.25, 1], [0, 1], Extrapolation.CLAMP),
+            display: isVisible ? 'flex' : 'none',
+            zIndex: isVisible ? 12 : -1,
+            transform: [
+                { scale: interpolate(p, [0.25, 1], [0.93, 1], Extrapolation.CLAMP) },
+                { translateY: interpolate(p, [0.25, 1], [8, 0], Extrapolation.CLAMP) },
             ],
         };
     });
@@ -2318,8 +2368,16 @@ export function BottomTabBar() {
     return (
         <>
             {/* Backdrop oscuro translúcido para cerrar al pulsar fuera */}
-            {isCreating && (
-                <TouchableWithoutFeedback onPress={isLoading ? undefined : closeCreate}>
+            {(isCreating || isSharingEvents) && (
+                <TouchableWithoutFeedback
+                    onPress={() => {
+                        if (isSharingEvents) {
+                            useShareEventsStore.getState().closeShare();
+                        } else if (isCreating && !isLoading) {
+                            closeCreate();
+                        }
+                    }}
+                >
                     <Animated.View
                         style={[
                             StyleSheet.absoluteFill,
@@ -3263,7 +3321,7 @@ export function BottomTabBar() {
                     {/* Capa 3: Menú de Selección Morpheado */}
                     <Animated.View
                         style={[StyleSheet.absoluteFill, styles.selectionContentContainer, selectionMenuAnimatedStyle]}
-                        pointerEvents={isSelecting ? 'auto' : 'none'}
+                        pointerEvents={isSelecting && !isSharingEvents ? 'auto' : 'none'}
                     >
                         {/* Fila superior: Contador + Cerrar | Seleccionar Todo */}
                         <View style={styles.selectionTopRow}>
@@ -3353,6 +3411,18 @@ export function BottomTabBar() {
                             ))}
                         </View>
                     </Animated.View>
+
+                    {/* Capa 4: Tarjeta de Compartir Eventos Morpheada */}
+                    <Animated.View
+                        style={[StyleSheet.absoluteFill, styles.shareCardContentContainer, shareCardAnimatedStyle]}
+                        pointerEvents={isSharingEvents ? 'auto' : 'none'}
+                    >
+                        <ShareEventsMorphCard
+                            events={shareEventsList}
+                            onClose={() => useShareEventsStore.getState().closeShare()}
+                            onSuccess={() => useShareEventsStore.getState().notifySuccess()}
+                        />
+                    </Animated.View>
                 </Animated.View>
             </Animated.View>
 
@@ -3386,10 +3456,10 @@ const styles = StyleSheet.create({
     },
     dockWrapper: {
         shadowColor: '#000',
-        shadowOffset: { width: 0, height: 6 },
-        shadowOpacity: 0.18,
-        shadowRadius: 16,
-        elevation: 12,
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.10,
+        shadowRadius: 12,
+        elevation: 6,
         borderWidth: 1,
         alignItems: 'center',
         justifyContent: 'center',
@@ -4242,5 +4312,9 @@ const styles = StyleSheet.create({
         width: '100%',
         marginBottom: 8,
         marginTop: 2,
+    },
+    shareCardContentContainer: {
+        borderRadius: 22,
+        overflow: 'hidden',
     },
 });

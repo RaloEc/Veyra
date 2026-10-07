@@ -93,8 +93,9 @@ import {
 } from '../src/components/ui';
 import NotesScreen from './notes/index';
 import { TopBar } from '../src/components/TopBar';
+import { BottomTabBar } from '../src/components/layout/BottomTabBar';
 import { RecurringDeleteModal } from '../src/components/events/RecurringDeleteModal';
-import { ShareEventsModal } from '../src/components/events/ShareEventsModal';
+import { useShareEventsStore } from '../src/store/useShareEventsStore';
 
 export type TimelineItem =
     | { type: 'event'; event: CalendarEvent; time_ms: number }
@@ -949,7 +950,6 @@ export default function HomeScreen() {
     const totalSelectedCount = selectedReminders.length + selectedEvents.length;
     const isSelectionMode = totalSelectedCount > 0;
     const [isBulkDeleteConfirmVisible, setIsBulkDeleteConfirmVisible] = useState(false);
-    const [isShareEventsModalVisible, setIsShareEventsModalVisible] = useState(false);
     const [recurringDeleteTarget, setRecurringDeleteTarget] = useState<{ event: CalendarEvent; itemTime?: number } | null>(null);
     const [isSnoozeModalVisible, setIsSnoozeModalVisible] = useState(false);
     const [selectedCalendarDate, setSelectedCalendarDate] = useState<Date | null>(null);
@@ -1504,7 +1504,14 @@ export default function HomeScreen() {
                         icon: (color: string) => <Share2 size={16} color={accent.primary} strokeWidth={2.4} />,
                         onPress: () => {
                             if (selectedEvents.length > 0) {
-                                setIsShareEventsModalVisible(true);
+                                const evs = events.filter(e => selectedEvents.includes(e.id));
+                                useShareEventsStore.getState().openShare(evs, {
+                                    onSuccess: () => {
+                                        setSelectedEvents([]);
+                                        setSelectedReminders([]);
+                                        useSelectionStore.getState().clearSelection();
+                                    },
+                                });
                             } else {
                                 handleShareSelected();
                             }
@@ -1529,6 +1536,10 @@ export default function HomeScreen() {
 
     useEffect(() => {
         const backAction = () => {
+            if (useShareEventsStore.getState().isOpen) {
+                useShareEventsStore.getState().closeShare();
+                return true;
+            }
             if (isSearching) {
                 LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
                 setIsSearching(false);
@@ -2342,17 +2353,6 @@ export default function HomeScreen() {
                 </View>
             )}
 
-            {/* Modal para Compartir Eventos Múltiples */}
-            <ShareEventsModal
-                visible={isShareEventsModalVisible}
-                onClose={() => {
-                    setIsShareEventsModalVisible(false);
-                    setSelectedEvents([]);
-                    setSelectedReminders([]);
-                    useSelectionStore.getState().clearSelection();
-                }}
-                events={events.filter(e => selectedEvents.includes(e.id))}
-            />
 
             {/* Recurring Event Delete Confirm Modal */}
             <RecurringDeleteModal

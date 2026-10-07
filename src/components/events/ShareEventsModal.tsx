@@ -32,8 +32,10 @@ import { VeyraButton } from '../ui/VeyraButton';
 import { CalendarEvent } from '../../types/db';
 import { CollaborationService } from '../../services/collaborationService';
 import { useStore } from '../../store/useStore';
+import { APP_CONFIG } from '../../constants/appConfig';
 
 export type ShareSyncMode = 'independent' | 'synced';
+export { ShareEventsMorphCard } from './ShareEventsMorphCard';
 
 interface ShareEventsModalProps {
     visible: boolean;
@@ -110,7 +112,7 @@ export function ShareEventsModal({
             const jsonStr = JSON.stringify(exportPayload);
             // Base64 seguro para URL
             const base64 = btoa(unescape(encodeURIComponent(jsonStr)));
-            return `veyra://join?import=${encodeURIComponent(base64)}`;
+            return `${APP_CONFIG.baseUrl}/join?import=${encodeURIComponent(base64)}`;
         } catch {
             return '';
         }
@@ -142,7 +144,7 @@ export function ShareEventsModal({
                     events.length === 1 ? primaryEvent.title : `${events.length} eventos de horario`,
                     'editor'
                 );
-                shareLink = res.deepLink;
+                shareLink = res.inviteUrl || `${APP_CONFIG.baseUrl}/join?code=${res.invitation.invite_code}`;
             } else {
                 // Modo copia independiente (snapshot sin enlace vivo)
                 shareLink = buildImportDeepLink();

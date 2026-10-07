@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Política de Privacidad — Veyra App</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #0D0F12;
+            --surface: #16191F;
+            --surface-elevated: #1F232B;
+            --border: rgba(255, 255, 255, 0.08);
+            --primary: #3B82F6;
+            --text-primary: #F8FAFC;
+            --text-secondary: #94A3B8;
+            --text-muted: #64748B;
+            --danger: #EF4444;
+            --success: #10B981;
+        }
+        @media (prefers-color-scheme: light) {
+            :root {
+                --bg: #F8FAFC;
+                --surface: #FFFFFF;
+                --surface-elevated: #F1F5F9;
+                --border: rgba(0, 0, 0, 0.08);
+                --text-primary: #0F172A;
+                --text-secondary: #475569;
+                --text-muted: #94A3B8;
+            }
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+            background-color: var(--bg);
+            color: var(--text-primary);
+            line-height: 1.65;
+            padding: 32px 16px;
+        }
+        .container {
+            max-width: 780px;
+            margin: 0 auto;
+        }
+        header {
+            margin-bottom: 32px;
+            padding-bottom: 24px;
+            border-bottom: 1px solid var(--border);
+        }
+        .logo-row {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+        .logo-icon {
+            width: 44px;
+            height: 44px;
+            background: linear-gradient(135deg, #3B82F6, #8B5CF6);
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #fff;
+            font-weight: 800;
+            font-size: 22px;
+        }
+        h1 {
+            font-size: 28px;
+            font-weight: 800;
+            letter-spacing: -0.5px;
+            margin-bottom: 8px;
+        }
+        .meta-pill {
+            display: inline-block;
+            background: var(--surface-elevated);
+            color: var(--text-secondary);
+            font-size: 13px;
+            font-weight: 600;
+            padding: 4px 12px;
+            border-radius: 99px;
+            border: 1px solid var(--border);
+        }
+        .card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 24px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.03);
+        }
+        h2 {
+            font-size: 19px;
+            font-weight: 700;
+            margin-bottom: 12px;
+            color: var(--text-primary);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        p {
+            color: var(--text-secondary);
+            margin-bottom: 14px;
+            font-size: 15px;
+        }
+        p:last-child { margin-bottom: 0; }
+        ul {
+            list-style: none;
+            padding: 0;
+            margin: 12px 0;
+        }
+        li {
+            color: var(--text-secondary);
+            font-size: 15px;
+            margin-bottom: 10px;
+            padding-left: 20px;
+            position: relative;
+        }
+        li::before {
+            content: "•";
+            color: var(--primary);
+            font-weight: bold;
+            font-size: 18px;
+            position: absolute;
+            left: 0;
+            top: -2px;
+        }
+        strong { color: var(--text-primary); }
+        .danger-box {
+            background: rgba(239, 68, 68, 0.08);
+            border: 1px solid rgba(239, 68, 68, 0.25);
+            padding: 16px;
+            border-radius: 12px;
+            margin-top: 14px;
+        }
+        .danger-box strong { color: var(--danger); }
+        footer {
+            margin-top: 40px;
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 13px;
+        }
+        a {
+            color: var(--primary);
+            text-decoration: none;
+            font-weight: 600;
+        }
+        a:hover { text-decoration: underline; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="logo-row">
+                <div class="logo-icon">V</div>
+                <div>
+                    <h1>Política de Privacidad</h1>
+                    <span class="meta-pill">Veyra App · Vigente Octubre 2026</span>
+                </div>
+            </div>
+            <p>Tu privacidad y el control de tus datos personales son nuestra máxima prioridad. Esta política detalla con total transparencia el tratamiento de tus datos en Veyra.</p>
+        </header>
+
+        <section class="card">
+            <h2>1. Responsable del Tratamiento y Contacto</h2>
+            <p>La aplicación móvil <strong>Veyra</strong> es desarrollada y operada para brindar servicios de gestión de tareas, notas y calendario. Para consultas sobre privacidad, escribe a:</p>
+            <p>📧 Correo oficial: <a href="mailto:soporte@veyra.app">soporte@veyra.app</a></p>
+        </section>
+
+        <section class="card">
+            <h2>2. Datos que Recopilamos y Finalidad</h2>
+            <ul>
+                <li><strong>Cuenta de usuario:</strong> Correo electrónico y nombre para autenticación y sincronización cifrada con Supabase Auth.</li>
+                <li><strong>Contenido de productividad:</strong> Títulos, descripciones, subtareas, notas y eventos. Se almacenan primeramente en la base de datos local SQLite de tu dispositivo y se sincronizan cifrados con la nube si inicias sesión.</li>
+                <li><strong>Permiso de Micrófono (RECORD_AUDIO):</strong> Utilizado exclusivamente para dictado por voz transitorio en la creación de recordatorios y notas. No grabamos conversaciones ni guardamos audio en servidores.</li>
+                <li><strong>Permisos de Alarmas y Notificaciones:</strong> Necesarios para programar recordatorios exactos y alarmas críticas que suenen en el momento oportuno.</li>
+            </ul>
+        </section>
+
+        <section class="card">
+            <h2>3. Seguridad de las Comunicaciones</h2>
+            <p>Todas las transferencias de datos entre tu dispositivo y nuestros servidores se realizan de forma forzada a través de <strong>HTTPS con cifrado TLS 1.3</strong>. Las conexiones inseguras en texto claro (HTTP) se encuentran estrictamente bloqueadas.</p>
+            <p>Tus datos en la nube están protegidos mediante <strong>Row Level Security (RLS)</strong>: ningún otro usuario ni servicio no autorizado puede acceder a tu información.</p>
+        </section>
+
+        <section class="card">
+            <h2>4. Eliminación de Cuenta y Datos (Garantía de Tiendas)</h2>
+            <p>Cumpliendo estrictamente con las políticas de Google Play y Apple App Store, puedes eliminar tu cuenta y todos tus datos en cualquier momento sin intermediarios:</p>
+            <div class="danger-box">
+                <p><strong>Desde la App:</strong> Mi Perfil &rarr; Zona de Riesgo &rarr; "Eliminar cuenta definitivamente" &rarr; Escribe ELIMINAR y confirma.</p>
+            </div>
+            <p style="margin-top: 14px;">Al confirmar, se purgan de inmediato todos tus registros en la nube (Supabase), se borra la base de datos local SQLite y se cancelan todas las alarmas activas.</p>
+        </section>
+
+        <section class="card">
+            <h2>5. Servicios de Terceros</h2>
+            <p>Veyra no vende ni monetiza tus datos con terceros. Solo nos apoyamos en infraestructura de primera línea:</p>
+            <ul>
+                <li><strong>Supabase:</strong> Plataforma de base de datos cifrada y autenticación.</li>
+                <li><strong>RevenueCat:</strong> Gestión segura de suscripciones y validación de compras en Google Play / App Store.</li>
+            </ul>
+        </section>
+
+        <footer>
+            &copy; 2026 Veyra App. Todos los derechos reservados. | Soporte: <a href="mailto:soporte@veyra.app">soporte@veyra.app</a>
+        </footer>
+    </div>
+</body>
+</html>

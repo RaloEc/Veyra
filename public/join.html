@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Unirse a Evento — Veyra</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #0D0F12;
+            --surface: #16191F;
+            --surface-card: #20242D;
+            --border: rgba(255, 255, 255, 0.08);
+            --primary: #3B82F6;
+            --primary-glow: rgba(59, 130, 246, 0.25);
+            --text-primary: #F8FAFC;
+            --text-secondary: #94A3B8;
+            --text-muted: #64748B;
+            --success: #10B981;
+        }
+        @media (prefers-color-scheme: light) {
+            :root {
+                --bg: #F8FAFC;
+                --surface: #FFFFFF;
+                --surface-card: #F1F5F9;
+                --border: rgba(0, 0, 0, 0.08);
+                --primary: #2563EB;
+                --primary-glow: rgba(37, 99, 235, 0.2);
+                --text-primary: #0F172A;
+                --text-secondary: #475569;
+                --text-muted: #94A3B8;
+                --success: #059669;
+            }
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+            background-color: var(--bg);
+            color: var(--text-primary);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 24px 16px;
+        }
+        .card {
+            background-color: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 28px;
+            max-width: 440px;
+            width: 100%;
+            padding: 36px 28px;
+            box-shadow: 0 16px 40px rgba(0, 0, 0, 0.2);
+            text-align: center;
+            animation: fadeIn 0.4s ease-out;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(16px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .icon-circle {
+            width: 76px;
+            height: 76px;
+            border-radius: 38px;
+            background: var(--primary-glow);
+            border: 1px solid rgba(59, 130, 246, 0.3);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 20px auto;
+            font-size: 34px;
+        }
+        h1 {
+            font-size: 22px;
+            font-weight: 800;
+            letter-spacing: -0.4px;
+            margin-bottom: 8px;
+        }
+        p.subtitle {
+            font-size: 14px;
+            color: var(--text-secondary);
+            line-height: 1.5;
+            margin-bottom: 24px;
+        }
+        .code-box {
+            background-color: var(--surface-card);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 16px;
+            margin-bottom: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+        }
+        .code-label {
+            font-size: 11px;
+            font-weight: 700;
+            color: var(--text-muted);
+            letter-spacing: 0.6px;
+            text-transform: uppercase;
+            text-align: left;
+        }
+        .code-value {
+            font-size: 17px;
+            font-weight: 800;
+            color: var(--primary);
+            letter-spacing: 1px;
+            font-family: monospace;
+            text-align: left;
+        }
+        .copy-btn {
+            background-color: rgba(59, 130, 246, 0.12);
+            color: var(--primary);
+            border: 1px solid rgba(59, 130, 246, 0.25);
+            padding: 8px 14px;
+            border-radius: 10px;
+            font-size: 12px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: all 0.2s;
+            white-space: nowrap;
+        }
+        .copy-btn:hover {
+            background-color: var(--primary);
+            color: #FFFFFF;
+        }
+        .btn-primary {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            width: 100%;
+            background-color: var(--primary);
+            color: #FFFFFF;
+            text-decoration: none;
+            padding: 16px 20px;
+            border-radius: 18px;
+            font-size: 15px;
+            font-weight: 700;
+            box-shadow: 0 6px 20px var(--primary-glow);
+            transition: transform 0.15s, opacity 0.15s;
+            cursor: pointer;
+            border: none;
+        }
+        .btn-primary:active {
+            transform: scale(0.98);
+        }
+        .note {
+            font-size: 12px;
+            color: var(--text-muted);
+            margin-top: 18px;
+            line-height: 1.5;
+        }
+        .brand {
+            font-size: 11px;
+            color: var(--text-muted);
+            font-weight: 600;
+            margin-top: 24px;
+            letter-spacing: 0.5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <div class="icon-circle">📅</div>
+        <h1>Eventos en Veyra</h1>
+        <p class="subtitle" id="status-text">Te han invitado a sincronizar eventos en tu agenda de Veyra.</p>
+
+        <div class="code-box" id="code-container" style="display: none;">
+            <div>
+                <div class="code-label">Código de invitación</div>
+                <div class="code-value" id="invite-code">------</div>
+            </div>
+            <button class="copy-btn" id="copy-btn" onclick="copyCode()">Copiar</button>
+        </div>
+
+        <a id="open-app-btn" href="#" class="btn-primary">
+            <span>Abrir en la App Veyra</span>
+            <span>➔</span>
+        </a>
+
+        <p class="note" id="help-text">
+            Si no se abre automáticamente, pulsa el botón de arriba o pega el código dentro de la aplicación Veyra.
+        </p>
+
+        <div class="brand">Organizado con Veyra ✨</div>
+    </div>
+
+    <script>
+        const urlParams = new URLSearchParams(window.location.search);
+        const code = urlParams.get('code');
+        const importData = urlParams.get('import');
+
+        const openBtn = document.getElementById('open-app-btn');
+        const codeContainer = document.getElementById('code-container');
+        const inviteCodeEl = document.getElementById('invite-code');
+        const statusText = document.getElementById('status-text');
+
+        let deepLink = 'veyra://';
+
+        if (code) {
+            deepLink = `veyra://join?code=${encodeURIComponent(code)}`;
+            inviteCodeEl.textContent = code;
+            codeContainer.style.display = 'flex';
+            statusText.textContent = 'Pulsa el botón para sincronizar estos eventos en tiempo real en tu aplicación Veyra.';
+        } else if (importData) {
+            deepLink = `veyra://join?import=${encodeURIComponent(importData)}`;
+            statusText.textContent = 'Pulsa el botón para importar una copia independiente de estos eventos en tu agenda de Veyra.';
+        }
+
+        openBtn.href = deepLink;
+
+        // Intentar redirigir automáticamente al deep link nativo en móviles
+        window.onload = function() {
+            setTimeout(function() {
+                window.location.href = deepLink;
+            }, 300);
+        };
+
+        function copyCode() {
+            if (!code) return;
+            navigator.clipboard.writeText(code).then(function() {
+                const btn = document.getElementById('copy-btn');
+                btn.textContent = '¡Copiado!';
+                btn.style.backgroundColor = 'var(--success)';
+                btn.style.color = '#FFFFFF';
+                setTimeout(function() {
+                    btn.textContent = 'Copiar';
+                    btn.style.backgroundColor = '';
+                    btn.style.color = '';
+                }, 2000);
+            });
+        }
+    </script>
+</body>
+</html>

@@ -24,6 +24,7 @@ import { useVeyraTheme } from '../src/theme/useVeyraTheme';
 import { VeyraSurface } from '../src/components/ui/VeyraSurface';
 import { VeyraIconButton } from '../src/components/ui/VeyraIconButton';
 import { VeyraDivider } from '../src/components/ui/VeyraDivider';
+import { APP_CONFIG } from '../src/constants/appConfig';
 
 export default function LegalScreen() {
     const { t } = useTranslation();
@@ -38,10 +39,10 @@ export default function LegalScreen() {
 
     const handleOpenExternal = () => {
         const url = activeTab === 'privacy' 
-            ? 'https://veyra.app/privacy' 
-            : 'https://veyra.app/terms';
+            ? `${APP_CONFIG.baseUrl}/privacy` 
+            : `${APP_CONFIG.baseUrl}/terms`;
         Linking.openURL(url).catch(() => {
-            Linking.openURL('mailto:soporte@veyra.app');
+            Linking.openURL(`mailto:${APP_CONFIG.supportEmail}`);
         });
     };
 

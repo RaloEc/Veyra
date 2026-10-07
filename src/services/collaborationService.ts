@@ -1,4 +1,5 @@
 import { supabase } from '../lib/supabase';
+import { APP_CONFIG } from '../constants/appConfig';
 import {
     CollabTargetType,
     CollabRole,
@@ -58,7 +59,7 @@ export const CollaborationService = {
 
         const inviteCode = data.invite_code;
         const deepLink = `veyra://join?code=${inviteCode}`;
-        const inviteUrl = `https://veyra.app/join?code=${inviteCode}`;
+        const inviteUrl = `${APP_CONFIG.baseUrl}/join?code=${inviteCode}`;
 
         return {
             invitation: data as ShareInvitation,

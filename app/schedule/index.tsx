@@ -36,7 +36,8 @@ import { Reminder } from '../../src/types/db';
 import { getDB } from '../../src/db';
 import { WidgetService } from '../../src/services/widgetService';
 import { useSelectionStore } from '../../src/store/useSelectionStore';
-import { ShareEventsModal } from '../../src/components/events/ShareEventsModal';
+import { useShareEventsStore } from '../../src/store/useShareEventsStore';
+import { BottomTabBar } from '../../src/components/layout/BottomTabBar';
 
 export interface ScheduleItemView {
     id: string;
@@ -98,7 +99,6 @@ export default function ScheduleScreen() {
     // Selección múltiple
     const [selectedIds, setSelectedIds] = useState<string[]>([]);
     const isSelectionMode = selectedIds.length > 0;
-    const [isShareModalVisible, setIsShareModalVisible] = useState<boolean>(false);
 
     const pad = (n: number) => n.toString().padStart(2, '0');
 
@@ -352,7 +352,14 @@ export default function ScheduleScreen() {
                         id: 'share',
                         label: isEs ? 'Compartir' : 'Share',
                         icon: (color) => <Share2 size={16} color={accent.primary} strokeWidth={2.4} />,
-                        onPress: () => setIsShareModalVisible(true),
+                        onPress: () => {
+                            useShareEventsStore.getState().openShare(selectedEventsForSharing, {
+                                onSuccess: () => {
+                                    setSelectedIds([]);
+                                    useSelectionStore.getState().clearSelection();
+                                },
+                            });
+                        },
                         color: accent.primary,
                         bg: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)',
                     },
@@ -692,16 +699,8 @@ export default function ScheduleScreen() {
                 </ScrollView>
             )}
 
-            {/* Modal para Compartir con Ajuste de Sincronización */}
-            <ShareEventsModal
-                visible={isShareModalVisible}
-                onClose={() => {
-                    setIsShareModalVisible(false);
-                    setSelectedIds([]);
-                    useSelectionStore.getState().clearSelection();
-                }}
-                events={selectedEventsForSharing}
-            />
+            {/* Barra inferior flotante unificada con morph de selección y compartir */}
+            <BottomTabBar />
         </SafeAreaView>
     );
 }
