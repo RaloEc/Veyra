@@ -23,6 +23,7 @@ import {
     Share2,
     Trash2,
     Check,
+    KeyRound,
 } from '@tamagui/lucide-icons';
 import { useTranslation } from 'react-i18next';
 
@@ -447,13 +448,24 @@ export default function ScheduleScreen() {
                         {isEs ? 'Sincronizado con el widget' : 'Synced with home widget'}
                     </Text>
                 </View>
-                <TouchableOpacity
-                    activeOpacity={0.7}
-                    onPress={handleAddClass}
-                    style={[styles.addHeaderBtn, { backgroundColor: `${accent.primary}18`, borderColor: `${accent.primary}35` }]}
-                >
-                    <Plus size={20} color={accent.primary} />
-                </TouchableOpacity>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                    <TouchableOpacity
+                        activeOpacity={0.7}
+                        onPress={() => router.push('/join')}
+                        style={[styles.addHeaderBtn, { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.06)' : 'rgba(0, 0, 0, 0.04)', borderColor: colors.borderSubtle }]}
+                        accessibilityLabel={isEs ? 'Unirse con código o importar horario' : 'Join with code or import schedule'}
+                    >
+                        <KeyRound size={18} color={colors.textSecondary as any} />
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                        activeOpacity={0.7}
+                        onPress={handleAddClass}
+                        style={[styles.addHeaderBtn, { backgroundColor: `${accent.primary}18`, borderColor: `${accent.primary}35` }]}
+                        accessibilityLabel={isEs ? 'Añadir clase' : 'Add class'}
+                    >
+                        <Plus size={20} color={accent.primary} />
+                    </TouchableOpacity>
+                </View>
             </View>
 
             {/* Selector de días de la semana (Lun - Dom) */}

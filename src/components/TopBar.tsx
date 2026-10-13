@@ -24,7 +24,7 @@ interface TopBarProps {
  * TopBar — Barra de navegación superior con saludo contextual, contador de racha,
  * indicador de sincronización en tiempo real y disparador del menú compacto de usuario.
  */
-export function TopBar({ title }: TopBarProps) {
+export const TopBar = React.memo(function TopBar({ title }: TopBarProps) {
     const router = useRouter();
     const pathname = usePathname();
     const { t } = useTranslation();
@@ -207,7 +207,7 @@ export function TopBar({ title }: TopBarProps) {
             <SyncProgressBar isSyncing={isSyncing} />
         </View>
     );
-}
+});
 
 const styles = StyleSheet.create({
     topBar: {

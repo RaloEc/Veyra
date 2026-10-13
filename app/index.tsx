@@ -107,6 +107,7 @@ export interface AgendaSection {
     count: number;
     isOverdue?: boolean;
     data: TimelineItem[];
+    pastData?: Array<{ type: 'event'; event: CalendarEvent; time_ms: number }>;
 }
 
 function calculateRiskInfo(dueDate: number, now: number, isDark: boolean, textSecondaryColor: string, overdueText?: string, inTimeText?: string) {
@@ -149,6 +150,7 @@ interface AgendaEventRowProps {
     isLast: boolean;
     isSelected?: boolean;
     isSelectionMode?: boolean;
+    isPast?: boolean;
     now: number;
     language: string;
     isDark: boolean;
@@ -168,6 +170,7 @@ const AgendaEventRow = React.memo(function AgendaEventRow({
     isLast,
     isSelected = false,
     isSelectionMode = false,
+    isPast = false,
     now,
     language,
     isDark,
@@ -182,8 +185,8 @@ const AgendaEventRow = React.memo(function AgendaEventRow({
 }: AgendaEventRowProps) {
     const isRecurring = Boolean(event.repeat_rule && event.repeat_rule !== 'null');
     const evColor = event.color || '#3B82F6';
-    const startStr = format(new Date(event.start_time_ms), 'HH:mm');
-    const endStr = format(new Date(event.end_time_ms), 'HH:mm');
+    const startStr = useMemo(() => format(new Date(event.start_time_ms), 'HH:mm'), [event.start_time_ms]);
+    const endStr = useMemo(() => format(new Date(event.end_time_ms), 'HH:mm'), [event.end_time_ms]);
     const isOngoing = useMemo(() => {
         const today = new Date(now);
         const targetDate = itemTime ? new Date(itemTime) : new Date(event.start_time_ms);
@@ -376,6 +379,7 @@ const AgendaEventRow = React.memo(function AgendaEventRow({
                                     : isOngoing
                                     ? (isDark ? 'rgba(59, 130, 246, 0.12)' : 'rgba(59, 130, 246, 0.06)')
                                     : (isDark ? '#1C1F26' : '#FFFFFF'),
+                                opacity: isPast ? 0.65 : 1,
                             },
                             rowAnimatedStyle,
                         ]}
@@ -415,12 +419,12 @@ const AgendaEventRow = React.memo(function AgendaEventRow({
                             <View style={styles.agendaRowContent}>
                                 <View style={styles.agendaRowTitleLine}>
                                     <Text
-                                        style={[styles.agendaRowTitle, { color: colors.textPrimary }]}
+                                        style={[styles.agendaRowTitle, { color: isPast ? colors.textMuted : colors.textPrimary }]}
                                         numberOfLines={1}
                                     >
                                         {event.title}
                                     </Text>
-                                    {isOngoing && (
+                                    {isOngoing && !isPast && (
                                         <View style={[styles.liveBadge, { backgroundColor: isDark ? 'rgba(59, 130, 246, 0.2)' : '#DBEAFE' }]}>
                                             <View style={[styles.liveDot, { backgroundColor: '#3B82F6' }]} />
                                             <Text style={[styles.liveBadgeText, { color: '#3B82F6' }]}>
@@ -432,10 +436,15 @@ const AgendaEventRow = React.memo(function AgendaEventRow({
 
                                 <View style={styles.agendaRowMetaLine}>
                                     <View style={styles.agendaRowTimeWrap}>
-                                        <CalendarIcon size={11} color={evColor} />
-                                        <Text style={[styles.agendaRowTimeText, { color: evColor }]}>
+                                        <CalendarIcon size={11} color={isPast ? colors.textMuted : evColor} />
+                                        <Text style={[styles.agendaRowTimeText, { color: isPast ? colors.textMuted : evColor }]}>
                                             {startStr} - {endStr}
                                         </Text>
+                                        {isPast && (
+                                            <Text style={{ fontSize: 10, color: colors.textMuted, marginLeft: 4, fontWeight: '500' }}>
+                                                · {language === 'es' ? 'Finalizado' : 'Ended'}
+                                            </Text>
+                                        )}
                                     </View>
 
                                     {event.location ? (
@@ -525,39 +534,39 @@ const AgendaReminderRow = React.memo(function AgendaReminderRow({
     const isCritical = item.control_level === 'critical';
     const isStrict = item.control_level === 'strict';
 
-    let subtasksList: any[] = [];
-    if (item.subtasks) {
+    const { subtasksList, completedSubtasks } = useMemo(() => {
+        if (!item.subtasks) return { subtasksList: [], completedSubtasks: 0 };
         try {
             const parsed = JSON.parse(item.subtasks);
-            if (Array.isArray(parsed)) subtasksList = parsed;
+            if (Array.isArray(parsed)) {
+                return { subtasksList: parsed, completedSubtasks: parsed.filter((s: any) => s.completed).length };
+            }
         } catch { }
-    }
-    const completedSubtasks = subtasksList.filter((s: any) => s.completed).length;
+        return { subtasksList: [], completedSubtasks: 0 };
+    }, [item.subtasks]);
 
-    let parsedAttachments: any[] = [];
-    if (item.attachments) {
+    const { imageAttachments, docAttachments } = useMemo(() => {
+        if (!item.attachments) return { imageAttachments: [], docAttachments: [] };
         try {
             const parsed = JSON.parse(item.attachments);
-            if (Array.isArray(parsed)) parsedAttachments = parsed;
+            if (Array.isArray(parsed)) {
+                const img = parsed.filter((att: any) => {
+                    const uri = typeof att === 'string' ? att : att?.uri;
+                    return (
+                        uri &&
+                        (uri.toLowerCase().match(/\.(jpg|jpeg|png|gif|webp|heic)$/i) ||
+                            uri.startsWith('data:image') ||
+                            uri.startsWith('file://'))
+                    );
+                });
+                const doc = parsed.filter((att: any) => !img.includes(att));
+                return { imageAttachments: img, docAttachments: doc };
+            }
         } catch { }
-    }
+        return { imageAttachments: [], docAttachments: [] };
+    }, [item.attachments]);
 
-    const imageAttachments = parsedAttachments.filter((att: any) => {
-        const uri = typeof att === 'string' ? att : att.uri;
-        return (
-            uri &&
-            (uri.toLowerCase().match(/\.(jpg|jpeg|png|gif|webp|heic)$/i) ||
-                uri.startsWith('data:image') ||
-                uri.startsWith('file://'))
-        );
-    });
-    const docAttachments = parsedAttachments.filter((att: any) => {
-        const uri = typeof att === 'string' ? att : att.uri;
-        return !imageAttachments.includes(att);
-    });
-
-    const dueDate = new Date(item.due_date_ms);
-    const timeStr = format(dueDate, 'HH:mm');
+    const timeStr = useMemo(() => format(new Date(item.due_date_ms), 'HH:mm'), [item.due_date_ms]);
 
     const measuredHeight = useRef(0);
     const translateX = useSharedValue(0);
@@ -956,6 +965,7 @@ export default function HomeScreen() {
     const [expandedSubtaskCardIds, setExpandedSubtaskCardIds] = useState<Record<string, boolean>>({});
     const [searchQuery, setSearchQuery] = useState('');
     const [isSearching, setIsSearching] = useState(false);
+    const [showPastTodayEvents, setShowPastTodayEvents] = useState(false);
 
     const selectionAnim = useRef(new Animated.Value(0)).current;
     const completeButtonAnim = useRef(new Animated.Value(1)).current;
@@ -1000,6 +1010,14 @@ export default function HomeScreen() {
     const listAnimOpacity = useRef(new Animated.Value(1)).current;
 
     const mainActiveTab = useStore(state => state.mainActiveTab);
+    const [hasOpenedNotes, setHasOpenedNotes] = useState(mainActiveTab === 'notes');
+
+    useEffect(() => {
+        if (mainActiveTab === 'notes' && !hasOpenedNotes) {
+            setHasOpenedNotes(true);
+        }
+    }, [mainActiveTab, hasOpenedNotes]);
+
     const tabCrossfadeProgress = useSharedValue(mainActiveTab === 'notes' ? 1 : 0);
 
     useEffect(() => {
@@ -1118,8 +1136,26 @@ export default function HomeScreen() {
             };
         }
 
+        const isEventOngoingNow = (ev: CalendarEvent, targetDate: Date) => {
+            const s = new Date(targetDate);
+            const origS = new Date(ev.start_time_ms);
+            s.setHours(origS.getHours(), origS.getMinutes(), origS.getSeconds(), origS.getMilliseconds());
+            const e = new Date(targetDate);
+            const origE = new Date(ev.end_time_ms && ev.end_time_ms > ev.start_time_ms ? ev.end_time_ms : ev.start_time_ms + 60 * 60 * 1000);
+            e.setHours(origE.getHours(), origE.getMinutes(), origE.getSeconds(), origE.getMilliseconds());
+            return now >= s.getTime() && now <= e.getTime();
+        };
+
+        const isEventPastNow = (ev: CalendarEvent, targetDate: Date) => {
+            const e = new Date(targetDate);
+            const origE = new Date(ev.end_time_ms && ev.end_time_ms > ev.start_time_ms ? ev.end_time_ms : ev.start_time_ms + 60 * 60 * 1000);
+            e.setHours(origE.getHours(), origE.getMinutes(), origE.getSeconds(), origE.getMilliseconds());
+            return now > e.getTime();
+        };
+
         if (selectedCalendarDate) {
             const targetDate = selectedCalendarDate;
+            const isTargetToday = isToday(targetDate);
             const dateTitle = format(targetDate, language === 'es' ? "EEEE, d 'de' MMMM" : 'EEEE, MMMM d', { locale });
 
             const dayEvents: CalendarEvent[] = (agendaFilter !== 'reminders')
@@ -1130,22 +1166,57 @@ export default function HomeScreen() {
                 ? sortedReminders.filter(r => isSameDay(new Date(r.due_date_ms), targetDate) && r.status === 'pending')
                 : [];
 
-            const combined: TimelineItem[] = [
-                ...dayEvents.map(ev => {
-                    const d = new Date(targetDate);
-                    const orig = new Date(ev.start_time_ms);
-                    d.setHours(orig.getHours(), orig.getMinutes(), orig.getSeconds(), orig.getMilliseconds());
-                    return { type: 'event' as const, event: ev, time_ms: d.getTime() };
-                }),
-                ...dayReminders.map(r => ({ type: 'reminder' as const, item: r, time_ms: r.due_date_ms })),
-            ].sort((a, b) => a.time_ms - b.time_ms);
+            const toTimelineEvent = (ev: CalendarEvent) => {
+                const d = new Date(targetDate);
+                const orig = new Date(ev.start_time_ms);
+                d.setHours(orig.getHours(), orig.getMinutes(), orig.getSeconds(), orig.getMilliseconds());
+                return { type: 'event' as const, event: ev, time_ms: d.getTime() };
+            };
 
-            sections.push({
-                key: 'selected_date',
-                title: dateTitle,
-                count: combined.length,
-                data: combined,
-            });
+            if (isTargetToday) {
+                const ongoingEvents: CalendarEvent[] = [];
+                const upcomingEvents: CalendarEvent[] = [];
+                const pastEvents: CalendarEvent[] = [];
+
+                for (const ev of dayEvents) {
+                    if (isEventOngoingNow(ev, targetDate)) {
+                        ongoingEvents.push(ev);
+                    } else if (isEventPastNow(ev, targetDate)) {
+                        pastEvents.push(ev);
+                    } else {
+                        upcomingEvents.push(ev);
+                    }
+                }
+
+                const ongoingTimeline = ongoingEvents.map(toTimelineEvent).sort((a, b) => a.time_ms - b.time_ms);
+                const upcomingTimeline = [
+                    ...upcomingEvents.map(toTimelineEvent),
+                    ...dayReminders.map(r => ({ type: 'reminder' as const, item: r, time_ms: r.due_date_ms })),
+                ].sort((a, b) => a.time_ms - b.time_ms);
+
+                const activeTimeline = [...ongoingTimeline, ...upcomingTimeline];
+                const pastTimeline = pastEvents.map(toTimelineEvent).sort((a, b) => a.time_ms - b.time_ms);
+
+                sections.push({
+                    key: 'selected_date',
+                    title: dateTitle,
+                    count: activeTimeline.length,
+                    data: activeTimeline,
+                    pastData: pastTimeline,
+                });
+            } else {
+                const combined: TimelineItem[] = [
+                    ...dayEvents.map(toTimelineEvent),
+                    ...dayReminders.map(r => ({ type: 'reminder' as const, item: r, time_ms: r.due_date_ms })),
+                ].sort((a, b) => a.time_ms - b.time_ms);
+
+                sections.push({
+                    key: 'selected_date',
+                    title: dateTitle,
+                    count: combined.length,
+                    data: combined,
+                });
+            }
 
             return {
                 sections,
@@ -1172,9 +1243,9 @@ export default function HomeScreen() {
             });
         }
 
-        // 2. Hoy: Eventos y Tareas intercalados cronológicamente
+        // 2. Hoy: Eventos y Tareas intercalados con cursando prioritario y pasados colapsables
         const todayDate = new Date();
-        const todayEvents: CalendarEvent[] = (agendaFilter !== 'reminders')
+        const allTodayEvents: CalendarEvent[] = (agendaFilter !== 'reminders')
             ? events.filter(e => isEventOccurringOnDate(e, todayDate))
             : [];
 
@@ -1182,21 +1253,42 @@ export default function HomeScreen() {
             ? sortedReminders.filter(r => isToday(r.due_date_ms) && !isPast(r.due_date_ms) && r.status === 'pending')
             : [];
 
-        const todayTimeline: TimelineItem[] = [
-            ...todayEvents.map(ev => {
-                const d = new Date(todayDate);
-                const orig = new Date(ev.start_time_ms);
-                d.setHours(orig.getHours(), orig.getMinutes(), orig.getSeconds(), orig.getMilliseconds());
-                return { type: 'event' as const, event: ev, time_ms: d.getTime() };
-            }),
+        const ongoingEvents: CalendarEvent[] = [];
+        const upcomingEvents: CalendarEvent[] = [];
+        const pastEvents: CalendarEvent[] = [];
+
+        for (const ev of allTodayEvents) {
+            if (isEventOngoingNow(ev, todayDate)) {
+                ongoingEvents.push(ev);
+            } else if (isEventPastNow(ev, todayDate)) {
+                pastEvents.push(ev);
+            } else {
+                upcomingEvents.push(ev);
+            }
+        }
+
+        const toTimelineEvent = (ev: CalendarEvent) => {
+            const d = new Date(todayDate);
+            const orig = new Date(ev.start_time_ms);
+            d.setHours(orig.getHours(), orig.getMinutes(), orig.getSeconds(), orig.getMilliseconds());
+            return { type: 'event' as const, event: ev, time_ms: d.getTime() };
+        };
+
+        const ongoingTimeline = ongoingEvents.map(toTimelineEvent).sort((a, b) => a.time_ms - b.time_ms);
+        const upcomingTimeline = [
+            ...upcomingEvents.map(toTimelineEvent),
             ...todayReminders.map(r => ({ type: 'reminder' as const, item: r, time_ms: r.due_date_ms })),
         ].sort((a, b) => a.time_ms - b.time_ms);
+
+        const activeTodayTimeline = [...ongoingTimeline, ...upcomingTimeline];
+        const pastTodayTimeline = pastEvents.map(toTimelineEvent).sort((a, b) => a.time_ms - b.time_ms);
 
         sections.push({
             key: 'today',
             title: t('home.today'),
-            count: todayTimeline.length,
-            data: todayTimeline,
+            count: activeTodayTimeline.length,
+            data: activeTodayTimeline,
+            pastData: pastTodayTimeline,
         });
 
         // 3. Días futuros agrupados cronológicamente
@@ -1429,42 +1521,6 @@ export default function HomeScreen() {
         await snoozeRemindersBatch(toSnooze, minutes);
     };
 
-    const handleShareSelected = async () => {
-        const selectedList = reminders.filter(r => selectedReminders.includes(r.id));
-        if (selectedList.length === 0) return;
-
-        let message = `${language === 'es' ? 'Recordatorios de Veyra' : 'Veyra Reminders'} (${selectedList.length})\n`;
-        message += `----------------------------------------\n`;
-        selectedList.forEach((r, idx) => {
-            const timeStr = format(new Date(r.due_date_ms), 'dd/MM HH:mm');
-            const levelTag = (r.control_level || 'normal').toUpperCase();
-            message += `${idx + 1}. ${r.title} [${levelTag}] - ${timeStr}\n`;
-            if (r.description) {
-                const plain = extractPlainTextFromPages(r.description);
-                if (plain) message += `   ${plain}\n`;
-            }
-            if (r.subtasks) {
-                try {
-                    const subtasksList = JSON.parse(r.subtasks);
-                    if (Array.isArray(subtasksList)) {
-                        subtasksList.forEach((st: any) => {
-                            const check = st.completed ? '[x]' : '[ ]';
-                            message += `   ${check} ${st.title}\n`;
-                        });
-                    }
-                } catch {}
-            }
-        });
-        message += `----------------------------------------\nVeyra`;
-
-        try {
-            await Share.share({
-                title: language === 'es' ? 'Recordatorios de Veyra' : 'Veyra Reminders',
-                message,
-            });
-        } catch (e) {}
-    };
-
     // Sincronizar selección de recordatorios y eventos con el dock morpheado
     useEffect(() => {
         if (totalSelectedCount > 0 && mainActiveTab === 'reminders') {
@@ -1503,17 +1559,18 @@ export default function HomeScreen() {
                         label: language === 'es' ? 'Compartir' : 'Share',
                         icon: (color: string) => <Share2 size={16} color={accent.primary} strokeWidth={2.4} />,
                         onPress: () => {
-                            if (selectedEvents.length > 0) {
-                                const evs = events.filter(e => selectedEvents.includes(e.id));
-                                useShareEventsStore.getState().openShare(evs, {
+                            const allReminders = [...useStore.getState().reminders, ...useStore.getState().history];
+                            const allEvents = useEventsStore.getState().events;
+                            const evs = allEvents.filter(e => selectedEvents.includes(e.id));
+                            const rems = allReminders.filter(r => selectedReminders.includes(r.id));
+                            if (evs.length > 0 || rems.length > 0) {
+                                useShareEventsStore.getState().openShare(evs, rems, {
                                     onSuccess: () => {
                                         setSelectedEvents([]);
                                         setSelectedReminders([]);
                                         useSelectionStore.getState().clearSelection();
                                     },
                                 });
-                            } else {
-                                handleShareSelected();
                             }
                         },
                         color: accent.primary,
@@ -1920,7 +1977,7 @@ export default function HomeScreen() {
                                         key={`event-${timelineItem.event.id}-${timelineItem.time_ms}`}
                                         event={timelineItem.event}
                                         itemTime={timelineItem.time_ms}
-                                        isLast={idx === section.data.length - 1}
+                                        isLast={idx === section.data.length - 1 && (!section.pastData || section.pastData.length === 0)}
                                         isSelected={selectedEvents.includes(timelineItem.event.id)}
                                         isSelectionMode={isSelectionMode}
                                         now={now}
@@ -1941,7 +1998,7 @@ export default function HomeScreen() {
                                     <AgendaReminderRow
                                         key={`reminder-${timelineItem.item.id}`}
                                         item={timelineItem.item}
-                                        isLast={idx === section.data.length - 1}
+                                        isLast={idx === section.data.length - 1 && (!section.pastData || section.pastData.length === 0)}
                                         isSelected={selectedReminders.includes(timelineItem.item.id)}
                                         isSelectionMode={isSelectionMode}
                                         isSubtasksExpanded={!!expandedSubtaskCardIds[timelineItem.item.id]}
@@ -1960,6 +2017,102 @@ export default function HomeScreen() {
                                 );
                             }
                         })}
+                        {section.pastData && section.pastData.length > 0 && (
+                            <View style={{ borderTopWidth: 1, borderTopColor: colors.borderSubtle }}>
+                                <TouchableOpacity
+                                    activeOpacity={0.7}
+                                    onPress={() => {
+                                        LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+                                        setShowPastTodayEvents(prev => !prev);
+                                    }}
+                                    style={styles.pastEventsToggleRow}
+                                >
+                                    <Clock size={13} color={colors.textMuted} />
+                                    <Text style={[styles.pastEventsToggleText, { color: colors.textMuted }]}>
+                                        {language === 'es'
+                                            ? `${section.pastData.length} evento${section.pastData.length > 1 ? 's' : ''} finalizado${section.pastData.length > 1 ? 's' : ''} hoy`
+                                            : `${section.pastData.length} finished event${section.pastData.length > 1 ? 's' : ''} today`}
+                                    </Text>
+                                    <ChevronDown
+                                        size={14}
+                                        color={colors.textMuted}
+                                        style={{ transform: [{ rotate: showPastTodayEvents ? '180deg' : '0deg' }] }}
+                                    />
+                                </TouchableOpacity>
+                                {showPastTodayEvents && section.pastData.map((timelineItem, idx) => (
+                                    <AgendaEventRow
+                                        key={`past-event-${timelineItem.event.id}-${timelineItem.time_ms}`}
+                                        event={timelineItem.event}
+                                        itemTime={timelineItem.time_ms}
+                                        isLast={idx === section.pastData!.length - 1}
+                                        isPast={true}
+                                        isSelected={selectedEvents.includes(timelineItem.event.id)}
+                                        isSelectionMode={isSelectionMode}
+                                        now={now}
+                                        language={language}
+                                        isDark={isDark}
+                                        colors={colors}
+                                        accent={accent}
+                                        onPress={handlePressEvent}
+                                        onLongPress={handleLongPressEvent}
+                                        onPressNote={handlePressNote}
+                                        onEdit={handleEditEvent}
+                                        onDeleteDismiss={handleDeleteEventDismiss}
+                                        onRequestRecurringDelete={handleRequestRecurringDelete}
+                                    />
+                                ))}
+                            </View>
+                        )}
+                    </VeyraSurface>
+                )}
+                {section.data.length === 0 && section.pastData && section.pastData.length > 0 && (
+                    <VeyraSurface
+                        level={1}
+                        radius="lg"
+                        style={[styles.agendaGroupedCard, { borderColor: colors.borderSubtle, marginTop: 10 }]}
+                    >
+                        <TouchableOpacity
+                            activeOpacity={0.7}
+                            onPress={() => {
+                                LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+                                setShowPastTodayEvents(prev => !prev);
+                            }}
+                            style={styles.pastEventsToggleRow}
+                        >
+                            <Clock size={13} color={colors.textMuted} />
+                            <Text style={[styles.pastEventsToggleText, { color: colors.textMuted }]}>
+                                {language === 'es'
+                                    ? `${section.pastData.length} evento${section.pastData.length > 1 ? 's' : ''} finalizado${section.pastData.length > 1 ? 's' : ''} hoy`
+                                    : `${section.pastData.length} finished event${section.pastData.length > 1 ? 's' : ''} today`}
+                            </Text>
+                            <ChevronDown
+                                size={14}
+                                color={colors.textMuted}
+                                style={{ transform: [{ rotate: showPastTodayEvents ? '180deg' : '0deg' }] }}
+                            />
+                        </TouchableOpacity>
+                        {showPastTodayEvents && section.pastData.map((timelineItem, idx) => (
+                            <AgendaEventRow
+                                key={`past-event-${timelineItem.event.id}-${timelineItem.time_ms}`}
+                                event={timelineItem.event}
+                                itemTime={timelineItem.time_ms}
+                                isLast={idx === section.pastData!.length - 1}
+                                isPast={true}
+                                isSelected={selectedEvents.includes(timelineItem.event.id)}
+                                isSelectionMode={isSelectionMode}
+                                now={now}
+                                language={language}
+                                isDark={isDark}
+                                colors={colors}
+                                accent={accent}
+                                onPress={handlePressEvent}
+                                onLongPress={handleLongPressEvent}
+                                onPressNote={handlePressNote}
+                                onEdit={handleEditEvent}
+                                onDeleteDismiss={handleDeleteEventDismiss}
+                                onRequestRecurringDelete={handleRequestRecurringDelete}
+                            />
+                        ))}
                     </VeyraSurface>
                 )}
             </Reanimated.View>
@@ -2222,6 +2375,8 @@ export default function HomeScreen() {
             >
                 <ScrollView
                     showsVerticalScrollIndicator={false}
+                    removeClippedSubviews={Platform.OS === 'android'}
+                    scrollEventThrottle={16}
                     contentContainerStyle={{
                         paddingBottom: insets.bottom + (isSelectionMode ? 130 : 90),
                         paddingTop: 8,
@@ -2235,13 +2390,15 @@ export default function HomeScreen() {
             </Animated.View>
         </Reanimated.View>
 
-            {/* 2. VISTA DE NOTAS */}
+            {/* 2. VISTA DE NOTAS (Montado bajo demanda en GPU para máximo rendimiento de inicio) */}
+            {hasOpenedNotes && (
                 <Reanimated.View
                     style={[StyleSheet.absoluteFill, notesCrossfadeStyle]}
                     pointerEvents={mainActiveTab === 'notes' ? 'auto' : 'none'}
                 >
                     <NotesScreen hideBars />
                 </Reanimated.View>
+            )}
             </View>
             <BottomTabBar />
 
@@ -3436,6 +3593,18 @@ const styles = StyleSheet.create({
     liveEventTime: {
         fontSize: 11.5,
         fontWeight: '600',
+    },
+    pastEventsToggleRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingHorizontal: 14,
+        paddingVertical: 11,
+    },
+    pastEventsToggleText: {
+        fontSize: 12,
+        fontWeight: '600',
+        flex: 1,
+        marginLeft: 7,
     },
     emptyDateCleanContainer: {
         paddingVertical: 32,

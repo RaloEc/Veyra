@@ -22,6 +22,8 @@ import {
     ChevronRight,
     Cloud,
     RefreshCw,
+    Users,
+    Radio,
 } from '@tamagui/lucide-icons';
 
 import { useStore } from '../../store/useStore';
@@ -148,7 +150,7 @@ export function UserProfileDropdown({ isVisible, onClose }: UserProfileDropdownP
         onClose();
         setTimeout(() => {
             if (pathname === route) return;
-            if (pathname === '/') {
+            if (route === '/poc-yjs' || pathname === '/') {
                 router.push(route as any);
             } else {
                 router.replace(route as any);
@@ -164,6 +166,20 @@ export function UserProfileDropdown({ isVisible, onClose }: UserProfileDropdownP
     };
 
     const menuItems = useMemo(() => [
+        {
+            icon: Users,
+            label: t('menu.join_code', { defaultValue: 'Unirse con código' }),
+            route: '/join',
+            color: '#8B5CF6',
+            bg: isDark ? 'rgba(139, 92, 246, 0.16)' : 'rgba(139, 92, 246, 0.12)',
+        },
+        {
+            icon: Radio,
+            label: 'PoC Colaboración Yjs',
+            route: '/poc-yjs',
+            color: '#10B981',
+            bg: isDark ? 'rgba(16, 185, 129, 0.16)' : 'rgba(16, 185, 129, 0.12)',
+        },
         {
             icon: BarChart3,
             label: t('menu.stats', { defaultValue: 'Estadísticas' }),

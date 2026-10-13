@@ -33,6 +33,7 @@ import { CalendarEvent } from '../../types/db';
 import { CollaborationService } from '../../services/collaborationService';
 import { useStore } from '../../store/useStore';
 import { APP_CONFIG } from '../../constants/appConfig';
+import { encodeBase64 } from '../../utils/base64Utils';
 
 export type ShareSyncMode = 'independent' | 'synced';
 export { ShareEventsMorphCard } from './ShareEventsMorphCard';
@@ -60,7 +61,7 @@ export function ShareEventsModal({
     if (!visible || events.length === 0) return null;
 
     // Generar texto formateado y legible para compartir
-    const buildFormattedText = (link?: string): string => {
+    const buildFormattedText = (link?: string, inviteCode?: string): string => {
         const count = events.length;
         const header = isEs
             ? `📅 ${count === 1 ? 'Evento' : `${count} Eventos`} en Veyra`
@@ -86,10 +87,15 @@ export function ShareEventsModal({
         });
 
         text += '────────────────────────\n';
+        if (inviteCode) {
+            text += isEs
+                ? `🔑 Código de invitación: ${inviteCode}\n(Pégalo en Veyra > Unirse con código)\n\n`
+                : `🔑 Invitation code: ${inviteCode}\n(Paste it in Veyra > Join with code)\n\n`;
+        }
         if (link) {
             text += isEs
-                ? `👉 Importar a tu agenda en Veyra:\n${link}\n\n`
-                : `👉 Import into your Veyra schedule:\n${link}\n\n`;
+                ? `👉 Abrir en la app Veyra:\n${link}\n\n`
+                : `👉 Open in Veyra app:\n${link}\n\n`;
         }
         text += 'Organizado con Veyra ✨';
 
@@ -111,7 +117,7 @@ export function ShareEventsModal({
             }));
             const jsonStr = JSON.stringify(exportPayload);
             // Base64 seguro para URL
-            const base64 = btoa(unescape(encodeURIComponent(jsonStr)));
+            const base64 = encodeBase64(jsonStr);
             return `${APP_CONFIG.baseUrl}/join?import=${encodeURIComponent(base64)}`;
         } catch {
             return '';
@@ -122,35 +128,57 @@ export function ShareEventsModal({
         setIsSharing(true);
         try {
             let shareLink = '';
+            let rawInviteCode: string | undefined;
 
-            if (syncMode === 'synced') {
-                // Modo colaborativo en vivo: Requiere sesión en Supabase
-                if (!session?.user?.id) {
-                    Alert.alert(
-                        isEs ? 'Inicio de sesión requerido' : 'Login required',
-                        isEs
-                            ? 'Para sincronizar eventos en tiempo real necesitas una cuenta iniciada en Veyra.'
-                            : 'To sync events in real time, you must be signed in to your Veyra account.'
-                    );
-                    setIsSharing(false);
-                    return;
-                }
+            if (!session?.user?.id) {
+                Alert.alert(
+                    isEs ? 'Inicio de sesión requerido' : 'Login required',
+                    isEs
+                        ? 'Para compartir eventos con un enlace corto necesitas iniciar sesión en tu cuenta de Veyra.'
+                        : 'To share events with a short link, please sign in to your Veyra account.'
+                );
+                setIsSharing(false);
+                return;
+            }
 
-                // Si hay un solo evento o varios, creamos invitación para el primero o paquete
+            // Pre-sincronizar los eventos a Supabase para asegurar que existan cuando el invitado los descargue
+            try {
+                const { supabase } = await import('../../lib/supabase');
+                const { SyncService } = await import('../../services/syncService');
+                const remoteEvents = events.map(ev => SyncService.localEventToRemote(ev, session.user.id));
+                await supabase.from('events').upsert(remoteEvents, { onConflict: 'id' });
+            } catch (preSyncErr) {
+                console.warn('[ShareEventsModal] Error al pre-sincronizar eventos:', preSyncErr);
+            }
+
+            const isIndependent = syncMode === 'independent';
+            if (events.length > 1) {
+                const batchItems: any[] = events.map(e => ({
+                    target_type: 'event' as const,
+                    target_id: e.id,
+                    target_name: e.title,
+                    role: isIndependent ? ('viewer' as const) : ('editor' as const),
+                    is_copy: isIndependent,
+                }));
+                const res = await CollaborationService.createBatchInvitation(
+                    batchItems,
+                    `${events.length} eventos de horario`
+                );
+                rawInviteCode = res.invitation.invite_code;
+                shareLink = res.inviteUrl || `${APP_CONFIG.baseUrl}/join?code=${res.invitation.invite_code}`;
+            } else {
                 const primaryEvent = events[0];
                 const res = await CollaborationService.createInvitation(
                     'event',
                     primaryEvent.id,
-                    events.length === 1 ? primaryEvent.title : `${events.length} eventos de horario`,
-                    'editor'
+                    primaryEvent.title,
+                    isIndependent ? 'viewer' : 'editor'
                 );
+                rawInviteCode = res.invitation.invite_code;
                 shareLink = res.inviteUrl || `${APP_CONFIG.baseUrl}/join?code=${res.invitation.invite_code}`;
-            } else {
-                // Modo copia independiente (snapshot sin enlace vivo)
-                shareLink = buildImportDeepLink();
             }
 
-            const message = buildFormattedText(shareLink);
+            const message = buildFormattedText(shareLink, rawInviteCode);
 
             await Share.share({
                 title: isEs ? 'Compartir eventos de Veyra' : 'Share Veyra Events',

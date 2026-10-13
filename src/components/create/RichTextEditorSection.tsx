@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { RichEditor } from 'react-native-pell-rich-editor';
 import { useVeyraTheme } from '../../theme/useVeyraTheme';
 import { VeyraSurface } from '../ui/VeyraSurface';
+import { getFontFamilyCss, GOOGLE_FONTS_CSS_IMPORT, NOTE_FONTS_OVERRIDE_CSS, NOTE_FONTS } from '../../constants/noteFonts';
 
 interface RichTextEditorSectionProps {
     description: string;
@@ -14,12 +15,23 @@ interface RichTextEditorSectionProps {
     flat?: boolean;
     isDark?: boolean;
     readOnly?: boolean;
+    fontFamily?: string;
     onCropImage?: (imageUri: string) => void;
     onDragStateChange?: (isDragging: boolean) => void;
     onAutoScroll?: (deltaY: number) => void;
     onUndo?: () => void;
     onRedo?: () => void;
     onCursorPosition?: (offsetY: number) => void;
+    onCursorActivity?: (cursor: {
+        blockIndex?: number;
+        charOffset?: number;
+        globalCharOffset?: number;
+        top: number;
+        left: number;
+        height: number;
+        collapsed: boolean;
+    }) => void;
+    onCursorRemove?: () => void;
 }
 
 /**
@@ -33,18 +45,22 @@ export function RichTextEditorSection({
     onBlur,
     flat,
     readOnly = false,
+    fontFamily = 'sans',
     onCropImage,
     onDragStateChange,
     onAutoScroll,
     onUndo,
     onRedo,
     onCursorPosition,
+    onCursorActivity,
+    onCursorRemove,
 }: RichTextEditorSectionProps) {
     const { t } = useTranslation();
     const { colors, typography, radii, isDark, accent } = useVeyraTheme();
     const screenHeight = Dimensions.get('screen').height;
     const calculatedMinHeight = flat ? Math.max(560, screenHeight - 140) : 68;
     const accentColor = accent.primary || '#8B5CF6';
+    const activeFontCss = getFontFamilyCss(fontFamily);
     const internalRef = useRef<any>(null);
     const activeRef = editorRef || internalRef;
     const activeRefHolder = useRef(activeRef);
@@ -137,6 +153,7 @@ export function RichTextEditorSection({
                 }
 
                 function notifyChange() {
+                    if (window.__veyraIsApplyingRemote) return;
                     const contentEl = getEditor();
                     if (contentEl) {
                         try {
@@ -1374,11 +1391,19 @@ export function RichTextEditorSection({
                     onRedo?.();
                     return;
                 }
+                if (parsed.type === 'CURSOR_ACTIVITY' && parsed.cursor) {
+                    onCursorActivity?.(parsed.cursor);
+                    return;
+                }
+                if (parsed.type === 'CURSOR_REMOVE') {
+                    onCursorRemove?.();
+                    return;
+                }
             }
         } catch (e) {
             console.error('[Veyra Debug Native] Error procesando handleMessage:', e);
         }
-    }, [onCropImage, onDragStateChange, onAutoScroll, activeRef, setDescription, onUndo, onRedo]);
+    }, [onCropImage, onDragStateChange, onAutoScroll, activeRef, setDescription, onUndo, onRedo, onCursorActivity, onCursorRemove]);
 
     const injectCheckboxHandlerScript = useCallback(() => {
         const ref = activeRefHolder.current?.current;
@@ -1644,6 +1669,773 @@ export function RichTextEditorSection({
         } catch (e) {}
     }, []);
 
+    const injectCollabHandlerScript = useCallback(() => {
+        const ref = activeRefHolder.current?.current;
+        if (!ref) return;
+        const script = `
+            (function() {
+                var SCRIPT_VER = 'v2.0';
+                var editor = document.querySelector('.pell-content') || document.getElementById('content') || document.getElementById('editor') || document.body;
+                if (!editor) return;
+
+                // 1. Interceptar postMessage para neutralizar ecos automáticos al reconciliar DOM remoto
+                if (window.ReactNativeWebView && !window.__veyraMsgInterceptionActive) {
+                    window.__veyraMsgInterceptionActive = true;
+                    var _origPost = window.ReactNativeWebView.postMessage.bind(window.ReactNativeWebView);
+                    window.ReactNativeWebView.postMessage = function(data) {
+                        if (window.__veyraIsApplyingRemote) {
+                            try {
+                                var p = (typeof data === 'string') ? JSON.parse(data) : data;
+                                if (p && (p.type === 'CONTENT_CHANGE' || p.type === 'onChange')) {
+                                    return; // Suprimir eco provocado por actualización remota
+                                }
+                            } catch(err) {}
+                        }
+                        return _origPost(data);
+                    };
+                }
+
+                // 2. Estilos para cursores remotos (estilo Google Docs / Figma)
+                if (!document.getElementById('veyra-collab-styles')) {
+                    var styleEl = document.createElement('style');
+                    styleEl.id = 'veyra-collab-styles';
+                    styleEl.textContent = \`
+                        @keyframes veyraCursorPulse {
+                            0%, 100% { opacity: 1; }
+                            50% { opacity: 0.5; }
+                        }
+                        .veyra-remote-cursor {
+                            animation: veyraCursorPulse 1.4s infinite ease-in-out;
+                        }
+                        .veyra-cursor-flag {
+                            pointer-events: none;
+                            user-select: none;
+                            -webkit-user-select: none;
+                        }
+                    \`;
+                    document.head.appendChild(styleEl);
+                }
+
+                // Contenedor de cursores remotos en el body
+                var cursorContainer = document.getElementById('veyra-remote-cursors');
+                if (!cursorContainer) {
+                    cursorContainer = document.createElement('div');
+                    cursorContainer.id = 'veyra-remote-cursors';
+                    cursorContainer.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:9990;overflow:visible;';
+                    document.body.appendChild(cursorContainer);
+                }
+
+                var cursorTimers = window.__veyraCursorTimers || {};
+                window.__veyraCursorTimers = cursorTimers;
+                var remoteCursorsMap = window.__veyraRemoteCursors || {};
+                window.__veyraRemoteCursors = remoteCursorsMap;
+
+                // 3. Helpers de DOM, nodos de texto y medición ultra-precisa de caret
+                function findTextNodes(node) {
+                    var nodes = [];
+                    if (!node) return nodes;
+                    if (node.nodeType === 3) {
+                        nodes.push(node);
+                    } else {
+                        for (var i = 0; i < node.childNodes.length; i++) {
+                            nodes = nodes.concat(findTextNodes(node.childNodes[i]));
+                        }
+                    }
+                    return nodes;
+                }
+
+                function getCoordsFromRange(range) {
+                    if (!range) return null;
+                    try {
+                        // 1. Si el range está en un nodo de texto con caracteres, medir usando selección de 1 caracter para obtener coordenadas EXACTAS
+                        if (range.startContainer && range.startContainer.nodeType === 3) {
+                            var textNode = range.startContainer;
+                            var offset = range.startOffset;
+                            var nodeLen = textNode.nodeValue ? textNode.nodeValue.length : 0;
+                            if (nodeLen > 0) {
+                                var dummyRange = document.createRange();
+                                if (offset < nodeLen) {
+                                    dummyRange.setStart(textNode, offset);
+                                    dummyRange.setEnd(textNode, offset + 1);
+                                    var rects = dummyRange.getClientRects();
+                                    var r = (rects && rects.length > 0) ? rects[0] : dummyRange.getBoundingClientRect();
+                                    if (r && r.height > 0) {
+                                        return {
+                                            top: Math.round(r.top + window.pageYOffset),
+                                            left: Math.round(r.left + window.pageXOffset),
+                                            height: Math.round(r.height || 22)
+                                        };
+                                    }
+                                } else if (offset > 0) {
+                                    dummyRange.setStart(textNode, offset - 1);
+                                    dummyRange.setEnd(textNode, offset);
+                                    var rects = dummyRange.getClientRects();
+                                    var r = (rects && rects.length > 0) ? rects[0] : dummyRange.getBoundingClientRect();
+                                    if (r && r.height > 0) {
+                                        return {
+                                            top: Math.round(r.top + window.pageYOffset),
+                                            left: Math.round(r.right + window.pageXOffset),
+                                            height: Math.round(r.height || 22)
+                                        };
+                                    }
+                                }
+                            }
+                        }
+
+                        // 2. Rectángulos de cliente estándar (si el browser los soporta en collapsed range)
+                        var rects = range.getClientRects();
+                        if (rects && rects.length > 0 && rects[0].height > 0) {
+                            var r = rects[0];
+                            return {
+                                top: Math.round(r.top + window.pageYOffset),
+                                left: Math.round(r.left + window.pageXOffset),
+                                height: Math.round(r.height || 22)
+                            };
+                        }
+
+                        // 3. Medición universal con marcador temporal no destructivo para líneas vacías, <br> o saltos de línea
+                        var marker = document.createElement('span');
+                        marker.textContent = '\uFEFF';
+                        marker.style.cssText = 'display:inline-block;width:1px;height:1em;padding:0;margin:0;border:0;line-height:inherit;font-size:inherit;';
+                        var clone = range.cloneRange();
+                        clone.collapse(true);
+                        clone.insertNode(marker);
+                        var mRect = marker.getBoundingClientRect();
+                        var markerRes = null;
+                        if (mRect && (mRect.top > 0 || mRect.height > 0)) {
+                            markerRes = {
+                                top: Math.round(mRect.top + window.pageYOffset),
+                                left: Math.round(mRect.left + window.pageXOffset),
+                                height: Math.round(Math.max(18, Math.min(mRect.height || 22, 32)))
+                            };
+                        }
+                        if (marker.parentNode) {
+                            var markerParent = marker.parentNode;
+                            markerParent.removeChild(marker);
+                            markerParent.normalize();
+                        }
+                        if (markerRes) return markerRes;
+
+                        // 4. BoundingClientRect directo
+                        var bRect = range.getBoundingClientRect();
+                        if (bRect && (bRect.height > 0 || bRect.width > 0)) {
+                            return {
+                                top: Math.round(bRect.top + window.pageYOffset),
+                                left: Math.round(bRect.left + window.pageXOffset),
+                                height: Math.round(bRect.height || 22)
+                            };
+                        }
+
+                        // 5. Fallback con elemento contenedor más cercano
+                        var elem = range.startContainer;
+                        while (elem && elem.nodeType !== 1 && elem !== editor && elem !== document.body) {
+                            elem = elem.parentNode;
+                        }
+                        if (elem && elem !== document.body) {
+                            var eRect = elem.getBoundingClientRect();
+                            if (eRect && (eRect.height > 0 || eRect.top > 0)) {
+                                return {
+                                    top: Math.round(eRect.top + window.pageYOffset),
+                                    left: Math.round(eRect.left + 8 + window.pageXOffset),
+                                    height: Math.round(Math.min(eRect.height || 22, 28))
+                                };
+                            }
+                        }
+                    } catch(e) {}
+                    return null;
+                }
+
+                function getCaretOffset(element) {
+                    var caretOffset = 0;
+                    try {
+                        var sel = window.getSelection();
+                        if (sel && sel.rangeCount > 0) {
+                            var range = sel.getRangeAt(0);
+                            var preCaretRange = range.cloneRange();
+                            preCaretRange.selectNodeContents(element);
+                            preCaretRange.setEnd(range.endContainer, range.endOffset);
+                            caretOffset = preCaretRange.toString().length;
+                        }
+                    } catch(e) {}
+                    return caretOffset;
+                }
+
+                function setCaretOffset(element, offset) {
+                    try {
+                        var textNodes = findTextNodes(element);
+                        var currentOffset = 0;
+                        var targetNode = null;
+                        var targetOffset = 0;
+
+                        for (var i = 0; i < textNodes.length; i++) {
+                            var node = textNodes[i];
+                            var len = node.nodeValue ? node.nodeValue.length : 0;
+                            if (currentOffset + len >= offset) {
+                                targetNode = node;
+                                targetOffset = offset - currentOffset;
+                                break;
+                            }
+                            currentOffset += len;
+                        }
+
+                        if (!targetNode && textNodes.length > 0) {
+                            targetNode = textNodes[textNodes.length - 1];
+                            targetOffset = targetNode.nodeValue ? targetNode.nodeValue.length : 0;
+                        }
+
+                        var sel = window.getSelection();
+                        var range = document.createRange();
+
+                        if (targetNode) {
+                            range.setStart(targetNode, Math.min(targetOffset, targetNode.nodeValue ? targetNode.nodeValue.length : 0));
+                            range.collapse(true);
+                        } else {
+                            range.selectNodeContents(element);
+                            range.collapse(true);
+                        }
+
+                        sel.removeAllRanges();
+                        sel.addRange(range);
+                    } catch(e) {}
+                }
+
+                function getCoordsFromBlock(blockIndex, charOffset) {
+                    try {
+                        if (!editor || !editor.childNodes || editor.childNodes.length === 0) return null;
+                        // NUNCA clampear a bloques anteriores si el bloque no existe aún en este cliente
+                        if (blockIndex < 0 || blockIndex >= editor.childNodes.length) return null;
+                        var targetBlock = editor.childNodes[blockIndex];
+                        if (!targetBlock) return null;
+
+                        var textNodes = findTextNodes(targetBlock);
+                        if (textNodes.length === 0) {
+                            var blockRect = targetBlock.getBoundingClientRect();
+                            if (blockRect && (blockRect.top > 0 || blockRect.left > 0)) {
+                                return {
+                                    top: Math.round(blockRect.top + window.pageYOffset),
+                                    left: Math.round(blockRect.left + window.pageXOffset),
+                                    height: Math.round(Math.min(blockRect.height || 22, 28))
+                                };
+                            }
+                            return null;
+                        }
+
+                        var cur = 0;
+                        var targetNode = null;
+                        var targetOffset = 0;
+
+                        for (var i = 0; i < textNodes.length; i++) {
+                            var tn = textNodes[i];
+                            var len = tn.nodeValue ? tn.nodeValue.length : 0;
+                            if (cur + len >= charOffset) {
+                                targetNode = tn;
+                                targetOffset = charOffset - cur;
+                                break;
+                            }
+                            cur += len;
+                        }
+
+                        if (!targetNode && textNodes.length > 0) {
+                            targetNode = textNodes[textNodes.length - 1];
+                            targetOffset = targetNode.nodeValue ? targetNode.nodeValue.length : 0;
+                        }
+
+                        if (targetNode) {
+                            var nodeLen = targetNode.nodeValue ? targetNode.nodeValue.length : 0;
+                            var clamped = Math.min(Math.max(0, targetOffset), nodeLen);
+                            var r = document.createRange();
+
+                            if (clamped < nodeLen) {
+                                r.setStart(targetNode, clamped);
+                                r.setEnd(targetNode, clamped + 1);
+                                var rects = r.getClientRects();
+                                var rect = (rects && rects.length > 0) ? rects[0] : r.getBoundingClientRect();
+                                if (rect && rect.height > 0) {
+                                    return {
+                                        top: Math.round(rect.top + window.pageYOffset),
+                                        left: Math.round(rect.left + window.pageXOffset),
+                                        height: Math.round(rect.height || 22)
+                                    };
+                                }
+                            } else if (clamped > 0) {
+                                r.setStart(targetNode, clamped - 1);
+                                r.setEnd(targetNode, clamped);
+                                var rects = r.getClientRects();
+                                var rect = (rects && rects.length > 0) ? rects[0] : r.getBoundingClientRect();
+                                if (rect && rect.height > 0) {
+                                    return {
+                                        top: Math.round(rect.top + window.pageYOffset),
+                                        left: Math.round(rect.right + window.pageXOffset),
+                                        height: Math.round(rect.height || 22)
+                                    };
+                                }
+                            }
+
+                            r.setStart(targetNode, clamped);
+                            r.collapse(true);
+                            return getCoordsFromRange(r);
+                        }
+                    } catch(err) {}
+                    return null;
+                }
+
+                function getCoordsFromGlobalOffset(globalOffset) {
+                    try {
+                        if (!editor) return null;
+                        var textNodes = findTextNodes(editor);
+                        if (textNodes.length === 0) return null;
+
+                        var cur = 0;
+                        var targetNode = null;
+                        var targetOffset = 0;
+
+                        for (var i = 0; i < textNodes.length; i++) {
+                            var tn = textNodes[i];
+                            var len = tn.nodeValue ? tn.nodeValue.length : 0;
+                            if (cur + len >= globalOffset) {
+                                targetNode = tn;
+                                targetOffset = globalOffset - cur;
+                                break;
+                            }
+                            cur += len;
+                        }
+
+                        // Si el offset global está más allá de todo el texto disponible en este cliente, no clampear a la primera línea
+                        if (!targetNode) return null;
+
+                        var nodeLen = targetNode.nodeValue ? targetNode.nodeValue.length : 0;
+                        var clamped = Math.min(Math.max(0, targetOffset), nodeLen);
+                        var r = document.createRange();
+
+                        if (clamped < nodeLen) {
+                            r.setStart(targetNode, clamped);
+                            r.setEnd(targetNode, clamped + 1);
+                            var rects = r.getClientRects();
+                            var rect = (rects && rects.length > 0) ? rects[0] : r.getBoundingClientRect();
+                            if (rect && rect.height > 0) {
+                                return {
+                                    top: Math.round(rect.top + window.pageYOffset),
+                                    left: Math.round(rect.left + window.pageXOffset),
+                                    height: Math.round(rect.height || 22)
+                                };
+                            }
+                        } else if (clamped > 0) {
+                            r.setStart(targetNode, clamped - 1);
+                            r.setEnd(targetNode, clamped);
+                            var rects = r.getClientRects();
+                            var rect = (rects && rects.length > 0) ? rects[0] : r.getBoundingClientRect();
+                            if (rect && rect.height > 0) {
+                                return {
+                                    top: Math.round(rect.top + window.pageYOffset),
+                                    left: Math.round(rect.right + window.pageXOffset),
+                                    height: Math.round(rect.height || 22)
+                                };
+                            }
+                        }
+
+                        r.setStart(targetNode, clamped);
+                        r.collapse(true);
+                        return getCoordsFromRange(r);
+                    } catch(err) {}
+                    return null;
+                }
+
+                function getCaretCoordinates() {
+                    var sel = window.getSelection();
+                    if (!sel || sel.rangeCount === 0) return null;
+                    var range = sel.getRangeAt(0);
+                    var coords = getCoordsFromRange(range);
+                    if (coords) return coords;
+
+                    // Fallback con elemento contenedor
+                    var node = range.startContainer;
+                    var el = (node && node.nodeType === 1) ? node : (node ? node.parentElement : null);
+                    if (el && el !== document.body) {
+                        var elRect = el.getBoundingClientRect();
+                        return {
+                            top: Math.round(elRect.top + window.pageYOffset),
+                            left: Math.round(elRect.left + window.pageXOffset),
+                            height: Math.round(Math.min(elRect.height || 22, 28))
+                        };
+                    }
+                    return null;
+                }
+
+                // 4. Renderizado adaptativo de cursores remotos (prioridad directa a coordenadas transmitidas por el emisor)
+                function renderRemoteCursor(data) {
+                    try {
+                        if (!data || !data.clientId || !data.cursor) return;
+                        var container = document.getElementById('veyra-remote-cursors');
+                        if (!container) return;
+
+                        var id = 'veyra-cursor-' + data.clientId;
+                        var cursorEl = document.getElementById(id);
+
+                        if (!cursorEl) {
+                            cursorEl = document.createElement('div');
+                            cursorEl.id = id;
+                            cursorEl.className = 'veyra-remote-cursor';
+                            cursorEl.style.cssText = 'position:absolute;width:2.5px;border-radius:1.5px;pointer-events:none;transition:top 0.08s ease-out, left 0.08s ease-out, opacity 0.25s ease;z-index:9992;opacity:1;';
+
+                            var flag = document.createElement('div');
+                            flag.className = 'veyra-cursor-flag';
+                            flag.style.cssText = 'position:absolute;bottom:100%;left:-2px;margin-bottom:2px;padding:2px 6px;border-radius:4px;font-size:10px;font-family:-apple-system,BlinkMacSystemFont,Roboto,sans-serif;font-weight:700;color:#ffffff;white-space:nowrap;box-shadow:0 1.5px 5px rgba(0,0,0,0.35);line-height:1.2;';
+                            cursorEl.appendChild(flag);
+                            container.appendChild(cursorEl);
+                        }
+
+                        var col = data.color || '#8B5CF6';
+                        cursorEl.style.backgroundColor = col;
+
+                        // Las coordenadas transmitidas por el emisor son la fuente de verdad directa del cursor.
+                        // Solo usar resolución semántica local si el emisor no transmitió top > 0 o para afinar la columna si está en la misma línea.
+                        var sentTop = (typeof data.cursor.top === 'number' && data.cursor.top > 0) ? data.cursor.top : null;
+                        var sentLeft = (typeof data.cursor.left === 'number') ? data.cursor.left : null;
+                        var sentHeight = (typeof data.cursor.height === 'number' && data.cursor.height > 0) ? data.cursor.height : 22;
+
+                        var localCoords = null;
+                        if (typeof data.cursor.blockIndex === 'number' && typeof data.cursor.charOffset === 'number') {
+                            localCoords = getCoordsFromBlock(data.cursor.blockIndex, data.cursor.charOffset);
+                        }
+                        if (!localCoords && typeof data.cursor.globalCharOffset === 'number') {
+                            localCoords = getCoordsFromGlobalOffset(data.cursor.globalCharOffset);
+                        }
+
+                        var finalTop = sentTop !== null ? sentTop : (localCoords ? localCoords.top : 0);
+                        var finalLeft = sentLeft !== null ? sentLeft : (localCoords ? localCoords.left : 0);
+                        var finalHeight = sentHeight;
+
+                        // Si la resolución local confirma exactamente la misma línea vertical, afinar posición horizontal
+                        if (localCoords && sentTop !== null && Math.abs(localCoords.top - sentTop) <= 15) {
+                            finalLeft = localCoords.left;
+                        }
+
+                        cursorEl.style.height = finalHeight + 'px';
+                        cursorEl.style.top = finalTop + 'px';
+                        cursorEl.style.left = finalLeft + 'px';
+                        cursorEl.style.opacity = '1';
+
+                        var flagEl = cursorEl.querySelector('.veyra-cursor-flag');
+                        if (flagEl) {
+                            flagEl.textContent = data.name || 'Colaborador';
+                            flagEl.style.backgroundColor = col;
+
+                            // Si el cursor está en la primera línea o muy cerca del borde superior (< 24px),
+                            // posicionar la etiqueta por DEBAJO de la línea del cursor para que nunca se corte bajo el input del título
+                            if (finalTop < 24) {
+                                flagEl.style.bottom = 'auto';
+                                flagEl.style.top = '100%';
+                                flagEl.style.marginTop = '2px';
+                                flagEl.style.marginBottom = '0px';
+                                flagEl.style.borderRadius = '0 4px 4px 4px';
+                            } else {
+                                flagEl.style.top = 'auto';
+                                flagEl.style.bottom = '100%';
+                                flagEl.style.marginTop = '0px';
+                                flagEl.style.marginBottom = '2px';
+                                flagEl.style.borderRadius = '4px 4px 4px 0';
+                            }
+
+                            // Evitar desborde lateral si el cursor está pegado al borde derecho de la pantalla
+                            var screenW = window.innerWidth || document.documentElement.clientWidth || 360;
+                            if (finalLeft > screenW - 80) {
+                                flagEl.style.left = 'auto';
+                                flagEl.style.right = '-2px';
+                            } else {
+                                flagEl.style.right = 'auto';
+                                flagEl.style.left = '-2px';
+                            }
+                        }
+
+                        if (cursorTimers[data.clientId]) {
+                            clearTimeout(cursorTimers[data.clientId]);
+                        }
+                        cursorTimers[data.clientId] = setTimeout(function() {
+                            if (cursorEl) {
+                                cursorEl.style.opacity = '0';
+                                setTimeout(function() {
+                                    if (cursorEl && cursorEl.parentNode) cursorEl.parentNode.removeChild(cursorEl);
+                                }, 300);
+                            }
+                        }, 12000);
+                    } catch(err) {}
+                }
+
+                function refreshAllRemoteCursors() {
+                    try {
+                        if (!window.__veyraRemoteCursors) return;
+                        for (var cid in window.__veyraRemoteCursors) {
+                            if (window.__veyraRemoteCursors.hasOwnProperty(cid)) {
+                                renderRemoteCursor(window.__veyraRemoteCursors[cid]);
+                            }
+                        }
+                    } catch(e) {}
+                }
+
+                window.__veyraUpdateRemoteCursor = function(data) {
+                    try {
+                        if (!data || !data.clientId) return;
+                        window.__veyraRemoteCursors[data.clientId] = data;
+                        renderRemoteCursor(data);
+                    } catch(err) {}
+                };
+
+                window.__veyraRemoveRemoteCursor = function(clientId) {
+                    try {
+                        if (window.__veyraRemoteCursors) {
+                            delete window.__veyraRemoteCursors[clientId];
+                        }
+                        var id = 'veyra-cursor-' + clientId;
+                        var cursorEl = document.getElementById(id);
+                        if (cursorEl && cursorEl.parentNode) cursorEl.parentNode.removeChild(cursorEl);
+                    } catch(err) {}
+                };
+
+                // 5. Medición semántica y reporte al cliente nativo
+                var lastSentCursor = null;
+                var cursorMeasureTimeout = null;
+
+                function reportCursor() {
+                    try {
+                        var sel = window.getSelection();
+                        var isSelectionInEditor = sel && sel.rangeCount > 0 && editor && (editor.contains(sel.anchorNode) || editor === sel.anchorNode);
+                        var isFocused = (document.activeElement === editor || (editor && editor.contains(document.activeElement)) || isSelectionInEditor);
+                        if (!isFocused) return;
+
+                        if (!sel || sel.rangeCount === 0) return;
+                        var range = sel.getRangeAt(0);
+
+                        var coords = getCaretCoordinates();
+                        if (!coords || (coords.top === 0 && coords.left === 0 && editor && editor.textContent.trim().length > 0)) {
+                            return;
+                        }
+
+                        // Identificar bloque principal contenedor directo de #editor
+                        var anchorNode = range.startContainer;
+                        var blockNode = null;
+                        if (anchorNode && editor.contains(anchorNode)) {
+                            var curr = anchorNode;
+                            while (curr && curr.parentNode !== editor) {
+                                curr = curr.parentNode;
+                            }
+                            if (curr && curr.parentNode === editor) {
+                                blockNode = curr;
+                            }
+                        }
+
+                        var blockIndex = 0;
+                        var charOffset = 0;
+                        if (blockNode) {
+                            blockIndex = Array.prototype.indexOf.call(editor.childNodes, blockNode);
+                            charOffset = getCaretOffset(blockNode);
+                        } else if (anchorNode === editor) {
+                            blockIndex = Math.min(range.startOffset, Math.max(0, editor.childNodes.length - 1));
+                            charOffset = 0;
+                        }
+
+                        var globalCharOffset = getCaretOffset(editor);
+
+                        var payload = {
+                            blockIndex: blockIndex,
+                            charOffset: charOffset,
+                            globalCharOffset: globalCharOffset,
+                            top: coords.top,
+                            left: coords.left,
+                            height: coords.height || 22,
+                            collapsed: true
+                        };
+
+                        if (lastSentCursor &&
+                            lastSentCursor.blockIndex === payload.blockIndex &&
+                            lastSentCursor.charOffset === payload.charOffset &&
+                            Math.abs(lastSentCursor.top - payload.top) < 2 &&
+                            Math.abs(lastSentCursor.left - payload.left) < 2) {
+                            return;
+                        }
+                        lastSentCursor = payload;
+
+                        if (window.ReactNativeWebView && typeof window.ReactNativeWebView.postMessage === 'function') {
+                            window.ReactNativeWebView.postMessage(JSON.stringify({
+                                type: 'CURSOR_ACTIVITY',
+                                cursor: payload
+                            }));
+                        }
+                    } catch(e) {}
+                }
+
+                function onSelectionChange() {
+                    var sel = window.getSelection();
+                    var isSelectionInEditor = sel && sel.rangeCount > 0 && editor && (editor.contains(sel.anchorNode) || editor === sel.anchorNode);
+                    var isFocused = (document.activeElement === editor || (editor && editor.contains(document.activeElement)) || isSelectionInEditor);
+                    if (!isFocused) return;
+                    if (cursorMeasureTimeout) clearTimeout(cursorMeasureTimeout);
+                    cursorMeasureTimeout = setTimeout(reportCursor, 25);
+                }
+
+                if (!window.__veyraCollabEventsAttached) {
+                    window.__veyraCollabEventsAttached = true;
+                    document.addEventListener('selectionchange', onSelectionChange, true);
+                    editor.addEventListener('keyup', onSelectionChange, true);
+                    editor.addEventListener('pointerup', onSelectionChange, true);
+                    editor.addEventListener('touchend', onSelectionChange, true);
+                    editor.addEventListener('input', function() {
+                        onSelectionChange();
+                        refreshAllRemoteCursors();
+                    }, true);
+                    window.addEventListener('resize', refreshAllRemoteCursors, { passive: true });
+                    editor.addEventListener('focus', onSelectionChange, true);
+                    editor.addEventListener('blur', function() {
+                        lastSentCursor = null;
+                        if (window.ReactNativeWebView) {
+                            window.ReactNativeWebView.postMessage(JSON.stringify({
+                                type: 'CURSOR_REMOVE'
+                            }));
+                        }
+                    }, true);
+                }
+
+                // 6. Motor de reconciliación DOM no destructivo por bloques (permite edición simultánea)
+                // Motor de reconciliación DOM no destructivo v2 — edición simultánea sin saltos de cursor
+                // Estrategia: capturar offset ANTES de mutar el DOM, restaurar con rAF DESPUÉS
+                // para que el browser haya recalculado el layout antes de reposicionar la selección.
+                window.__veyraApplyRemoteContent = function(newHtml) {
+                    if (!editor || editor.innerHTML === newHtml) return;
+                    window.__veyraIsApplyingRemote = true;
+
+                    var isFocused = (document.activeElement === editor || editor.contains(document.activeElement));
+                    if (!isFocused) {
+                        // Sin foco local: reemplazar libremente y liberar el flag
+                        editor.innerHTML = newHtml;
+                        setTimeout(function() {
+                            window.__veyraIsApplyingRemote = false;
+                            refreshAllRemoteCursors();
+                        }, 80);
+                        return;
+                    }
+
+                    // --- Capturar estado de selección ANTES de cualquier mutación DOM ---
+                    var sel = window.getSelection();
+                    var anchorNode = (sel && sel.rangeCount > 0) ? sel.anchorNode : null;
+                    var localActiveBlock = null;
+
+                    if (anchorNode && editor.contains(anchorNode)) {
+                        var curr = anchorNode;
+                        while (curr && curr.parentNode !== editor) {
+                            curr = curr.parentNode;
+                        }
+                        if (curr && curr.parentNode === editor) {
+                            localActiveBlock = curr;
+                        }
+                    }
+
+                    var tempDiv = document.createElement('div');
+                    tempDiv.innerHTML = newHtml;
+
+                    // Caso: sin bloque activo identificable → reemplazar todo y restituir offset global
+                    if (!localActiveBlock || tempDiv.childNodes.length === 0) {
+                        var savedGlobal = getCaretOffset(editor);
+                        editor.innerHTML = newHtml;
+                        requestAnimationFrame(function() {
+                            try { setCaretOffset(editor, savedGlobal); } catch(e) {}
+                            window.__veyraIsApplyingRemote = false;
+                            refreshAllRemoteCursors();
+                        });
+                        return;
+                    }
+
+                    // --- Capturar offset dentro del bloque activo ANTES de mutarlo ---
+                    var caretInBlock = getCaretOffset(localActiveBlock);
+                    var activeIndex = Array.prototype.indexOf.call(editor.childNodes, localActiveBlock);
+                    var sChildren = Array.prototype.slice.call(tempDiv.childNodes);
+                    var tChildren = Array.prototype.slice.call(editor.childNodes);
+                    var blockToFocus = localActiveBlock;  // referencia que actualizaremos si se reemplaza
+                    var offsetToRestore = caretInBlock;
+
+                    try {
+                        for (var i = 0; i < sChildren.length; i++) {
+                            var sChild = sChildren[i];
+                            var tChild = tChildren[i];
+
+                            if (i === activeIndex) {
+                                // Bloque que el usuario local está editando actualmente
+                                if (sChild.outerHTML !== blockToFocus.outerHTML) {
+                                    var oldText = blockToFocus.textContent || '';
+                                    var newText = sChild.textContent || '';
+
+                                    // Calcular cuántos caracteres de prefijo son comunes
+                                    // para saber si el remoto insertó ANTES del cursor local
+                                    var prefixLen = 0;
+                                    var minLen = Math.min(oldText.length, newText.length);
+                                    while (prefixLen < minLen && oldText[prefixLen] === newText[prefixLen]) {
+                                        prefixLen++;
+                                    }
+
+                                    // Solo ajustar si el remoto modificó algo antes de donde está el cursor
+                                    if (prefixLen < offsetToRestore) {
+                                        var delta = newText.length - oldText.length;
+                                        offsetToRestore = Math.max(0, offsetToRestore + delta);
+                                    }
+
+                                    var replacement = sChild.cloneNode(true);
+                                    editor.replaceChild(replacement, blockToFocus);
+                                    blockToFocus = replacement;   // actualizar referencia
+                                }
+                                // Si el HTML coincide exactamente, no tocar el bloque → cero interferencia
+                            } else if (tChild) {
+                                if (tChild.outerHTML !== sChild.outerHTML) {
+                                    editor.replaceChild(sChild.cloneNode(true), tChild);
+                                }
+                            } else {
+                                editor.appendChild(sChild.cloneNode(true));
+                            }
+                        }
+
+                        // Eliminar nodos extra si el remoto borró párrafos al final
+                        while (editor.childNodes.length > sChildren.length) {
+                            var lastNode = editor.lastChild;
+                            if (lastNode && lastNode !== blockToFocus) {
+                                editor.removeChild(lastNode);
+                            } else {
+                                break;
+                            }
+                        }
+                    } catch(err) {
+                        // Fallback seguro: reemplazar todo y restituir offset global
+                        var savedGlobal2 = offsetToRestore;
+                        editor.innerHTML = newHtml;
+                        requestAnimationFrame(function() {
+                            try { setCaretOffset(editor, savedGlobal2); } catch(e) {}
+                            window.__veyraIsApplyingRemote = false;
+                            refreshAllRemoteCursors();
+                        });
+                        return;
+                    }
+
+                    // Restaurar cursor UNA SOLA VEZ con rAF para que el layout esté actualizado
+                    // Mantener __veyraIsApplyingRemote=true hasta después de restaurar
+                    // para que notifyChange() no haga eco del contenido remoto
+                    var _blockToFocus = blockToFocus;
+                    var _offsetToRestore = offsetToRestore;
+                    requestAnimationFrame(function() {
+                        try {
+                            if (_blockToFocus && document.contains(_blockToFocus)) {
+                                setCaretOffset(_blockToFocus, _offsetToRestore);
+                            }
+                        } catch(e) {}
+                        window.__veyraIsApplyingRemote = false;
+                        refreshAllRemoteCursors();
+                    });
+                };
+            })();
+            true;
+        `;
+        try {
+            ref.injectJavascript?.(script);
+            ref.injectJavaScript?.(script);
+            ref.webviewBridge?.injectJavaScript?.(script);
+        } catch (e) {}
+    }, []);
+
     // onLink no se usa para crop (window.location.href en Pell va a Linking.openURL, no a onLink)
     const handleLink = useCallback((_url: string) => {
         // No-op: el crop usa postMessage, no URL scheme
@@ -1653,9 +2445,10 @@ export function RichTextEditorSection({
         const t1 = setTimeout(() => {
             injectImageHandlerScript();
             injectCheckboxHandlerScript();
+            injectCollabHandlerScript();
         }, 300);
         return () => clearTimeout(t1);
-    }, [injectImageHandlerScript, injectCheckboxHandlerScript]);
+    }, [injectImageHandlerScript, injectCheckboxHandlerScript, injectCollabHandlerScript]);
 
     useEffect(() => {
         const script = `
@@ -1690,6 +2483,286 @@ export function RichTextEditorSection({
         injectCheckboxHandlerScript();
     }, [readOnly, injectImageHandlerScript, injectCheckboxHandlerScript]);
 
+    const injectFontHandlerScript = useCallback(() => {
+        const ref = activeRefHolder.current?.current;
+        if (!ref) return;
+        const fontCss = getFontFamilyCss(fontFamily);
+        const fontsJson = JSON.stringify(
+            NOTE_FONTS.map(f => ({
+                id: f.id,
+                name: f.name,
+                fontName: f.fontName,
+                family: f.family,
+            }))
+        );
+        const accentColor = accent.primary;
+        const isDarkMode = !!isDark;
+
+        const script = `
+            (function() {
+                try {
+                    if (!document.querySelector('meta[charset]')) {
+                        var meta = document.createElement('meta');
+                        meta.setAttribute('charset', 'utf-8');
+                        if (document.head) document.head.prepend(meta);
+                    }
+                } catch(e) {}
+
+                window.__veyraSetBaseFont = function(css) {
+                    try {
+                        var styleEl = document.getElementById('veyra-dynamic-base-font');
+                        if (!styleEl) {
+                            styleEl = document.createElement('style');
+                            styleEl.id = 'veyra-dynamic-base-font';
+                            document.head.appendChild(styleEl);
+                        }
+                        styleEl.textContent = 'html, body, #editor, .pell-content, .pell-content p, .pell-content div { font-family: ' + css + ' !important; }';
+
+                        var ed = document.querySelector('.pell-content') || document.getElementById('editor') || document.body;
+                        if (ed) {
+                            ed.style.setProperty('font-family', css, 'important');
+                            var fontEls = ed.querySelectorAll('font[face]');
+                            var changed = false;
+                            for (var i = 0; i < fontEls.length; i++) {
+                                fontEls[i].removeAttribute('face');
+                                changed = true;
+                            }
+                            var spans = ed.querySelectorAll('span[style*="font-family"]');
+                            for (var j = 0; j < spans.length; j++) {
+                                spans[j].style.removeProperty('font-family');
+                                changed = true;
+                            }
+                            if (changed && window.ReactNativeWebView) {
+                                window.ReactNativeWebView.postMessage(JSON.stringify({
+                                    type: 'CONTENT_CHANGE',
+                                    data: ed.innerHTML
+                                }));
+                            }
+                        }
+                        document.body.style.setProperty('font-family', css, 'important');
+                    } catch(e) {}
+                };
+
+                var _lastSavedRange = null;
+                var _fontsList = ${fontsJson};
+                var _accent = "${accentColor}";
+                var _isDark = ${isDarkMode ? 'true' : 'false'};
+
+                // Crear o actualizar contenedor de tooltip flotante y popover de fuentes
+                var tooltipEl = document.getElementById('veyra-font-tooltip');
+                var popoverEl = document.getElementById('veyra-font-popover');
+
+                if (!tooltipEl) {
+                    tooltipEl = document.createElement('div');
+                    tooltipEl.id = 'veyra-font-tooltip';
+                    tooltipEl.style.cssText = 'position:fixed; z-index:999999; display:none; align-items:center; justify-content:center; border-radius:20px; box-shadow:0 4px 18px rgba(0,0,0,0.28); padding:5px 12px; cursor:pointer; user-select:none; -webkit-user-select:none; backdrop-filter:blur(16px); -webkit-backdrop-filter:blur(16px); gap:5px; font-family:-apple-system, sans-serif; transition:opacity 0.15s ease, transform 0.15s ease;';
+                    document.body.appendChild(tooltipEl);
+                }
+
+                if (!popoverEl) {
+                    popoverEl = document.createElement('div');
+                    popoverEl.id = 'veyra-font-popover';
+                    popoverEl.style.cssText = 'position:fixed; z-index:1000000; display:none; flex-direction:column; width:180px; max-height:220px; overflow-y:auto; border-radius:12px; box-shadow:0 8px 32px rgba(0,0,0,0.38); padding:5px; user-select:none; -webkit-user-select:none; backdrop-filter:blur(18px); -webkit-backdrop-filter:blur(18px); font-family:-apple-system, sans-serif;';
+                    document.body.appendChild(popoverEl);
+                }
+
+                // Aplicar estilos según tema actual
+                var bgTooltip = _isDark ? 'rgba(22, 25, 36, 0.94)' : 'rgba(255, 255, 255, 0.96)';
+                var borderTooltip = _isDark ? '1px solid rgba(255, 255, 255, 0.16)' : '1px solid rgba(0, 0, 0, 0.1)';
+                var textColor = _isDark ? '#F4F4F5' : '#0F172A';
+                var textSubColor = _isDark ? '#A1A1AA' : '#64748B';
+                var hoverBg = _isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.06)';
+
+                tooltipEl.style.background = bgTooltip;
+                tooltipEl.style.border = borderTooltip;
+                tooltipEl.innerHTML = '<span style="font-size:13px; font-weight:800; color:' + _accent + ';">Aa</span><span style="font-size:12px; font-weight:600; color:' + textColor + ';">Fuente</span><span style="font-size:8px; opacity:0.65; color:' + textSubColor + ';">▼</span>';
+
+                popoverEl.style.background = bgTooltip;
+                popoverEl.style.border = borderTooltip;
+
+                // Contenido del popover con la lista de fuentes
+                var popoverHtml = '<div class="veyra-font-pop-item" data-font="Plus Jakarta Sans" style="display:flex; align-items:center; padding:7px 10px; border-radius:7px; font-size:12.5px; color:' + _accent + '; font-weight:700; cursor:pointer; gap:6px; border-bottom:1px solid ' + (_isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)') + '; margin-bottom:3px;"><span style="font-size:11px;">↺</span> Original</div>';
+
+                for (var f = 0; f < _fontsList.length; f++) {
+                    var item = _fontsList[f];
+                    popoverHtml += '<div class="veyra-font-pop-item" data-font="' + item.fontName + '" style="display:flex; align-items:center; padding:7px 10px; border-radius:7px; font-size:13.5px; font-family:' + item.family + '; color:' + textColor + '; cursor:pointer; transition:background 0.12s ease;">' + item.name + '</div>';
+                }
+                popoverEl.innerHTML = popoverHtml;
+
+                function hideAll() {
+                    if (tooltipEl) tooltipEl.style.display = 'none';
+                    if (popoverEl) popoverEl.style.display = 'none';
+                }
+
+                function togglePopover(e) {
+                    if (e) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                    }
+                    if (popoverEl.style.display === 'flex') {
+                        popoverEl.style.display = 'none';
+                        return;
+                    }
+                    var tRect = tooltipEl.getBoundingClientRect();
+                    var popWidth = 180;
+                    var popLeft = Math.max(8, Math.min(window.innerWidth - popWidth - 8, tRect.left + (tRect.width / 2) - (popWidth / 2)));
+                    var popTop = tRect.bottom + 6;
+                    if (popTop + 220 > window.innerHeight) {
+                        popTop = Math.max(10, tRect.top - 226);
+                    }
+                    popoverEl.style.left = popLeft + 'px';
+                    popoverEl.style.top = popTop + 'px';
+                    popoverEl.style.display = 'flex';
+                }
+
+                tooltipEl.onmousedown = tooltipEl.ontouchstart = function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    togglePopover(e);
+                };
+
+                // Asignar click a cada elemento de fuente en el popover
+                var items = popoverEl.querySelectorAll('.veyra-font-pop-item');
+                for (var it = 0; it < items.length; it++) {
+                    items[it].onmousedown = items[it].ontouchstart = function(e) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        var chosenFont = this.getAttribute('data-font');
+                        window.__veyraApplyFont(chosenFont);
+                        hideAll();
+                    };
+                }
+
+                window.__veyraApplyFont = function(fontName) {
+                    try {
+                        var sel = window.getSelection();
+                        if (_lastSavedRange && (!sel || sel.rangeCount === 0 || sel.isCollapsed)) {
+                            sel.removeAllRanges();
+                            sel.addRange(_lastSavedRange);
+                        }
+                        document.execCommand('fontName', false, fontName);
+                        var ed = document.querySelector('.pell-content') || document.getElementById('editor') || document.body;
+                        if (ed && window.ReactNativeWebView) {
+                            window.ReactNativeWebView.postMessage(JSON.stringify({
+                                type: 'CONTENT_CHANGE',
+                                data: ed.innerHTML
+                            }));
+                        }
+                    } catch(e) {}
+                };
+
+                // Posicionamiento dinámico del tooltip sobre el texto seleccionado
+                var _selectionTimer = null;
+                function checkSelection() {
+                    clearTimeout(_selectionTimer);
+                    _selectionTimer = setTimeout(function() {
+                        try {
+                            var sel = window.getSelection();
+                            if (!sel || sel.isCollapsed || !sel.toString().trim()) {
+                                hideAll();
+                                return;
+                            }
+                            var range = sel.getRangeAt(0);
+                            var rect = range.getBoundingClientRect();
+                            if (rect.width === 0 && rect.height === 0) {
+                                hideAll();
+                                return;
+                            }
+                            _lastSavedRange = range.cloneRange();
+
+                            var tw = tooltipEl.offsetWidth || 95;
+                            var th = tooltipEl.offsetHeight || 32;
+
+                            var top = rect.top - th - 8;
+                            if (top < 10) {
+                                top = rect.bottom + 8;
+                            }
+                            var left = rect.left + (rect.width / 2) - (tw / 2);
+                            left = Math.max(10, Math.min(window.innerWidth - tw - 10, left));
+
+                            tooltipEl.style.top = top + 'px';
+                            tooltipEl.style.left = left + 'px';
+                            tooltipEl.style.display = 'flex';
+                        } catch(e) {}
+                    }, 80);
+                }
+
+                document.addEventListener('selectionchange', checkSelection);
+                document.addEventListener('touchend', checkSelection);
+                document.addEventListener('mouseup', checkSelection);
+
+                window.addEventListener('scroll', function() {
+                    hideAll();
+                }, { passive: true });
+
+                document.addEventListener('touchstart', function(e) {
+                    if (tooltipEl && tooltipEl.contains(e.target)) return;
+                    if (popoverEl && popoverEl.contains(e.target)) return;
+                    hideAll();
+                });
+
+                window.__veyraSetBaseFont("${fontCss.replace(/"/g, '\\"')}");
+            })();
+            true;
+        `;
+        try {
+            ref.injectJavascript?.(script);
+            ref.injectJavaScript?.(script);
+            ref.webviewBridge?.injectJavaScript?.(script);
+        } catch (e) {}
+    }, [fontFamily, accent.primary, isDark]);
+
+    useEffect(() => {
+        injectFontHandlerScript();
+        injectCollabHandlerScript();
+    }, [fontFamily, injectFontHandlerScript, injectCollabHandlerScript]);
+
+    useEffect(() => {
+        const ref = activeRefHolder.current?.current;
+        if (!ref) return;
+        if (readOnly) {
+            const script = `
+                (function() {
+                    try {
+                        var ed = document.querySelector('.pell-content') || document.getElementById('content') || document.getElementById('editor') || document.body;
+                        if (ed) {
+                            ed.setAttribute('contenteditable', 'false');
+                            ed.blur();
+                        }
+                        if (document.activeElement && document.activeElement.blur) {
+                            document.activeElement.blur();
+                        }
+                    } catch(e) {}
+                })();
+                true;
+            `;
+            try {
+                ref.injectJavascript?.(script);
+                ref.injectJavaScript?.(script);
+                ref.webviewBridge?.injectJavaScript?.(script);
+                ref.blurContentEditor?.();
+            } catch (e) {}
+        } else {
+            const script = `
+                (function() {
+                    try {
+                        var ed = document.querySelector('.pell-content') || document.getElementById('content') || document.getElementById('editor') || document.body;
+                        if (ed) {
+                            ed.setAttribute('contenteditable', 'true');
+                        }
+                    } catch(e) {}
+                })();
+                true;
+            `;
+            try {
+                ref.injectJavascript?.(script);
+                ref.injectJavaScript?.(script);
+                ref.webviewBridge?.injectJavaScript?.(script);
+            } catch (e) {}
+        }
+        injectImageHandlerScript();
+    }, [readOnly, injectImageHandlerScript]);
+
     return (
         <View style={flat ? styles.flatContainer : styles.container}>
             {!flat && !readOnly && (
@@ -1716,6 +2789,7 @@ export function RichTextEditorSection({
                     onMessage={handleMessage}
                     onLink={handleLink}
                     disabled={readOnly}
+                    styleWithCSS={true}
                     onFocus={() => {
                         if (!readOnly) {
                             onFocus?.();
@@ -1740,6 +2814,8 @@ export function RichTextEditorSection({
                         }
                         injectImageHandlerScript();
                         injectCheckboxHandlerScript();
+                        injectFontHandlerScript();
+                        injectCollabHandlerScript();
                     }}
                     editorStyle={{
                         backgroundColor: flat ? 'transparent' : colors.surface,
@@ -1748,17 +2824,20 @@ export function RichTextEditorSection({
                         contentCSSText: `
                             font-size: ${flat ? '16px' : '14.5px'}; 
                             line-height: ${flat ? '24px' : '20px'}; 
-                            padding: ${readOnly ? '4px 0px 16px 0px' : (flat ? '8px 0px 48px 0px' : '10px 12px')};
-                            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+                            padding: ${readOnly ? '4px 0px 16px 0px' : (flat ? '10px 0px 48px 0px' : '10px 12px')};
+                            font-family: ${activeFontCss};
                             min-height: ${flat ? `${calculatedMinHeight}px` : (readOnly ? 'auto' : `${calculatedMinHeight}px`)};
                             box-sizing: border-box;
                         `,
                         cssText: `
+                            ${GOOGLE_FONTS_CSS_IMPORT}
+                            ${NOTE_FONTS_OVERRIDE_CSS}
                             html, body {
                                 min-height: 100% !important;
                                 height: 100% !important;
                                 margin: 0;
                                 padding: 0;
+                                font-family: ${activeFontCss};
                                 overflow-x: hidden !important;
                                 overflow-y: hidden !important;
                                 cursor: ${readOnly ? 'default' : 'text'} !important;
@@ -1772,6 +2851,7 @@ export function RichTextEditorSection({
                             #editor, .pell-content {
                                 flex: 1 !important;
                                 min-height: ${flat ? `${calculatedMinHeight}px` : (readOnly ? 'auto' : `${calculatedMinHeight}px`)} !important;
+                                font-family: ${activeFontCss} !important;
                                 cursor: ${readOnly ? 'default' : 'text'} !important;
                                 outline: none !important;
                                 display: block !important;

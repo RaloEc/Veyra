@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNotesStore } from '../store/useNotesStore';
 import { useRouter } from 'expo-router';
@@ -12,13 +12,22 @@ import * as Sharing from 'expo-sharing';
 import * as IntentLauncher from 'expo-intent-launcher';
 import { parseNotePages, serializeNotePages, PageLayoutMode, NotePage, createPage } from '../utils/pageUtils';
 import { useNoteHistory, NoteHistorySnapshot } from './useNoteHistory';
+import { supabase } from '../lib/supabase';
+import { RealtimeChannel } from '@supabase/supabase-js';
+import { getCollabColor, CollaborationService } from '../services/collaborationService';
+import { CollabRole } from '../types/db';
+
+export interface UseCreateNoteOptions {
+    isEditMode?: boolean;
+}
 
 export function useCreateNote(
     id?: string,
     initialFolderId?: string | null,
     initialEventId?: string | null,
     initialTitleParam?: string,
-    editorRefs?: React.MutableRefObject<any[]>
+    editorRefs?: React.MutableRefObject<any[]>,
+    options?: UseCreateNoteOptions
 ) {
     const { t } = useTranslation();
     const router = useRouter();
@@ -28,10 +37,153 @@ export function useCreateNote(
     const isEditing = Boolean(id && id !== 'create');
     const noteIdRef = useRef<string | undefined>(id && id !== 'create' ? id : undefined);
 
-    // Obtener nota de la caché en memoria inmediatamente (0ms)
+    const isEditMode = options?.isEditMode ?? false;
+    const isEditModeRef = useRef(isEditMode);
+    useEffect(() => {
+        isEditModeRef.current = isEditMode;
+    }, [isEditMode]);
+
+    const [remoteSyncNotice, setRemoteSyncNotice] = useState<number | null>(null);
+    const [liveCollaborators, setLiveCollaborators] = useState<{
+        [clientId: string]: { name: string; color: string; timestamp: number };
+    }>({});
+
+    const liveCollaborator = useMemo(() => {
+        const active = Object.values(liveCollaborators).filter(c => Date.now() - c.timestamp < 10000);
+        if (active.length === 0) return null;
+        if (active.length === 1) {
+            return { name: active[0].name, timestamp: active[0].timestamp };
+        }
+        return {
+            name: `${active.length} ${t('collaboration.collaborators', { defaultValue: 'colaboradores' })}`,
+            timestamp: Date.now(),
+        };
+    }, [liveCollaborators, t]);
+
+    // Identificador único de este cliente en memoria para descartar eco en WebSockets
+    const localClientIdRef = useRef<string>(
+        `client_${Math.random().toString(36).substring(2, 9)}_${Date.now()}`
+    );
+    const liveChannelRef = useRef<RealtimeChannel | null>(null);
+    const isApplyingRemoteBroadcastRef = useRef(false);
+    const lastRemoteBroadcastReceivedRef = useRef<{ [pageIndex: number]: string }>({});
+    const lastRemoteBroadcastTimeRef = useRef<{ [pageIndex: number]: number }>({});
+    const broadcastTitleTimeoutRef = useRef<any>(null);
+    const broadcastContentTimeoutRefs = useRef<{ [pageIndex: number]: any }>({});
+
+    // Permisos de colaboración del usuario actual (propietario, editor o lector)
     const cachedNote = (id && id !== 'create')
         ? (useNotesStore.getState().notes.find(n => n.id === id) || useNotesStore.getState().deletedNotes.find(n => n.id === id) || null)
         : null;
+    const session = useStore.getState().session;
+    const currentUserId = session?.user?.id;
+    const isGuestCached = Boolean(
+        (cachedNote?.shared_owner_id && cachedNote.shared_owner_id !== currentUserId) ||
+        (cachedNote?.user_id && currentUserId && cachedNote.user_id !== currentUserId && cachedNote.user_id !== 'local_user' && cachedNote.shared_owner_id)
+    );
+    const isOwnerCached = !isGuestCached;
+    const cachedRole: CollabRole = isOwnerCached ? 'editor' : (cachedNote?.collab_role === 'viewer' ? 'viewer' : 'editor');
+    const isRevokedCached = isOwnerCached ? false : (cachedNote?.is_revoked === 1);
+    const canEditCached = isOwnerCached ? true : (cachedRole === 'editor' && !isRevokedCached);
+
+    const [userPermission, setUserPermission] = useState<{
+        isOwner: boolean;
+        role: CollabRole;
+        canEdit: boolean;
+        hasAccess: boolean;
+        isRevoked: boolean;
+    }>({
+        isOwner: isOwnerCached,
+        role: cachedRole,
+        canEdit: canEditCached,
+        hasAccess: true,
+        isRevoked: isRevokedCached,
+    });
+    const userPermissionRef = useRef(userPermission);
+    useEffect(() => {
+        userPermissionRef.current = userPermission;
+    }, [userPermission]);
+
+    // Carga y sincronización en tiempo real de permisos sobre esta nota
+    useEffect(() => {
+        const activeId = id && id !== 'create' ? id : noteIdRef.current;
+        if (!activeId) return;
+
+        const refreshPerms = () => {
+            CollaborationService.getUserPermission('note', activeId)
+                .then(perm => {
+                    const isKnownOtherOwner = Boolean(
+                        (cachedNote?.shared_owner_id && cachedNote.shared_owner_id !== session?.user?.id) ||
+                        (cachedNote?.user_id && session?.user?.id && cachedNote.user_id !== session?.user?.id && cachedNote.user_id !== 'local_user' && cachedNote.shared_owner_id)
+                    );
+                    const safeIsOwner = isOwnerCached ? true : (isKnownOtherOwner ? false : perm.isOwner);
+                    const safeRole: CollabRole = safeIsOwner ? 'editor' : perm.role;
+                    const safeIsRevoked = safeIsOwner ? false : perm.isRevoked;
+                    const safeHasAccess = safeIsOwner ? true : perm.hasAccess;
+                    const safeCanEdit = safeIsOwner ? true : (safeRole === 'editor' && !safeIsRevoked && safeHasAccess);
+
+                    const resolvedPerm = {
+                        ...perm,
+                        isOwner: safeIsOwner,
+                        role: safeRole,
+                        canEdit: safeCanEdit,
+                        isRevoked: safeIsRevoked,
+                        hasAccess: safeHasAccess,
+                    };
+
+                    setUserPermission(resolvedPerm);
+                    userPermissionRef.current = resolvedPerm;
+                    if (safeIsOwner && cachedNote?.is_revoked === 1) {
+                        useNotesStore.getState().markNoteRevoked(activeId, false).catch(() => {});
+                    } else if (resolvedPerm.isRevoked || !resolvedPerm.hasAccess) {
+                        useNotesStore.getState().markNoteRevoked(activeId, true).catch(() => {});
+                    } else if (resolvedPerm.role) {
+                        useNotesStore.getState().setNoteRole(activeId, resolvedPerm.role).catch(() => {});
+                    }
+                })
+                .catch(() => {});
+        };
+
+        refreshPerms();
+
+        const folderId = cachedNote?.folder_id;
+        let channel = supabase
+            .channel(`collab_perms_${activeId}`)
+            .on(
+                'postgres_changes',
+                {
+                    event: '*',
+                    schema: 'public',
+                    table: 'collaborations',
+                    filter: `target_id=eq.${activeId}`,
+                },
+                () => {
+                    refreshPerms();
+                }
+            );
+
+        if (folderId) {
+            channel = channel.on(
+                'postgres_changes',
+                {
+                    event: '*',
+                    schema: 'public',
+                    table: 'collaborations',
+                    filter: `target_id=eq.${folderId}`,
+                },
+                () => {
+                    refreshPerms();
+                }
+            );
+        }
+
+        channel.subscribe();
+
+        return () => {
+            supabase.removeChannel(channel).catch(() => {});
+        };
+    }, [id]);
+
     const initialParsed = parseNotePages(cachedNote?.content);
 
     const [title, setTitle] = useState(() => cachedNote?.title || initialTitleParam || '');
@@ -40,6 +192,7 @@ export function useCreateNote(
     const [currentPageIndex, setCurrentPageIndex] = useState(0);
     const [folderId, setFolderId] = useState<string | null>(() => cachedNote?.folder_id || initialFolderId || null);
     const [eventId, setEventId] = useState<string | null>(() => cachedNote?.event_id || initialEventId || null);
+    const [fontFamily, setFontFamily] = useState<string>(() => cachedNote?.font_family || 'sans');
 
     const internalEditorRefs = useRef<any[]>([]);
     const effectiveEditorRefs = editorRefs || internalEditorRefs;
@@ -90,10 +243,11 @@ export function useCreateNote(
         isPinned,
         folderId,
         eventId,
+        fontFamily,
     });
     useEffect(() => {
-        currentValuesRef.current = { title, pages, currentPageIndex, scrollLayout, attachments, isPinned, folderId, eventId };
-    }, [title, pages, currentPageIndex, scrollLayout, attachments, isPinned, folderId, eventId]);
+        currentValuesRef.current = { title, pages, currentPageIndex, scrollLayout, attachments, isPinned, folderId, eventId, fontFamily };
+    }, [title, pages, currentPageIndex, scrollLayout, attachments, isPinned, folderId, eventId, fontFamily]);
 
     // Rastrear la última versión guardada para evitar escrituras redundantes
     const lastSavedValuesRef = useRef({
@@ -103,6 +257,7 @@ export function useCreateNote(
         isPinned: cachedNote?.is_pinned === 1,
         folderId: cachedNote?.folder_id || initialFolderId || null,
         eventId: cachedNote?.event_id || initialEventId || null,
+        fontFamily: cachedNote?.font_family || 'sans',
     });
 
     // Mutex para evitar guardados concurrentes
@@ -126,56 +281,496 @@ export function useCreateNote(
         });
     }, []);
 
+    // Sincronización en tiempo real y fallback de carga para notas existentes
     useEffect(() => {
-        if (id && id !== 'create') {
-            noteIdRef.current = id;
-            const note = notes.find(n => n.id === id);
-            if (note && note !== cachedNote) {
-                const parsed = parseNotePages(note.content);
-                setTitle(note.title || '');
-                setPages(parsed.pages);
-                setScrollLayout(parsed.layout);
-                setIsPinned(note.is_pinned === 1);
-                setFolderId(note.folder_id || null);
-                setEventId(note.event_id || null);
-                lastSavedValuesRef.current = {
-                    title: note.title || '',
-                    serializedContent: note.content || '',
-                    attachments: note.attachments || '[]',
-                    isPinned: note.is_pinned === 1,
-                    folderId: note.folder_id || null,
-                    eventId: note.event_id || null,
-                };
-                if (note.attachments) {
-                    try {
-                        setAttachments(JSON.parse(note.attachments));
-                    } catch (e) {
-                        setAttachments([]);
+        if (!id || id === 'create') return;
+
+        noteIdRef.current = id;
+        const note = notes.find(n => n.id === id);
+
+        if (!note) {
+            // Si la nota aún no está en el store en memoria, intentar cargarla desde SQLite o Supabase
+            (async () => {
+                try {
+                    const { getDB } = await import('../db');
+                    const db = await getDB();
+                    const local = await db.getFirstAsync('SELECT * FROM notes WHERE id = ?', [id]);
+                    if (local) {
+                        await useNotesStore.getState().loadNotes();
+                        return;
+                    }
+                    const session = useStore.getState().session;
+                    if (session?.user?.id) {
+                        const { supabase } = await import('../lib/supabase');
+                        const { data: remote } = await supabase.from('notes').select('*').eq('id', id).maybeSingle();
+                        if (remote) {
+                            const { SyncService } = await import('../services/syncService');
+                            await SyncService.upsertLocalNote(db, remote, session.user.id);
+                            await useNotesStore.getState().loadNotes();
+                        }
+                    }
+                } catch (e) {
+                    console.warn('[useCreateNote] Error en carga fallback de nota:', e);
+                }
+            })();
+            return;
+        }
+
+        const noteContent = note.content || '';
+        const noteTitle = note.title || '';
+        const noteAttachments = note.attachments || '[]';
+        const notePinned = note.is_pinned === 1;
+        const noteFolderId = note.folder_id || null;
+        const noteEventId = note.event_id || null;
+        const noteFontFamily = note.font_family || 'sans';
+
+        // Comprobar si los datos en el store difieren de lo último guardado/conocido localmente
+        const lastSaved = lastSavedValuesRef.current;
+        const hasExternalChanges = (
+            noteContent !== lastSaved.serializedContent ||
+            noteTitle !== lastSaved.title ||
+            noteAttachments !== lastSaved.attachments ||
+            notePinned !== lastSaved.isPinned ||
+            noteFolderId !== lastSaved.folderId ||
+            noteEventId !== lastSaved.eventId ||
+            noteFontFamily !== lastSaved.fontFamily
+        );
+
+        if (!hasExternalChanges) {
+            return;
+        }
+
+        // Si estamos en modo edición, verificar si el usuario local tiene cambios no guardados (sucios)
+        const currentVals = currentValuesRef.current;
+        const currentSerialized = serializeNotePages(currentVals.pages, currentVals.scrollLayout);
+        const isLocallyDirty = (
+            currentVals.title !== lastSaved.title ||
+            currentSerialized !== lastSaved.serializedContent ||
+            currentVals.fontFamily !== lastSaved.fontFamily
+        );
+
+        // Si el usuario local está activamente escribiendo y tiene cambios pendientes, no sobreescribir su tipeo
+        if (isEditModeRef.current && isLocallyDirty) {
+            return;
+        }
+
+        // Aplicar la actualización externa en vivo
+        const parsed = parseNotePages(noteContent);
+        setTitle(noteTitle);
+        setPages(parsed.pages);
+        setScrollLayout(parsed.layout);
+        setIsPinned(notePinned);
+        setFolderId(noteFolderId);
+        setEventId(noteEventId);
+        setFontFamily(noteFontFamily);
+
+        if (noteAttachments) {
+            try {
+                const parsedAtts = JSON.parse(noteAttachments);
+                setAttachments(Array.isArray(parsedAtts) ? parsedAtts : []);
+            } catch {
+                setAttachments([]);
+            }
+        } else {
+            setAttachments([]);
+        }
+
+        // Actualizar lastSavedValuesRef inmediatamente para evitar que el auto-guardado
+        // detecte esto como un cambio local y lo vuelva a escribir en bucle a la BD
+        lastSavedValuesRef.current = {
+            title: noteTitle,
+            serializedContent: noteContent,
+            attachments: noteAttachments,
+            isPinned: notePinned,
+            folderId: noteFolderId,
+            eventId: noteEventId,
+            fontFamily: noteFontFamily,
+        };
+
+        // Reinicializar historial con la versión recibida
+        initHistory({
+            title: noteTitle,
+            pages: parsed.pages,
+            currentPageIndex: 0,
+        });
+
+        // Actualizar el DOM del editor WebView de cada página
+        const updateEditorsHtml = () => {
+            parsed.pages.forEach((page, idx) => {
+                const editor = effectiveEditorRefs.current?.[idx];
+                if (editor && typeof editor.setContentHTML === 'function') {
+                    editor.setContentHTML(page.content || '');
+                }
+            });
+        };
+
+        updateEditorsHtml();
+        const t1 = setTimeout(updateEditorsHtml, 60);
+        const t2 = setTimeout(updateEditorsHtml, 180);
+
+        setRemoteSyncNotice(Date.now());
+
+        return () => {
+            clearTimeout(t1);
+            clearTimeout(t2);
+        };
+    }, [id, notes, effectiveEditorRefs]);
+
+    // ─── CANAL DE TRANSMISIÓN EN VIVO (WEBSOCKETS BROADCAST CLIENTE A CLIENTE) ───
+    // Permite ver lo que otro usuario escribe en tiempo real (estilo Google Docs / Word)
+    // sin tener que esperar a que se guarde la nota en la base de datos.
+    useEffect(() => {
+        const activeId = id && id !== 'create' ? id : noteIdRef.current;
+        if (!activeId) return;
+
+        const channelName = `note_live_${activeId}`;
+        const channel = supabase.channel(channelName, {
+            config: {
+                broadcast: {
+                    self: false, // El emisor no recibe sus propios mensajes
+                },
+            },
+        });
+
+        channel
+            .on('broadcast', { event: 'LIVE_NOTE_CHANGE' }, ({ payload }) => {
+                if (!payload || payload.senderClientId === localClientIdRef.current) return;
+
+                isApplyingRemoteBroadcastRef.current = true;
+                const senderName = payload.senderName || t('collaboration.collaborator', { defaultValue: 'Colaborador' });
+                const senderColor = payload.userColor || getCollabColor(payload.senderClientId);
+
+                setLiveCollaborators(prev => {
+                    const now = Date.now();
+                    const next = { ...prev };
+                    next[payload.senderClientId] = {
+                        name: senderName,
+                        color: senderColor,
+                        timestamp: now,
+                    };
+                    for (const id in next) {
+                        if (now - next[id].timestamp > 12000) {
+                            delete next[id];
+                        }
+                    }
+                    return next;
+                });
+                setRemoteSyncNotice(Date.now());
+
+                if (payload.changeType === 'TITLE' && typeof payload.title === 'string') {
+                    setTitle(payload.title);
+                    currentValuesRef.current.title = payload.title;
+                    lastSavedValuesRef.current.title = payload.title;
+                } else if (payload.changeType === 'PAGE_CONTENT' && typeof payload.pageIndex === 'number') {
+                    const { pageIndex, content } = payload;
+                    lastRemoteBroadcastReceivedRef.current[pageIndex] = content;
+                    lastRemoteBroadcastTimeRef.current[pageIndex] = Date.now();
+
+                    setPages(prev => {
+                        const next = [...prev];
+                        if (pageIndex >= 0 && pageIndex < next.length) {
+                            if (next[pageIndex].content === content) return prev;
+                            next[pageIndex] = { ...next[pageIndex], content };
+                        } else if (pageIndex === next.length) {
+                            next.push(createPage(content));
+                        }
+                        currentValuesRef.current.pages = next;
+                        return next;
+                    });
+
+                    // Inyectar HTML mediante reconciliación DOM inteligente (no destructiva para el cursor local)
+                    const editor = effectiveEditorRefs.current?.[pageIndex];
+                    if (editor) {
+                        const escapedContent = JSON.stringify(content || '');
+                        const script = `
+                            (function() {
+                                if (typeof window.__veyraApplyRemoteContent === 'function') {
+                                    window.__veyraApplyRemoteContent(${escapedContent});
+                                } else if (typeof setContentHTML === 'function') {
+                                    setContentHTML(${escapedContent});
+                                }
+                            })();
+                            true;
+                        `;
+                        try {
+                            editor.injectJavascript?.(script);
+                            editor.injectJavaScript?.(script);
+                            editor.webviewBridge?.injectJavaScript?.(script);
+                        } catch (e) {}
+                    }
+
+                    // Sincronizar serializedContent en lastSavedValuesRef para no disparar auto-guardado en el receptor
+                    const currentVals = currentValuesRef.current;
+                    lastSavedValuesRef.current.serializedContent = serializeNotePages(
+                        currentVals.pages,
+                        currentVals.scrollLayout
+                    );
+                } else if (payload.changeType === 'PAGES_STRUCTURE' && Array.isArray(payload.pages)) {
+                    setPages(payload.pages);
+                    currentValuesRef.current.pages = payload.pages;
+                    if (payload.layout) {
+                        setScrollLayout(payload.layout);
+                        currentValuesRef.current.scrollLayout = payload.layout;
+                    }
+
+                    payload.pages.forEach((p: NotePage, idx: number) => {
+                        const ed = effectiveEditorRefs.current?.[idx];
+                        if (ed) {
+                            const escapedContent = JSON.stringify(p.content || '');
+                            const script = `
+                                (function() {
+                                    if (typeof window.__veyraApplyRemoteContent === 'function') {
+                                        window.__veyraApplyRemoteContent(${escapedContent});
+                                    } else if (typeof setContentHTML === 'function') {
+                                        setContentHTML(${escapedContent});
+                                    }
+                                })();
+                                true;
+                            `;
+                            try {
+                                ed.injectJavascript?.(script);
+                                ed.injectJavaScript?.(script);
+                                ed.webviewBridge?.injectJavaScript?.(script);
+                            } catch (e) {}
+                        }
+                    });
+
+                    lastSavedValuesRef.current.serializedContent = serializeNotePages(
+                        payload.pages,
+                        payload.layout || currentValuesRef.current.scrollLayout
+                    );
+                } else if (payload.changeType === 'CURSOR_MOVE' && typeof payload.pageIndex === 'number' && payload.cursor) {
+                    const { pageIndex, cursor, userColor, senderClientId, senderUserId, senderName } = payload;
+
+                    // 1. Un colaborador solo puede estar activo en una única hoja a la vez.
+                    // Limpiar inmediatamente el cursor de este cliente en cualquier otra hoja (idx !== pageIndex)
+                    if (effectiveEditorRefs.current && Array.isArray(effectiveEditorRefs.current)) {
+                        effectiveEditorRefs.current.forEach((ed, idx) => {
+                            if (ed && idx !== pageIndex) {
+                                const removeScript = `
+                                    if (typeof window.__veyraRemoveRemoteCursor === 'function') {
+                                        window.__veyraRemoveRemoteCursor(${JSON.stringify(senderClientId)});
+                                    }
+                                    true;
+                                `;
+                                try {
+                                    ed.injectJavascript?.(removeScript);
+                                    ed.injectJavaScript?.(removeScript);
+                                    ed.webviewBridge?.injectJavaScript?.(removeScript);
+                                } catch (e) {}
+                            }
+                        });
+                    }
+
+                    // 2. Renderizar / actualizar el cursor en la hoja destino (pageIndex)
+                    const editor = effectiveEditorRefs.current?.[pageIndex];
+                    if (editor) {
+                        const cursorData = JSON.stringify({
+                            clientId: senderClientId,
+                            userId: senderUserId,
+                            name: senderName,
+                            color: userColor,
+                            cursor,
+                        });
+                        const script = `
+                            if (typeof window.__veyraUpdateRemoteCursor === 'function') {
+                                window.__veyraUpdateRemoteCursor(${cursorData});
+                            }
+                            true;
+                        `;
+                        try {
+                            editor.injectJavascript?.(script);
+                            editor.injectJavaScript?.(script);
+                            editor.webviewBridge?.injectJavaScript?.(script);
+                        } catch (e) {}
+                    }
+                } else if (payload.changeType === 'CURSOR_REMOVE') {
+                    setLiveCollaborators(prev => {
+                        const next = { ...prev };
+                        delete next[payload.senderClientId];
+                        return next;
+                    });
+                    // Limpiar el cursor de este colaborador en todas las hojas para asegurar que no queden fantasmas
+                    if (effectiveEditorRefs.current && Array.isArray(effectiveEditorRefs.current)) {
+                        effectiveEditorRefs.current.forEach(ed => {
+                            if (ed) {
+                                const script = `
+                                    if (typeof window.__veyraRemoveRemoteCursor === 'function') {
+                                        window.__veyraRemoveRemoteCursor(${JSON.stringify(payload.senderClientId)});
+                                    }
+                                    true;
+                                `;
+                                try {
+                                    ed.injectJavascript?.(script);
+                                    ed.injectJavaScript?.(script);
+                                    ed.webviewBridge?.injectJavaScript?.(script);
+                                } catch (e) {}
+                            }
+                        });
+                    }
+                } else if (payload.changeType === 'PERMISSIONS_UPDATE') {
+                    const session = useStore.getState().session;
+                    const currentUserId = session?.user?.id;
+
+                    if (!userPermissionRef.current.isOwner && payload.revoked && (!payload.memberId || payload.memberId === currentUserId)) {
+                        const revokedPerm = {
+                            isOwner: false,
+                            role: 'viewer' as CollabRole,
+                            canEdit: false,
+                            hasAccess: false,
+                            isRevoked: true,
+                        };
+                        setUserPermission(revokedPerm);
+                        userPermissionRef.current = revokedPerm;
+                        const activeId = id && id !== 'create' ? id : noteIdRef.current;
+                        if (activeId) {
+                            useNotesStore.getState().markNoteRevoked(activeId, true).catch(() => {});
+                        }
+                        return;
+                    }
+
+                    if (!userPermissionRef.current.isOwner && (!payload.memberId || payload.memberId === currentUserId)) {
+                        if (payload.role) {
+                            const isViewerRole = payload.role === 'viewer';
+                            const next = {
+                                isOwner: false,
+                                role: payload.role as CollabRole,
+                                canEdit: !isViewerRole,
+                                hasAccess: true,
+                                isRevoked: false,
+                            };
+                            setUserPermission(next);
+                            userPermissionRef.current = next;
+
+                            const activeId = id && id !== 'create' ? id : noteIdRef.current;
+                            if (activeId) {
+                                useNotesStore.getState().setNoteRole(activeId, payload.role).catch(() => {});
+                            }
+
+                            if (isViewerRole) {
+                                effectiveEditorRefs.current.forEach(ed => {
+                                    try {
+                                        ed?.blurContentEditor?.();
+                                        ed?.injectJavaScript?.(`
+                                            (function() {
+                                                var ed = document.querySelector('.pell-content') || document.getElementById('content') || document.getElementById('editor') || document.body;
+                                                if (ed) {
+                                                    ed.setAttribute('contenteditable', 'false');
+                                                    ed.blur();
+                                                }
+                                                if (document.activeElement && document.activeElement.blur) {
+                                                    document.activeElement.blur();
+                                                }
+                                            })();
+                                            true;
+                                        `);
+                                    } catch (e) {}
+                                });
+                            }
+                        }
                     }
                 }
-                initHistory({
-                    title: note.title || '',
-                    pages: parsed.pages,
-                    currentPageIndex: 0,
-                });
-            }
-        }
-    }, [id, notes]);
 
-    // Establecer título con registro en historial debounced
+                // 400ms: da tiempo al rAF del WebView + bridge round-trip para restaurar cursor
+                // antes de que updatePageContent pueda volver a emitir cambios
+                setTimeout(() => {
+                    isApplyingRemoteBroadcastRef.current = false;
+                }, 400);
+            })
+            .subscribe();
+
+        liveChannelRef.current = channel;
+
+        return () => {
+            supabase.removeChannel(channel).catch(() => {});
+            if (liveChannelRef.current === channel) {
+                liveChannelRef.current = null;
+            }
+        };
+    }, [id, effectiveEditorRefs, t]);
+
+    // Función auxiliar para emitir cambios en vivo por WebSockets
+    const broadcastLiveChange = useCallback((payload: Record<string, any>) => {
+        if (!liveChannelRef.current || isApplyingRemoteBroadcastRef.current) return;
+        if (!userPermissionRef.current.canEdit && (payload.changeType === 'PAGE_CONTENT' || payload.changeType === 'TITLE' || payload.changeType === 'PAGES_STRUCTURE')) return;
+        const session = useStore.getState().session;
+        const senderUserId = session?.user?.id;
+        const senderName = session?.user?.user_metadata?.full_name || session?.user?.email?.split('@')[0] || t('collaboration.collaborator', { defaultValue: 'Colaborador' });
+        const userColor = getCollabColor(localClientIdRef.current);
+
+        liveChannelRef.current.send({
+            type: 'broadcast',
+            event: 'LIVE_NOTE_CHANGE',
+            payload: {
+                ...payload,
+                senderClientId: localClientIdRef.current,
+                senderUserId,
+                senderName,
+                userColor,
+                timestamp: Date.now(),
+            },
+        }).catch?.(() => {});
+    }, [t]);
+
+    // Transmite la posición del cursor de este usuario en vivo estilo Google Docs
+    const broadcastCursorMove = useCallback((pageIndex: number, cursor: any) => {
+        if (!liveChannelRef.current || isApplyingRemoteBroadcastRef.current) return;
+        broadcastLiveChange({
+            changeType: 'CURSOR_MOVE',
+            pageIndex,
+            cursor,
+        });
+    }, [broadcastLiveChange]);
+
+    // Transmite el retiro del cursor cuando el usuario sale del foco
+    const broadcastCursorRemove = useCallback((pageIndex: number) => {
+        if (!liveChannelRef.current) return;
+        broadcastLiveChange({
+            changeType: 'CURSOR_REMOVE',
+            pageIndex,
+        });
+    }, [broadcastLiveChange]);
+
+    // Establecer título con registro en historial debounced y transmisión en vivo inmediata
     const handleSetTitle = useCallback((newTitle: string) => {
+        if (!userPermissionRef.current.canEdit || !userPermissionRef.current.hasAccess || userPermissionRef.current.isRevoked) return;
         setTitle(newTitle);
         recordChange({
             title: newTitle,
             pages: currentValuesRef.current.pages,
             currentPageIndex: currentValuesRef.current.currentPageIndex,
         }, false);
-    }, [recordChange]);
+
+        if (!isApplyingRemoteBroadcastRef.current) {
+            if (broadcastTitleTimeoutRef.current) {
+                clearTimeout(broadcastTitleTimeoutRef.current);
+            }
+            broadcastTitleTimeoutRef.current = setTimeout(() => {
+                broadcastLiveChange({
+                    changeType: 'TITLE',
+                    title: newTitle,
+                });
+            }, 80);
+        }
+    }, [recordChange, broadcastLiveChange]);
 
     /**
-     * Actualiza el contenido HTML de una página específica.
+     * Actualiza el contenido HTML de una página específica y transmite en vivo por WebSockets.
      */
     const updatePageContent = useCallback((index: number, newHtml: string) => {
+        if (!userPermissionRef.current.canEdit || !userPermissionRef.current.hasAccess || userPermissionRef.current.isRevoked) return;
+        if (isApplyingRemoteBroadcastRef.current) return;
+
+        const lastReceived = lastRemoteBroadcastReceivedRef.current[index];
+        const lastTime = lastRemoteBroadcastTimeRef.current[index] || 0;
+        if (lastReceived === newHtml) return;
+        // 600ms: ventana ampliada para suprimir eco de contenido remoto recién aplicado
+        if (Date.now() - lastTime < 600) {
+            const cleanLast = (lastReceived || '').replace(/\s+/g, ' ').trim();
+            const cleanNew = (newHtml || '').replace(/\s+/g, ' ').trim();
+            if (cleanLast === cleanNew) return;
+        }
+
         setPages(prev => {
             const next = [...prev];
             if (index >= 0 && index < next.length) {
@@ -191,12 +786,25 @@ export function useCreateNote(
             }, false);
             return next;
         });
-    }, [recordChange]);
+
+        // Transmisión instantánea por WebSockets debounced a ~60ms (fluidez estilo Google Docs / Word)
+        if (broadcastContentTimeoutRefs.current[index]) {
+            clearTimeout(broadcastContentTimeoutRefs.current[index]);
+        }
+        broadcastContentTimeoutRefs.current[index] = setTimeout(() => {
+            broadcastLiveChange({
+                changeType: 'PAGE_CONTENT',
+                pageIndex: index,
+                content: newHtml,
+            });
+        }, 60);
+    }, [recordChange, broadcastLiveChange]);
 
     /**
      * Agrega una nueva página en blanco al final.
      */
     const addPage = useCallback(() => {
+        if (!userPermissionRef.current.canEdit || !userPermissionRef.current.hasAccess || userPermissionRef.current.isRevoked) return;
         setPages(prev => {
             const next = [...prev, createPage('')];
             const nextIndex = next.length - 1;
@@ -206,14 +814,24 @@ export function useCreateNote(
                 pages: next,
                 currentPageIndex: nextIndex,
             }, true);
+
+            if (!isApplyingRemoteBroadcastRef.current) {
+                broadcastLiveChange({
+                    changeType: 'PAGES_STRUCTURE',
+                    pages: next,
+                    layout: currentValuesRef.current.scrollLayout,
+                });
+            }
+
             return next;
         });
-    }, [recordChange]);
+    }, [recordChange, broadcastLiveChange]);
 
     /**
      * Elimina una página por su índice.
      */
     const deletePage = useCallback((index: number) => {
+        if (!userPermissionRef.current.canEdit || !userPermissionRef.current.hasAccess || userPermissionRef.current.isRevoked) return;
         setPages(prev => {
             if (prev.length <= 1) return prev;
             const next = prev.filter((_, i) => i !== index);
@@ -224,14 +842,24 @@ export function useCreateNote(
                 pages: next,
                 currentPageIndex: nextIndex,
             }, true);
+
+            if (!isApplyingRemoteBroadcastRef.current) {
+                broadcastLiveChange({
+                    changeType: 'PAGES_STRUCTURE',
+                    pages: next,
+                    layout: currentValuesRef.current.scrollLayout,
+                });
+            }
+
             return next;
         });
-    }, [recordChange]);
+    }, [recordChange, broadcastLiveChange]);
 
     /**
      * Duplica una página por su índice e inserta la copia inmediatamente después.
      */
     const duplicatePage = useCallback((index: number) => {
+        if (!userPermissionRef.current.canEdit || !userPermissionRef.current.hasAccess || userPermissionRef.current.isRevoked) return;
         setPages(prev => {
             if (index < 0 || index >= prev.length) return prev;
             const source = prev[index];
@@ -246,9 +874,18 @@ export function useCreateNote(
                 pages: next,
                 currentPageIndex: nextIndex,
             }, true);
+
+            if (!isApplyingRemoteBroadcastRef.current) {
+                broadcastLiveChange({
+                    changeType: 'PAGES_STRUCTURE',
+                    pages: next,
+                    layout: currentValuesRef.current.scrollLayout,
+                });
+            }
+
             return next;
         });
-    }, [recordChange, t]);
+    }, [recordChange, t, broadcastLiveChange]);
 
     /**
      * Inserta una nueva hoja en blanco inmediatamente después del índice especificado.
@@ -264,14 +901,24 @@ export function useCreateNote(
                 pages: next,
                 currentPageIndex: insertAt,
             }, true);
+
+            if (!isApplyingRemoteBroadcastRef.current) {
+                broadcastLiveChange({
+                    changeType: 'PAGES_STRUCTURE',
+                    pages: next,
+                    layout: currentValuesRef.current.scrollLayout,
+                });
+            }
+
             return next;
         });
-    }, [recordChange]);
+    }, [recordChange, broadcastLiveChange]);
 
     /**
      * Actualiza el título personalizado de una página.
      */
     const renamePage = useCallback((index: number, newTitle: string) => {
+        if (!userPermissionRef.current.canEdit || !userPermissionRef.current.hasAccess || userPermissionRef.current.isRevoked) return;
         setPages(prev => {
             if (index < 0 || index >= prev.length) return prev;
             const next = [...prev];
@@ -281,15 +928,25 @@ export function useCreateNote(
                 pages: next,
                 currentPageIndex: currentValuesRef.current.currentPageIndex,
             }, false);
+
+            if (!isApplyingRemoteBroadcastRef.current) {
+                broadcastLiveChange({
+                    changeType: 'PAGES_STRUCTURE',
+                    pages: next,
+                    layout: currentValuesRef.current.scrollLayout,
+                });
+            }
+
             return next;
         });
-    }, [recordChange]);
+    }, [recordChange, broadcastLiveChange]);
 
     /**
      * Reordena las páginas desplazando un elemento desde fromIndex hacia toIndex,
      * sincronizando con precisión el índice activo para que el usuario no pierda su posición.
      */
     const reorderPages = useCallback((fromIndex: number, toIndex: number) => {
+        if (!userPermissionRef.current.canEdit || !userPermissionRef.current.hasAccess || userPermissionRef.current.isRevoked) return;
         setPages(prev => {
             if (
                 fromIndex < 0 ||
@@ -313,9 +970,18 @@ export function useCreateNote(
                 pages: next,
                 currentPageIndex: nextIndex,
             }, true);
+
+            if (!isApplyingRemoteBroadcastRef.current) {
+                broadcastLiveChange({
+                    changeType: 'PAGES_STRUCTURE',
+                    pages: next,
+                    layout: currentValuesRef.current.scrollLayout,
+                });
+            }
+
             return next;
         });
-    }, [recordChange]);
+    }, [recordChange, broadcastLiveChange]);
 
     /**
      * Mueve una página un paso hacia arriba o hacia abajo.
@@ -324,6 +990,17 @@ export function useCreateNote(
         const targetIndex = direction === 'up' ? index - 1 : index + 1;
         reorderPages(index, targetIndex);
     }, [reorderPages]);
+
+    const handleSetScrollLayout = useCallback((newLayout: PageLayoutMode) => {
+        setScrollLayout(newLayout);
+        if (!isApplyingRemoteBroadcastRef.current) {
+            broadcastLiveChange({
+                changeType: 'PAGES_STRUCTURE',
+                pages: currentValuesRef.current.pages,
+                layout: newLayout,
+            });
+        }
+    }, [broadcastLiveChange]);
 
     const recordSnapshot = useCallback((immediate: boolean = false) => {
         recordChange({
@@ -337,6 +1014,9 @@ export function useCreateNote(
      * Guarda la nota silenciosamente en segundo plano sin navegar ni bloquear la UI.
      */
     const saveSilently = async () => {
+        if (!userPermissionRef.current.canEdit || !userPermissionRef.current.hasAccess || userPermissionRef.current.isRevoked) {
+            return;
+        }
         flushPendingDebounce();
         const {
             title: currentTitle,
@@ -346,6 +1026,7 @@ export function useCreateNote(
             isPinned: currentPinned,
             folderId: currentFolderId,
             eventId: currentEventId,
+            fontFamily: currentFontFamily,
         } = currentValuesRef.current;
         const currentAttsJson = currentAtts.length > 0 ? JSON.stringify(currentAtts) : '[]';
         const serializedContent = serializeNotePages(currentPages, currentLayout);
@@ -365,7 +1046,8 @@ export function useCreateNote(
             last.attachments === currentAttsJson &&
             last.isPinned === currentPinned &&
             last.folderId === currentFolderId &&
-            last.eventId === currentEventId
+            last.eventId === currentEventId &&
+            last.fontFamily === currentFontFamily
         ) {
             return;
         }
@@ -383,9 +1065,10 @@ export function useCreateNote(
                     is_pinned: currentPinned ? 1 : 0,
                     folder_id: currentFolderId,
                     event_id: currentEventId,
+                    font_family: currentFontFamily,
                 });
             } else {
-                const created = await addNote(currentTitle, serializedContent, attsJsonToSave, undefined, currentPinned, currentFolderId, currentEventId);
+                const created = await addNote(currentTitle, serializedContent, attsJsonToSave, undefined, currentPinned, currentFolderId, currentEventId, currentFontFamily);
                 if (created?.id) {
                     noteIdRef.current = created.id;
                 }
@@ -398,6 +1081,7 @@ export function useCreateNote(
                 isPinned: currentPinned,
                 folderId: currentFolderId,
                 eventId: currentEventId,
+                fontFamily: currentFontFamily,
             };
         } catch (error) {
             console.error('Error in saveSilently:', error);
@@ -413,7 +1097,7 @@ export function useCreateNote(
         }, 1200);
 
         return () => clearTimeout(timer);
-    }, [title, pages, scrollLayout, attachments, isPinned, folderId]);
+    }, [title, pages, scrollLayout, attachments, isPinned, folderId, fontFamily]);
 
     // Guardado explícito (con callback opcional)
     const handleSave = async (onSuccess?: () => void) => {
@@ -601,9 +1285,10 @@ export function useCreateNote(
         renamePage,
         movePage,
         reorderPages,
-        scrollLayout, setScrollLayout,
+        scrollLayout, setScrollLayout: handleSetScrollLayout,
         folderId, setFolderId,
         eventId, setEventId,
+        fontFamily, setFontFamily,
         attachments,
         isPinned, setIsPinned,
         isDark,
@@ -625,6 +1310,15 @@ export function useCreateNote(
         alertVisible,
         setAlertVisible,
         alertConfig,
-        maxAttachments: isPremium ? 10 : 3
+        maxAttachments: isPremium ? 10 : 3,
+        remoteSyncNotice,
+        liveCollaborator,
+        broadcastCursorMove,
+        broadcastCursorRemove,
+        userPermission,
+        canEdit: userPermission.canEdit && userPermission.hasAccess && !userPermission.isRevoked,
+        isViewer: !userPermission.canEdit || !userPermission.hasAccess || userPermission.isRevoked,
+        hasAccess: userPermission.hasAccess && !userPermission.isRevoked,
+        isRevoked: userPermission.isRevoked || !userPermission.hasAccess,
     };
 }

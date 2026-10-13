@@ -4,10 +4,12 @@ import * as FileSystem from 'expo-file-system/legacy';
 import * as IntentLauncher from 'expo-intent-launcher';
 import { Platform } from 'react-native';
 import { NotePage } from './pageUtils';
+import { getFontFamilyCss, GOOGLE_FONTS_CSS_IMPORT, NOTE_FONTS_OVERRIDE_CSS } from '../constants/noteFonts';
 
 export interface ExportPdfOptions {
     includeHeaderTitle?: boolean;
     includePageNumbers?: boolean;
+    fontFamily?: string;
 }
 
 /**
@@ -19,9 +21,10 @@ export function buildPdfHtml(
     pages: NotePage[],
     options: ExportPdfOptions = {}
 ): string {
-    const { includeHeaderTitle = true, includePageNumbers = true } = options;
+    const { includeHeaderTitle = true, includePageNumbers = true, fontFamily } = options;
     const cleanTitle = title?.trim() || 'Sin título';
     const totalPages = pages.length;
+    const activeFontCss = getFontFamilyCss(fontFamily);
 
     // Procesar cada hoja individualmente
     const renderedPagesHtml = pages.map((page, index) => {
@@ -63,6 +66,9 @@ export function buildPdfHtml(
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <title>${escapeHtml(cleanTitle)}</title>
         <style>
+            ${GOOGLE_FONTS_CSS_IMPORT}
+            ${NOTE_FONTS_OVERRIDE_CSS}
+
             @page {
                 size: A4 portrait;
                 margin: 16mm 16mm 18mm 16mm;
@@ -77,7 +83,7 @@ export function buildPdfHtml(
             body {
                 margin: 0;
                 padding: 0;
-                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+                font-family: ${activeFontCss};
                 color: #1F2937;
                 background-color: #FFFFFF;
                 font-size: 14px;

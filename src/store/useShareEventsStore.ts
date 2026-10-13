@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { CalendarEvent } from '../types/db';
+import { CalendarEvent, Reminder } from '../types/db';
 
 export interface ShareEventsCallbacks {
     onClose?: () => void;
@@ -9,9 +9,14 @@ export interface ShareEventsCallbacks {
 export interface ShareEventsStoreState {
     isOpen: boolean;
     events: CalendarEvent[];
+    reminders: Reminder[];
     onCloseCallback?: () => void;
     onSuccessCallback?: () => void;
-    openShare: (events: CalendarEvent[], callbacks?: ShareEventsCallbacks) => void;
+    openShare: (
+        events?: CalendarEvent[],
+        remindersOrCallbacks?: Reminder[] | ShareEventsCallbacks,
+        callbacks?: ShareEventsCallbacks
+    ) => void;
     closeShare: () => void;
     notifySuccess: () => void;
 }
@@ -19,15 +24,27 @@ export interface ShareEventsStoreState {
 export const useShareEventsStore = create<ShareEventsStoreState>((set, get) => ({
     isOpen: false,
     events: [],
+    reminders: [],
     onCloseCallback: undefined,
     onSuccessCallback: undefined,
-    openShare: (events, callbacks) =>
+    openShare: (events = [], remindersOrCallbacks, callbacks) => {
+        let rems: Reminder[] = [];
+        let cbs: ShareEventsCallbacks | undefined = callbacks;
+
+        if (Array.isArray(remindersOrCallbacks)) {
+            rems = remindersOrCallbacks;
+        } else if (remindersOrCallbacks && typeof remindersOrCallbacks === 'object') {
+            cbs = remindersOrCallbacks as ShareEventsCallbacks;
+        }
+
         set({
             isOpen: true,
-            events,
-            onCloseCallback: callbacks?.onClose,
-            onSuccessCallback: callbacks?.onSuccess,
-        }),
+            events: events || [],
+            reminders: rems,
+            onCloseCallback: cbs?.onClose,
+            onSuccessCallback: cbs?.onSuccess,
+        });
+    },
     closeShare: () => {
         const { onCloseCallback } = get();
         if (onCloseCallback) {
@@ -38,6 +55,7 @@ export const useShareEventsStore = create<ShareEventsStoreState>((set, get) => (
         set({
             isOpen: false,
             events: [],
+            reminders: [],
             onCloseCallback: undefined,
             onSuccessCallback: undefined,
         });
@@ -52,6 +70,7 @@ export const useShareEventsStore = create<ShareEventsStoreState>((set, get) => (
         set({
             isOpen: false,
             events: [],
+            reminders: [],
             onCloseCallback: undefined,
             onSuccessCallback: undefined,
         });

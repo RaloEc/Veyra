@@ -13,6 +13,7 @@ import {
     TextInput,
     Share,
     useWindowDimensions,
+    ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
@@ -49,6 +50,7 @@ import {
     ChevronDown,
     Paperclip,
     Users,
+    Eye,
 } from '@tamagui/lucide-icons';
 
 import { Subtask, Reminder } from '../../src/types/db';
@@ -172,9 +174,52 @@ export default function ReminderDetailScreen() {
     }
     const reminder = reminderFromStore || lastReminderRef.current;
 
+    const session = useStore(state => state.session);
+    const isShared = reminder?.is_shared === 1 || Boolean(reminder?.shared_owner_id);
+    const isOwner = !isShared || !reminder?.shared_owner_id || reminder.shared_owner_id === session?.user?.id;
+    const isReadOnly = isShared && !isOwner;
+
     const [galleryImages, setGalleryImages] = useState<{ uri: string }[]>([]);
     const [galleryIndex, setGalleryIndex] = useState(0);
     const [galleryVisible, setGalleryVisible] = useState(false);
+    const [isLoadingFallback, setIsLoadingFallback] = useState(!reminder);
+
+    useEffect(() => {
+        if (!reminder && id) {
+            let isCancelled = false;
+            setIsLoadingFallback(true);
+            (async () => {
+                try {
+                    const { getDB } = await import('../../src/db');
+                    const db = await getDB();
+                    const local = await db.getFirstAsync<Reminder>('SELECT * FROM reminders WHERE id = ?', [id]);
+                    if (local && !isCancelled) {
+                        await useStore.getState().loadReminders();
+                        return;
+                    }
+                    const session = useStore.getState().session;
+                    if (session?.user?.id) {
+                        const { supabase } = await import('../../src/lib/supabase');
+                        const { data: remote } = await supabase.from('reminders').select('*').eq('id', id).maybeSingle();
+                        if (remote && !isCancelled) {
+                            const { SyncService } = await import('../../src/services/syncService');
+                            await SyncService.upsertLocalReminder(db, remote, session.user.id);
+                            await useStore.getState().loadReminders();
+                        }
+                    }
+                } catch (e) {
+                    console.warn('[ReminderDetail] Error al intentar cargar recordatorio:', e);
+                } finally {
+                    if (!isCancelled) {
+                        setIsLoadingFallback(false);
+                    }
+                }
+            })();
+            return () => {
+                isCancelled = true;
+            };
+        }
+    }, [id, reminder]);
 
     // Modals
     const [isOptionsModalVisible, setIsOptionsModalVisible] = useState(false);
@@ -340,9 +385,13 @@ export default function ReminderDetailScreen() {
                     />
                 </View>
                 <View style={styles.emptyContainer}>
-                    <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
-                        {t('home.no_tasks')}
-                    </Text>
+                    {isLoadingFallback ? (
+                        <ActivityIndicator size="small" color={accent.primary} />
+                    ) : (
+                        <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
+                            {t('home.no_tasks')}
+                        </Text>
+                    )}
                 </View>
             </SafeAreaView>
         );
@@ -463,7 +512,35 @@ export default function ReminderDetailScreen() {
         handleBack();
     };
 
+    const handleLeaveCollab = () => {
+        Alert.alert(
+            language === 'es' ? 'Dejar de seguir recordatorio' : 'Leave reminder',
+            language === 'es'
+                ? 'Ya no verás este recordatorio en tus tareas ni recibirás sus actualizaciones en tiempo real.'
+                : 'You will no longer see this reminder or receive its real-time updates.',
+            [
+                { text: t('home.cancel'), style: 'cancel' },
+                {
+                    text: language === 'es' ? 'Dejar de seguir' : 'Leave',
+                    style: 'destructive',
+                    onPress: async () => {
+                        handleBack();
+                        try {
+                            const { CollaborationService } = await import('../../src/services/collaborationService');
+                            await CollaborationService.leaveCollaboration('reminder', reminder.id);
+                        } catch {}
+                        await deleteReminder(reminder.id);
+                    },
+                },
+            ]
+        );
+    };
+
     const handleDelete = () => {
+        if (isReadOnly) {
+            handleLeaveCollab();
+            return;
+        }
         Alert.alert(
             t('home.delete_reminder_q'),
             t('home.action_irreversible'),
@@ -541,12 +618,14 @@ export default function ReminderDetailScreen() {
                         onPress={handleShareReminder}
                     />
 
-                    <VeyraIconButton
-                        variant="ghost"
-                        size="sm"
-                        icon={<Edit3 size={19} color={colors.textSecondary} />}
-                        onPress={() => router.push({ pathname: '/create', params: { id: reminder.id } })}
-                    />
+                    {!isReadOnly && (
+                        <VeyraIconButton
+                            variant="ghost"
+                            size="sm"
+                            icon={<Edit3 size={19} color={colors.textSecondary} />}
+                            onPress={() => router.push({ pathname: '/create', params: { id: reminder.id } })}
+                        />
+                    )}
 
                     <VeyraIconButton
                         variant="ghost"
@@ -566,6 +645,15 @@ export default function ReminderDetailScreen() {
                     <View style={styles.heroSection}>
                         {/* Meta Tags Row */}
                         <View style={styles.metaRow}>
+                            {isReadOnly && (
+                                <View style={[styles.controlPill, { backgroundColor: isDark ? 'rgba(56, 189, 248, 0.15)' : 'rgba(2, 132, 199, 0.1)' }]}>
+                                    <Eye size={12} color={isDark ? '#38BDF8' : '#0284C7'} />
+                                    <Text style={[styles.controlPillText, { color: isDark ? '#38BDF8' : '#0284C7', fontWeight: '600' }]}>
+                                        {language === 'es' ? 'Solo lectura' : 'View only'}
+                                    </Text>
+                                </View>
+                            )}
+
                             <View style={[styles.controlPill, { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.06)' : 'rgba(0, 0, 0, 0.05)' }]}>
                                 <View style={[styles.controlDot, { backgroundColor: controlColor.main }]} />
                                 <Text style={[styles.controlPillText, { color: colors.textSecondary }]}>
@@ -740,8 +828,19 @@ export default function ReminderDetailScreen() {
                                                         borderBottomColor: colors.borderSubtle,
                                                     },
                                                 ]}
-                                                activeOpacity={0.7}
-                                                onPress={() => reminder && toggleSubtask(reminder.id, item.id)}
+                                                activeOpacity={isReadOnly ? 0.9 : 0.7}
+                                                onPress={() => {
+                                                    if (isReadOnly) {
+                                                        Alert.alert(
+                                                            language === 'es' ? 'Solo lectura' : 'View only',
+                                                            language === 'es'
+                                                                ? 'Este recordatorio es compartido en modo solo lectura.'
+                                                                : 'This reminder is shared in read-only mode.'
+                                                        );
+                                                        return;
+                                                    }
+                                                    if (reminder) toggleSubtask(reminder.id, item.id);
+                                                }}
                                             >
                                                 <View
                                                     style={[
@@ -770,46 +869,48 @@ export default function ReminderDetailScreen() {
                                     </View>
 
                                     {/* Quick Add Subtask Input */}
-                                    {isAddingSubtask ? (
-                                        <View style={[styles.inlineAddBox, { borderColor: accent.primary }]}>
-                                            <TextInput
-                                                style={[styles.inlineAddInput, { color: colors.textPrimary }]}
-                                                placeholder={language === 'es' ? 'Nueva subtarea...' : 'New subtask...'}
-                                                placeholderTextColor={colors.textMuted}
-                                                value={newSubtaskTitle}
-                                                onChangeText={setNewSubtaskTitle}
-                                                autoFocus
-                                                onSubmitEditing={handleAddSubtask}
-                                            />
-                                            <View style={styles.inlineAddActions}>
-                                                <TouchableOpacity
-                                                    onPress={() => {
-                                                        setIsAddingSubtask(false);
-                                                        setNewSubtaskTitle('');
-                                                    }}
-                                                    style={styles.inlineCancelBtn}
-                                                >
-                                                    <X size={16} color={colors.textMuted} />
-                                                </TouchableOpacity>
-                                                <TouchableOpacity
-                                                    onPress={handleAddSubtask}
-                                                    style={[styles.inlineSubmitBtn, { backgroundColor: accent.primary }]}
-                                                >
-                                                    <Check size={15} color="#FFFFFF" strokeWidth={3} />
-                                                </TouchableOpacity>
+                                    {!isReadOnly && (
+                                        isAddingSubtask ? (
+                                            <View style={[styles.inlineAddBox, { borderColor: accent.primary }]}>
+                                                <TextInput
+                                                    style={[styles.inlineAddInput, { color: colors.textPrimary }]}
+                                                    placeholder={language === 'es' ? 'Nueva subtarea...' : 'New subtask...'}
+                                                    placeholderTextColor={colors.textMuted}
+                                                    value={newSubtaskTitle}
+                                                    onChangeText={setNewSubtaskTitle}
+                                                    autoFocus
+                                                    onSubmitEditing={handleAddSubtask}
+                                                />
+                                                <View style={styles.inlineAddActions}>
+                                                    <TouchableOpacity
+                                                        onPress={() => {
+                                                            setIsAddingSubtask(false);
+                                                            setNewSubtaskTitle('');
+                                                        }}
+                                                        style={styles.inlineCancelBtn}
+                                                    >
+                                                        <X size={16} color={colors.textMuted} />
+                                                    </TouchableOpacity>
+                                                    <TouchableOpacity
+                                                        onPress={handleAddSubtask}
+                                                        style={[styles.inlineSubmitBtn, { backgroundColor: accent.primary }]}
+                                                    >
+                                                        <Check size={15} color="#FFFFFF" strokeWidth={3} />
+                                                    </TouchableOpacity>
+                                                </View>
                                             </View>
-                                        </View>
-                                    ) : (
-                                        <TouchableOpacity
-                                            activeOpacity={0.6}
-                                            onPress={() => setIsAddingSubtask(true)}
-                                            style={styles.addSubtaskTextBtn}
-                                        >
-                                            <Plus size={15} color={accent.primary} />
-                                            <Text style={[styles.addSubtaskText, { color: accent.primary }]}>
-                                                {language === 'es' ? 'Agregar subtarea' : 'Add subtask'}
-                                            </Text>
-                                        </TouchableOpacity>
+                                        ) : (
+                                            <TouchableOpacity
+                                                activeOpacity={0.6}
+                                                onPress={() => setIsAddingSubtask(true)}
+                                                style={styles.addSubtaskTextBtn}
+                                            >
+                                                <Plus size={15} color={accent.primary} />
+                                                <Text style={[styles.addSubtaskText, { color: accent.primary }]}>
+                                                    {language === 'es' ? 'Agregar subtarea' : 'Add subtask'}
+                                                </Text>
+                                            </TouchableOpacity>
+                                        )
                                     )}
                                 </View>
                             )}
@@ -915,7 +1016,14 @@ export default function ReminderDetailScreen() {
                     },
                 ]}
             >
-                {isCompleted ? (
+                {isReadOnly ? (
+                    <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 10 }}>
+                        <Eye size={18} color={isDark ? '#38BDF8' : '#0284C7'} />
+                        <Text style={{ fontSize: 14, fontWeight: '600', color: isDark ? '#38BDF8' : '#0284C7' }}>
+                            {language === 'es' ? 'Modo observador (Solo lectura)' : 'Viewer mode (Read only)'}
+                        </Text>
+                    </View>
+                ) : isCompleted ? (
                     <>
                         <VeyraButton
                             variant="secondary"
@@ -1124,19 +1232,21 @@ export default function ReminderDetailScreen() {
                             {t('reminder.options', { defaultValue: 'Opciones' })}
                         </Text>
 
-                        <TouchableOpacity
-                            style={[styles.sheetOptionRow, { borderBottomColor: colors.borderSubtle }]}
-                            activeOpacity={0.7}
-                            onPress={() => {
-                                setIsOptionsModalVisible(false);
-                                router.push({ pathname: '/create', params: { id: reminder.id } });
-                            }}
-                        >
-                            <Edit3 size={18} color={accent.primary} />
-                            <Text style={[styles.sheetOptionText, { color: colors.textPrimary }]}>
-                                {t('common.edit', { defaultValue: 'Editar recordatorio' })}
-                            </Text>
-                        </TouchableOpacity>
+                        {!isReadOnly && (
+                            <TouchableOpacity
+                                style={[styles.sheetOptionRow, { borderBottomColor: colors.borderSubtle }]}
+                                activeOpacity={0.7}
+                                onPress={() => {
+                                    setIsOptionsModalVisible(false);
+                                    router.push({ pathname: '/create', params: { id: reminder.id } });
+                                }}
+                            >
+                                <Edit3 size={18} color={accent.primary} />
+                                <Text style={[styles.sheetOptionText, { color: colors.textPrimary }]}>
+                                    {t('common.edit', { defaultValue: 'Editar recordatorio' })}
+                                </Text>
+                            </TouchableOpacity>
+                        )}
 
                         <TouchableOpacity
                             style={[styles.sheetOptionRow, { borderBottomColor: colors.borderSubtle }]}
@@ -1149,19 +1259,21 @@ export default function ReminderDetailScreen() {
                             </Text>
                         </TouchableOpacity>
 
-                        <TouchableOpacity
-                            style={[styles.sheetOptionRow, { borderBottomColor: colors.borderSubtle }]}
-                            activeOpacity={0.7}
-                            onPress={() => {
-                                setIsOptionsModalVisible(false);
-                                handleShareReminder();
-                            }}
-                        >
-                            <Users size={18} color={accent.primary} />
-                            <Text style={[styles.sheetOptionText, { color: colors.textPrimary }]}>
-                                {language === 'es' ? 'Colaborar / Invitar personas' : 'Collaborate / Invite people'}
-                            </Text>
-                        </TouchableOpacity>
+                        {isOwner && (
+                            <TouchableOpacity
+                                style={[styles.sheetOptionRow, { borderBottomColor: colors.borderSubtle }]}
+                                activeOpacity={0.7}
+                                onPress={() => {
+                                    setIsOptionsModalVisible(false);
+                                    handleShareReminder();
+                                }}
+                            >
+                                <Users size={18} color={accent.primary} />
+                                <Text style={[styles.sheetOptionText, { color: colors.textPrimary }]}>
+                                    {language === 'es' ? 'Colaborar / Invitar personas' : 'Collaborate / Invite people'}
+                                </Text>
+                            </TouchableOpacity>
+                        )}
 
                         <TouchableOpacity
                             style={[styles.sheetOptionRow, { borderBottomColor: colors.borderSubtle }]}
@@ -1187,7 +1299,9 @@ export default function ReminderDetailScreen() {
                         >
                             <Trash2 size={18} color={isDark ? '#FB7185' : '#E11D48'} />
                             <Text style={[styles.sheetOptionText, { color: isDark ? '#FB7185' : '#E11D48' }]}>
-                                {t('home.delete', { defaultValue: 'Eliminar recordatorio' })}
+                                {isReadOnly
+                                    ? (language === 'es' ? 'Dejar de seguir recordatorio' : 'Leave reminder')
+                                    : t('home.delete', { defaultValue: 'Eliminar recordatorio' })}
                             </Text>
                         </TouchableOpacity>
                     </VeyraSurface>
@@ -1212,7 +1326,7 @@ export default function ReminderDetailScreen() {
                     targetType="reminder"
                     targetId={reminder.id}
                     targetTitle={reminder.title}
-                    isOwner={reminder.is_shared !== 1}
+                    isOwner={isOwner}
                 />
             )}
             </SafeAreaView>

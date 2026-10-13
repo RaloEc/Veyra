@@ -96,6 +96,9 @@ export interface Note {
     last_modified_ms?: number;
     is_shared?: number; // 0 | 1
     shared_owner_id?: string;
+    is_revoked?: number; // 0 | 1 (1 si el propietario revocó el acceso)
+    collab_role?: string; // 'editor' | 'viewer' para notas colaborativas
+    font_family?: string; // ID de tipografía base ('sans' | 'serif' | 'mono' | 'script' | 'rounded')
 }
 
 export interface CalendarEvent {
@@ -123,8 +126,15 @@ export interface CalendarEvent {
 
 // ─── Tipos para Colaboración y Recursos Compartidos ───────────
 
-export type CollabTargetType = 'folder' | 'reminder' | 'note' | 'event';
+export type CollabTargetType = 'folder' | 'reminder' | 'note' | 'event' | 'batch';
 export type CollabRole = 'viewer' | 'editor';
+
+export interface BatchCollabItem {
+    target_type: 'reminder' | 'event' | 'note' | 'folder';
+    target_id: string;
+    target_name: string;
+    role: CollabRole;
+}
 
 export interface ShareInvitation {
     id: string; // UUID
@@ -134,6 +144,7 @@ export interface ShareInvitation {
     target_id: string;
     target_name?: string;
     role: CollabRole;
+    batch_items?: BatchCollabItem[];
     is_public_members?: boolean;
     status: 'pending' | 'accepted' | 'revoked' | 'expired';
     created_at: string;

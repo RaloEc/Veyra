@@ -663,7 +663,10 @@
         "delete_note": "Eliminar nota",
         "delete_note_desc": "Mover esta nota a la papelera",
         "undo": "Deshacer",
-        "redo": "Rehacer"
+        "redo": "Rehacer",
+        "font_family": "Tipografía de la nota",
+        "font_family_title": "Tipografía de la nota",
+        "font_family_subtitle": "Elige la fuente base para toda la nota"
     },
     "notifications": {
         "default_body": "Es hora de actuar. Confirma tu acción.",

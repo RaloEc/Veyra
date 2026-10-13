@@ -176,7 +176,7 @@ interface PendingAttachment {
     isImage: boolean;
 }
 
-export function BottomTabBar() {
+function BottomTabBarComponent() {
     const router = useRouter();
     const pathname = usePathname();
     const { bottom: bottomInset } = useScreenInsets();
@@ -221,10 +221,11 @@ export function BottomTabBar() {
     const isSelecting = selection.active && selection.actions.length > 0;
     const morphProgress = useSharedValue(0);
 
-    // Estado del modo Compartir Eventos (Morph del Dock)
+    // Estado del modo Compartir Eventos / Recordatorios (Morph del Dock)
     const shareEventsState = useShareEventsStore();
-    const isSharingEvents = shareEventsState.isOpen && shareEventsState.events.length > 0;
-    const shareEventsList = shareEventsState.events;
+    const isSharingEvents = shareEventsState.isOpen && ((shareEventsState.events?.length || 0) > 0 || (shareEventsState.reminders?.length || 0) > 0);
+    const shareEventsList = shareEventsState.events || [];
+    const shareRemindersList = shareEventsState.reminders || [];
     const shareMorphProgress = useSharedValue(0);
 
     // Estado del modo Creación (Morph del Dock)
@@ -3419,6 +3420,7 @@ export function BottomTabBar() {
                     >
                         <ShareEventsMorphCard
                             events={shareEventsList}
+                            reminders={shareRemindersList}
                             onClose={() => useShareEventsStore.getState().closeShare()}
                             onSuccess={() => useShareEventsStore.getState().notifySuccess()}
                         />
@@ -3440,6 +3442,8 @@ export function BottomTabBar() {
         </>
     );
 }
+
+export const BottomTabBar = React.memo(BottomTabBarComponent);
 
 const styles = StyleSheet.create({
     backdrop: {

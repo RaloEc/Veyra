@@ -8,6 +8,7 @@ import {
     ActivityIndicator,
     ScrollView,
     RefreshControl,
+    Image as RNImage,
 } from 'react-native';
 import {
     X,
@@ -19,6 +20,8 @@ import {
     Trash2,
     UserPlus,
     RotateCcw,
+    Plus,
+    Image as ImageIcon,
 } from '@tamagui/lucide-icons';
 import { formatDistanceToNow } from 'date-fns';
 import { es, enUS } from 'date-fns/locale';
@@ -29,6 +32,7 @@ import { VeyraIconButton } from '../ui/VeyraIconButton';
 import { CollaborationService } from '../../services/collaborationService';
 import { CollabTargetType, CollaborationActivity } from '../../types/db';
 import { useStore } from '../../store/useStore';
+import { NoteChangeDetail } from '../../utils/diffNoteChanges';
 
 interface ActivityHistoryModalProps {
     visible: boolean;
@@ -73,7 +77,44 @@ export const ActivityHistoryModal: React.FC<ActivityHistoryModalProps> = ({
         }
     }, [visible, loadActivity]);
 
-    const getActionBadge = (action: CollaborationActivity['action']) => {
+    const parseActivityDetail = (raw?: string | null): NoteChangeDetail | null => {
+        if (!raw || typeof raw !== 'string') return null;
+        const trimmed = raw.trim();
+        if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+            try {
+                const parsed = JSON.parse(trimmed);
+                if (parsed && (parsed.type === 'note_diff' || parsed.summary)) {
+                    return parsed as NoteChangeDetail;
+                }
+            } catch {}
+        }
+        return null;
+    };
+
+    const getActionBadge = (action: CollaborationActivity['action'], diffDetail?: NoteChangeDetail | null) => {
+        if (action === 'edited' && diffDetail) {
+            if (diffDetail.imagesAdded && diffDetail.imagesAdded.length > 0) {
+                return {
+                    label: diffDetail.imagesAdded.length === 1 ? 'Imagen añadida' : `${diffDetail.imagesAdded.length} imgs añadidas`,
+                    color: semantics?.success?.primary || '#10B981',
+                    icon: <ImageIcon size={13} color={(semantics?.success?.primary || '#10B981') as any} />,
+                };
+            }
+            if (diffDetail.imagesRemoved && diffDetail.imagesRemoved.length > 0) {
+                return {
+                    label: diffDetail.imagesRemoved.length === 1 ? 'Imagen eliminada' : `${diffDetail.imagesRemoved.length} imgs eliminadas`,
+                    color: semantics?.critical?.primary || '#EF4444',
+                    icon: <Trash2 size={13} color={(semantics?.critical?.primary || '#EF4444') as any} />,
+                };
+            }
+            if (diffDetail.summary) {
+                return {
+                    label: diffDetail.summary,
+                    color: '#3B82F6',
+                    icon: <Edit3 size={13} color="#3B82F6" />,
+                };
+            }
+        }
         switch (action) {
             case 'completed':
                 return {
@@ -203,7 +244,8 @@ export const ActivityHistoryModal: React.FC<ActivityHistoryModalProps> = ({
                                 </View>
                             ) : (
                                 activities.map((item, index) => {
-                                    const badge = getActionBadge(item.action);
+                                    const diffDetail = parseActivityDetail(item.details);
+                                    const badge = getActionBadge(item.action, diffDetail);
                                     let relativeTime = '';
                                     try {
                                         relativeTime = formatDistanceToNow(new Date(item.created_at), {
@@ -214,7 +256,18 @@ export const ActivityHistoryModal: React.FC<ActivityHistoryModalProps> = ({
                                         relativeTime = item.created_at;
                                     }
 
-                                    const initial = (item.actor_name?.[0] || 'U').toUpperCase();
+                                    const rawActor = item.actor_name || '';
+                                    let displayActor = rawActor;
+                                    if (displayActor.includes('@')) {
+                                        const prefix = displayActor.split('@')[0];
+                                        displayActor = prefix.charAt(0).toUpperCase() + prefix.slice(1);
+                                    } else if (displayActor) {
+                                        displayActor = displayActor.charAt(0).toUpperCase() + displayActor.slice(1);
+                                    } else {
+                                        displayActor = language === 'es' ? 'Usuario' : 'User';
+                                    }
+
+                                    const initial = (displayActor[0] || 'U').toUpperCase();
 
                                     return (
                                         <View
@@ -251,7 +304,7 @@ export const ActivityHistoryModal: React.FC<ActivityHistoryModalProps> = ({
                                                         style={[styles.actorName, { color: colors.textPrimary }]}
                                                         numberOfLines={1}
                                                     >
-                                                        {item.actor_name || (language === 'es' ? 'Usuario' : 'User')}
+                                                        {displayActor}
                                                     </Text>
 
                                                     <View
@@ -267,12 +320,86 @@ export const ActivityHistoryModal: React.FC<ActivityHistoryModalProps> = ({
                                                     </View>
                                                 </View>
 
-                                                {Boolean(item.details || item.item_title) && (
+                                                {/* Vista previa de imágenes añadidas */}
+                                                {diffDetail?.imagesAdded && diffDetail.imagesAdded.length > 0 && (
+                                                    <View style={styles.imageDiffContainer}>
+                                                        <Text style={[styles.imageDiffLabel, { color: semantics.success.primary }]}>
+                                                            {diffDetail.imagesAdded.length === 1 ? '+ 1 imagen añadida:' : `+ ${diffDetail.imagesAdded.length} imágenes añadidas:`}
+                                                        </Text>
+                                                        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.imageThumbRow}>
+                                                            {diffDetail.imagesAdded.map((uri, imgIdx) => (
+                                                                <View key={`modal_add_${imgIdx}`} style={[styles.imageThumbWrapper, { borderColor: semantics.success.primary + '50' }]}>
+                                                                    <RNImage
+                                                                        source={{ uri }}
+                                                                        style={styles.imageThumb}
+                                                                        resizeMode="cover"
+                                                                    />
+                                                                    <View style={[styles.imageThumbBadge, { backgroundColor: semantics.success.primary }]}>
+                                                                        <Plus size={8} color="#FFF" strokeWidth={3} />
+                                                                    </View>
+                                                                </View>
+                                                            ))}
+                                                        </ScrollView>
+                                                    </View>
+                                                )}
+
+                                                {/* Vista previa de imágenes eliminadas */}
+                                                {diffDetail?.imagesRemoved && diffDetail.imagesRemoved.length > 0 && (
+                                                    <View style={styles.imageDiffContainer}>
+                                                        <Text style={[styles.imageDiffLabel, { color: semantics.critical.primary }]}>
+                                                            {diffDetail.imagesRemoved.length === 1 ? '- 1 imagen eliminada:' : `- ${diffDetail.imagesRemoved.length} imágenes eliminadas:`}
+                                                        </Text>
+                                                        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.imageThumbRow}>
+                                                            {diffDetail.imagesRemoved.map((uri, imgIdx) => (
+                                                                <View key={`modal_rem_${imgIdx}`} style={[styles.imageThumbWrapper, { borderColor: semantics.critical.primary + '50' }]}>
+                                                                    <RNImage
+                                                                        source={{ uri }}
+                                                                        style={[styles.imageThumb, { opacity: 0.6 }]}
+                                                                        resizeMode="cover"
+                                                                    />
+                                                                    <View style={[styles.imageThumbBadge, { backgroundColor: semantics.critical.primary }]}>
+                                                                        <Trash2 size={8} color="#FFF" />
+                                                                    </View>
+                                                                </View>
+                                                            ))}
+                                                        </ScrollView>
+                                                    </View>
+                                                )}
+
+                                                {/* Snippet de texto */}
+                                                {Boolean(diffDetail?.textSnippet) && (
+                                                    <View style={[styles.snippetBox, { backgroundColor: isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.03)', borderColor: colors.borderSubtle, borderLeftColor: accent.primary }]}>
+                                                        <Text style={[styles.snippetText, { color: colors.textSecondary }]} numberOfLines={2}>
+                                                            "{diffDetail?.textSnippet}"
+                                                        </Text>
+                                                    </View>
+                                                )}
+
+                                                {/* Título cambiado */}
+                                                {Boolean(diffDetail?.titleChanged) && (
+                                                    <View style={[styles.snippetBox, { backgroundColor: isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.03)', borderColor: colors.borderSubtle, borderLeftColor: '#3B82F6' }]}>
+                                                        <Text style={[styles.snippetText, { color: colors.textSecondary }]}>
+                                                            {diffDetail?.titleChanged?.from ? `"${diffDetail.titleChanged.from}" → ` : ''}"{diffDetail?.titleChanged?.to}"
+                                                        </Text>
+                                                    </View>
+                                                )}
+
+                                                {/* Fallback de texto si no es diffDetail */}
+                                                {Boolean(item.details && !diffDetail) && (
                                                     <Text
                                                         style={[styles.activityDetails, { color: colors.textSecondary }]}
                                                         numberOfLines={2}
                                                     >
-                                                        {item.details || item.item_title}
+                                                        {item.details}
+                                                    </Text>
+                                                )}
+
+                                                {Boolean(!item.details && item.item_title) && (
+                                                    <Text
+                                                        style={[styles.activityDetails, { color: colors.textSecondary }]}
+                                                        numberOfLines={1}
+                                                    >
+                                                        "{item.item_title}"
                                                     </Text>
                                                 )}
 
@@ -432,5 +559,56 @@ const styles = StyleSheet.create({
     activityTime: {
         fontSize: 11.5,
         marginTop: 2,
+    },
+    imageDiffContainer: {
+        marginTop: 6,
+        marginBottom: 2,
+    },
+    imageDiffLabel: {
+        fontSize: 10,
+        fontWeight: '700',
+        letterSpacing: 0.4,
+        marginBottom: 5,
+        textTransform: 'uppercase',
+    },
+    imageThumbRow: {
+        flexDirection: 'row',
+        gap: 8,
+    },
+    imageThumbWrapper: {
+        width: 48,
+        height: 48,
+        borderRadius: 9,
+        borderWidth: 1.5,
+        overflow: 'hidden',
+        position: 'relative',
+        backgroundColor: 'rgba(128,128,128,0.08)',
+    },
+    imageThumb: {
+        width: '100%',
+        height: '100%',
+    },
+    imageThumbBadge: {
+        position: 'absolute',
+        bottom: 2,
+        right: 2,
+        width: 15,
+        height: 15,
+        borderRadius: 7.5,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    snippetBox: {
+        marginTop: 6,
+        paddingHorizontal: 8,
+        paddingVertical: 5,
+        borderRadius: 8,
+        borderWidth: 1,
+        borderLeftWidth: 3,
+    },
+    snippetText: {
+        fontSize: 11,
+        fontStyle: 'italic',
+        lineHeight: 15,
     },
 });

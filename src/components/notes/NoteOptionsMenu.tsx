@@ -21,6 +21,7 @@ import {
     Eye,
     Share2,
     Clock,
+    Type,
 } from '@tamagui/lucide-icons';
 import { useVeyraTheme } from '../../theme/useVeyraTheme';
 import { VeyraSurface } from '../ui/VeyraSurface';
@@ -33,6 +34,7 @@ export interface NoteOptionsMenuProps {
     onExportPdf: () => void;
     isExportingPdf?: boolean;
     onOpenPagesManager: () => void;
+    onOpenFontPicker?: () => void;
     pageCount: number;
     isPinned: boolean;
     onTogglePin: () => void;
@@ -49,6 +51,7 @@ export function NoteOptionsMenu({
     onExportPdf,
     isExportingPdf = false,
     onOpenPagesManager,
+    onOpenFontPicker,
     pageCount,
     isPinned,
     onTogglePin,
@@ -239,6 +242,25 @@ export function NoteOptionsMenu({
                                 </Text>
                             </View>
                         </TouchableOpacity>
+
+                        {/* Tipografía de la nota */}
+                        {onOpenFontPicker && (
+                            <TouchableOpacity
+                                activeOpacity={0.65}
+                                onPress={() => {
+                                    onClose();
+                                    onOpenFontPicker();
+                                }}
+                                style={styles.menuRow}
+                            >
+                                <View style={styles.iconSlot}>
+                                    <Type size={16} color={accent.primary as any} strokeWidth={2.2} />
+                                </View>
+                                <Text style={[styles.menuLabel, { color: colors.textPrimary }]}>
+                                    {t('notes.font_family', { defaultValue: 'Tipografía de la nota' })}
+                                </Text>
+                            </TouchableOpacity>
+                        )}
 
                         {/* 3. Mover a Carpeta */}
                         {onMoveFolder && (

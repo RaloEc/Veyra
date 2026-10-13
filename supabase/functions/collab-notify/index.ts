@@ -151,9 +151,17 @@ serve(async (req: Request) => {
       case 'uncompleted':
         bodyText = `${name} reactivó: "${title}" 🔄`;
         break;
-      case 'edited':
-        bodyText = `${name} editó: "${title}" ✏️`;
+      case 'edited': {
+        let editSummary = '';
+        if (details && typeof details === 'string' && details.trim().startsWith('{')) {
+          try {
+            const parsed = JSON.parse(details);
+            if (parsed.summary) editSummary = parsed.summary.toLowerCase();
+          } catch {}
+        }
+        bodyText = editSummary ? `${name} ${editSummary} en "${title}" ✏️` : `${name} editó: "${title}" ✏️`;
         break;
+      }
       case 'added':
         bodyText = `${name} agregó un nuevo elemento: "${title}" ➕`;
         break;

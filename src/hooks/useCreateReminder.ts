@@ -60,6 +60,11 @@ export const useCreateReminder = (id?: string, initialDateMs?: number | string) 
         return useStore.getState().reminders.find(r => r.id === id) || null;
     }, [id]);
 
+    const session = useStore(state => state.session);
+    const isShared = cachedReminder?.is_shared === 1 || Boolean(cachedReminder?.shared_owner_id);
+    const isOwner = !isShared || !cachedReminder?.shared_owner_id || cachedReminder.shared_owner_id === session?.user?.id;
+    const isReadOnly = isShared && !isOwner;
+
     const [title, setTitle] = useState(() => cachedReminder?.title || '');
     const [description, setDescription] = useState(() => cachedReminder?.description || '');
     const [attachments, setAttachments] = useState<{ uri: string, name: string }[]>(() => {
@@ -378,6 +383,7 @@ export const useCreateReminder = (id?: string, initialDateMs?: number | string) 
         animationHeight,
         isEditing,
         isDark,
+        isReadOnly,
         pickImage,
         pickImageForEditor,
         processCroppedImage,

@@ -48,8 +48,6 @@ export const MoveToFolderModal: React.FC<MoveToFolderModalProps> = ({
         }
     }, [visible]);
 
-    if (!visible) return null;
-
     const currentBrowsedFolder = browseFolderId ? folders.find(f => f.id === browseFolderId) : null;
 
     // Build breadcrumbs chain

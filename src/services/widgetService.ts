@@ -137,21 +137,27 @@ export const WidgetService = {
             }
 
             let eventList: CalendarEvent[];
+            const nowMs = Date.now();
+            const sevenDaysLater = nowMs + 7 * 24 * 60 * 60 * 1000;
+
+            const isEventActive = (e: CalendarEvent): boolean => {
+                if (e.deleted) return false;
+                const end = (e.end_time_ms && e.end_time_ms > e.start_time_ms)
+                    ? e.end_time_ms
+                    : (e.start_time_ms + 60 * 60 * 1000);
+                // Excluir eventos que ya pasaron (terminados antes de ahora)
+                return end >= nowMs && e.start_time_ms <= sevenDaysLater;
+            };
+
             if (events) {
-                eventList = events;
+                eventList = events.filter(isEventActive);
             } else {
-                const nowMs = Date.now();
-                const sevenDaysLater = nowMs + 7 * 24 * 60 * 60 * 1000;
                 try {
                     const allEvents = await EventService.getAllEvents();
-                    eventList = allEvents.filter(e => {
-                        if (e.deleted) return false;
-                        const end = e.end_time_ms || e.start_time_ms;
-                        // Incluir eventos en curso o próximos en los siguientes 7 días (excluyendo los terminados hace > 2 horas)
-                        return end >= (nowMs - 2 * 3600 * 1000) && e.start_time_ms <= sevenDaysLater;
-                    });
+                    eventList = allEvents.filter(isEventActive);
                 } catch {
-                    eventList = await EventService.getEventsForDate(new Date());
+                    const todayEvents = await EventService.getEventsForDate(new Date());
+                    eventList = todayEvents.filter(isEventActive);
                 }
             }
 
@@ -182,10 +188,22 @@ export const WidgetService = {
                     dayLabel: formatDayLabel(e.start_time_ms),
                 }));
 
-            // Combinar y ordenar cronológicamente
-            const combinedAgenda: WidgetAgendaItem[] = [...reminderItems, ...eventItems].sort(
-                (a, b) => a.timeMs - b.timeMs
-            ).slice(0, 25);
+            // Determinar si un evento está cursando (en curso ahora mismo)
+            const isOngoing = (item: WidgetAgendaItem): boolean => {
+                if (item.type !== 'event') return false;
+                const end = (item.endTimeMs && item.endTimeMs > item.timeMs)
+                    ? item.endTimeMs
+                    : (item.timeMs + 60 * 60 * 1000);
+                return nowMs >= item.timeMs && nowMs <= end;
+            };
+
+            // Combinar y ordenar: primero los cursando (en curso), luego el resto cronológicamente
+            const combinedAgenda: WidgetAgendaItem[] = [...reminderItems, ...eventItems].sort((a, b) => {
+                const aOngoing = isOngoing(a) ? 0 : 1;
+                const bOngoing = isOngoing(b) ? 0 : 1;
+                if (aOngoing !== bOngoing) return aOngoing - bOngoing;
+                return a.timeMs - b.timeMs;
+            }).slice(0, 25);
 
             await VeyraWidgetModule.syncAgendaData(combinedAgenda);
 

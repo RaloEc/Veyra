@@ -27,6 +27,7 @@ import { VEYRA_TOKENS } from '../src/theme/tokens';
 import { ErrorBoundary } from '../src/components/ErrorBoundary';
 import { RealtimeService } from '../src/services/realtimeService';
 import * as Linking from 'expo-linking';
+import { APP_NOTE_FONTS_MAP } from '../src/constants/noteFonts';
 
 const BACKGROUND_FETCH_TASK = 'background-reminder-check';
 
@@ -106,6 +107,7 @@ export default function RootLayout() {
     const [loaded] = useFonts({
         Inter: require('@tamagui/font-inter/otf/Inter-Medium.otf'),
         InterBold: require('@tamagui/font-inter/otf/Inter-Bold.otf'),
+        ...APP_NOTE_FONTS_MAP,
     });
 
     const [dbReady, setDbReady] = useState(false);
@@ -250,7 +252,9 @@ export default function RootLayout() {
 
     const isAppReady = loaded && dbReady && isHydrated && !isAuthChecking;
     const pendingConfirmIdRef = useRef<string | null>(null);
+    const pendingDeepLinkUrlRef = useRef<string | null>(null);
     const lastNavigatedRef = useRef<{ id: string; time: number }>({ id: '', time: 0 });
+    const lastHandledUrlRef = useRef<{ url: string; time: number }>({ url: '', time: 0 });
 
     const navigateToConfirm = useCallback((reminderId: string) => {
         if (!reminderId) return;
@@ -286,15 +290,17 @@ export default function RootLayout() {
         }
     }, [isAppReady, router]);
 
-    // Cuando la app termine de cargar (BD, fuentes, auth, store), si había un destino pendiente de la notificación, navegar de inmediato
+    // Cuando la app termine de cargar (BD, fuentes, auth, store), si había un destino pendiente de la notificación o enlace profundo, procesar
     useEffect(() => {
-        if (isAppReady && pendingConfirmIdRef.current) {
-            const targetId = pendingConfirmIdRef.current;
-            pendingConfirmIdRef.current = null;
-            const timer = setTimeout(() => {
-                navigateToConfirm(targetId);
-            }, 60);
-            return () => clearTimeout(timer);
+        if (isAppReady) {
+            if (pendingConfirmIdRef.current) {
+                const targetId = pendingConfirmIdRef.current;
+                pendingConfirmIdRef.current = null;
+                const timer = setTimeout(() => {
+                    navigateToConfirm(targetId);
+                }, 60);
+                return () => clearTimeout(timer);
+            }
         }
     }, [isAppReady, navigateToConfirm]);
 
@@ -406,6 +412,20 @@ export default function RootLayout() {
             console.log('[RootLayout] DeepLink URL received:', url);
             if (!url) return;
 
+            const now = Date.now();
+            // Evitar procesar el mismo deep link múltiples veces consecutivas (ej. getInitialURL + listener + browser redirect)
+            if (lastHandledUrlRef.current.url === url && (now - lastHandledUrlRef.current.time) < 3000) {
+                console.log('[RootLayout] Saltando DeepLink duplicado:', url);
+                return;
+            }
+            lastHandledUrlRef.current = { url, time: now };
+
+            if (!isAppReady) {
+                console.log('[RootLayout] App aún no lista, encolando DeepLink:', url);
+                pendingDeepLinkUrlRef.current = url;
+                return;
+            }
+
             if (url.includes('confirm/')) {
                 const match = url.match(/confirm\/([^/?#]+)/);
                 if (match && match[1]) {
@@ -414,12 +434,20 @@ export default function RootLayout() {
             } else if (url.includes('join')) {
                 try {
                     const parsed = Linking.parse(url);
-                    const code = (parsed.queryParams?.code as string) || (parsed.path?.split('/')[1]);
-                    const importParam = parsed.queryParams?.import as string;
-                    if (code) {
-                        router.push({ pathname: '/join', params: { code } });
+                    let codeParam = (parsed.queryParams?.code as string);
+                    if (!codeParam && parsed.path) {
+                        const parts = parsed.path.split('/').filter(p => p && p !== 'join');
+                        if (parts.length > 0) {
+                            codeParam = parts[0];
+                        }
+                    }
+                    const importParam = (parsed.queryParams?.import as string);
+                    if (codeParam) {
+                        router.replace({ pathname: '/join', params: { code: codeParam } });
                     } else if (importParam) {
-                        router.push({ pathname: '/join', params: { import: importParam } });
+                        router.replace({ pathname: '/join', params: { import: importParam } });
+                    } else {
+                        router.replace('/join');
                     }
                 } catch (e) {
                     console.warn('[RootLayout] Error parsing join deep link:', e);
@@ -429,12 +457,21 @@ export default function RootLayout() {
                     const match = url.match(/schedule\/([^/?#]+)/);
                     const rawId = match && match[1] ? match[1] : undefined;
                     const cleanId = rawId ? rawId.split('_')[0] : undefined;
-                    router.push({ pathname: '/schedule', params: cleanId ? { id: cleanId } : undefined } as any);
+                    router.replace({ pathname: '/schedule', params: cleanId ? { id: cleanId } : undefined } as any);
                 } catch (e) {
                     console.warn('[RootLayout] Error parsing schedule deep link:', e);
                 }
             }
         };
+
+        // Procesar deep link encolado si la app apenas terminó de inicializarse
+        if (isAppReady && pendingDeepLinkUrlRef.current) {
+            const queuedUrl = pendingDeepLinkUrlRef.current;
+            pendingDeepLinkUrlRef.current = null;
+            setTimeout(() => {
+                handleIncomingUrl(queuedUrl);
+            }, 100);
+        }
 
         const linkingSubscription = Linking.addEventListener('url', ({ url }) => {
             handleIncomingUrl(url);

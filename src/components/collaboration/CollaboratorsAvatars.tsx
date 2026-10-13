@@ -1,9 +1,10 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { Users } from '@tamagui/lucide-icons';
 import { useVeyraTheme } from '../../theme/useVeyraTheme';
 import { CollaborationService } from '../../services/collaborationService';
 import { CollabTargetType, CollaboratorMember } from '../../types/db';
+import { supabase } from '../../lib/supabase';
 
 interface CollaboratorsAvatarsProps {
     targetType: CollabTargetType;
@@ -22,19 +23,65 @@ export const CollaboratorsAvatars: React.FC<CollaboratorsAvatarsProps> = ({
 }) => {
     const { colors, accent } = useVeyraTheme();
     const [collaborators, setCollaborators] = useState<CollaboratorMember[]>([]);
+    const [isOwner, setIsOwner] = useState<boolean>(true);
+    const [isPublicMembers, setIsPublicMembers] = useState<boolean>(true);
+
+    const refresh = useCallback(async () => {
+        if (!targetId) return;
+        try {
+            const [perms, isPublic, list] = await Promise.all([
+                CollaborationService.getUserPermission(targetType, targetId),
+                CollaborationService.getMembersVisibility(targetType, targetId),
+                CollaborationService.getCollaborators(targetType, targetId),
+            ]);
+            setIsOwner(perms.isOwner);
+            setIsPublicMembers(isPublic);
+            setCollaborators(list);
+        } catch {
+            // Silencioso
+        }
+    }, [targetType, targetId]);
 
     useEffect(() => {
-        let isMounted = true;
-        CollaborationService.getCollaborators(targetType, targetId)
-            .then((list) => {
-                if (isMounted) setCollaborators(list);
+        refresh();
+
+        if (!targetId) return;
+
+        // Escuchar cambios de permisos, visibilidad o miembros en tiempo real
+        const channel = supabase
+            .channel(`avatars_live_${targetId}`)
+            .on('broadcast', { event: 'LIVE_NOTE_CHANGE' }, ({ payload }) => {
+                if (!payload) return;
+                if (payload.changeType === 'PERMISSIONS_UPDATE') {
+                    if (typeof payload.isPublicMembers === 'boolean') {
+                        setIsPublicMembers(payload.isPublicMembers);
+                    }
+                    refresh();
+                }
             })
-            .catch(() => {});
+            .on(
+                'postgres_changes',
+                {
+                    event: '*',
+                    schema: 'public',
+                    table: 'collaborations',
+                    filter: `target_id=eq.${targetId}`,
+                },
+                () => {
+                    refresh();
+                }
+            )
+            .subscribe();
 
         return () => {
-            isMounted = false;
+            supabase.removeChannel(channel).catch(() => {});
         };
-    }, [targetType, targetId]);
+    }, [targetId, refresh]);
+
+    // Si los integrantes están configurados como privados y el usuario NO es el propietario, no mostrar avatares
+    if (!isOwner && !isPublicMembers) {
+        return null;
+    }
 
     if (collaborators.length === 0 && !showIfEmpty) {
         return null;
@@ -52,7 +99,8 @@ export const CollaboratorsAvatars: React.FC<CollaboratorsAvatarsProps> = ({
         >
             <View style={styles.avatarsRow}>
                 {displayMembers.map((member, index) => {
-                    const initial = (member.email?.[0] || 'U').toUpperCase();
+                    const displayName = member.name || member.full_name || (member.email?.includes('@') ? member.email.split('@')[0] : member.email) || 'U';
+                    const initial = displayName[0]?.toUpperCase() || 'U';
                     return (
                         <View
                             key={member.collaboration_id}

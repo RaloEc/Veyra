@@ -74,7 +74,22 @@ export default function CreateScreen() {
         alertVisible,
         setAlertVisible,
         alertConfig,
+        isReadOnly,
     } = useCreateReminder(id, initialDate);
+
+    const language = useStore(state => state.language);
+
+    useEffect(() => {
+        if (isReadOnly) {
+            Alert.alert(
+                language === 'es' ? 'Solo lectura' : 'View only',
+                language === 'es'
+                    ? 'Este recordatorio es compartido en modo solo lectura y no puede modificarse.'
+                    : 'This reminder is shared in read-only mode and cannot be edited.'
+            );
+            navigateBack();
+        }
+    }, [isReadOnly]);
 
     // Limpiar etiquetas HTML de descripciones existentes para edición en texto plano elegante
     useEffect(() => {
@@ -85,8 +100,6 @@ export default function CreateScreen() {
             }
         }
     }, []);
-
-    const language = useStore(state => state.language);
 
     const isExiting = useRef(false);
     const fadeProgress = useSharedValue(0);

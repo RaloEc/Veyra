@@ -77,6 +77,7 @@ import {
     MoreVertical,
     Edit3,
     Users,
+    Lock,
 } from '@tamagui/lucide-icons';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { format, isToday, isYesterday, isThisWeek, isThisMonth, isThisYear } from 'date-fns';
@@ -211,9 +212,18 @@ const NoteItemRow = React.memo(function NoteItemRow({
     onDeleteNote,
     onTogglePinNote,
 }: NoteItemRowProps) {
-    const plainText = extractPlainTextFromPages(item.content);
-    const imageThumb = extractFirstImageUri(item.attachments, item.content);
-    const hasAttachments = item.attachments && item.attachments !== '[]';
+    const plainText = useMemo(() => extractPlainTextFromPages(item.content), [item.content]);
+    const imageThumb = useMemo(() => extractFirstImageUri(item.attachments, item.content), [item.attachments, item.content]);
+    const hasAttachments = Boolean(item.attachments && item.attachments !== '[]');
+    const isGuestRevoked = useMemo(() => {
+        if (item.is_revoked !== 1) return false;
+        const currentUserId = useStore.getState().session?.user?.id;
+        const isGuest = Boolean(
+            (item.shared_owner_id && item.shared_owner_id !== currentUserId) ||
+            (item.user_id && currentUserId && item.user_id !== currentUserId && item.user_id !== 'local_user' && item.shared_owner_id)
+        );
+        return isGuest;
+    }, [item.is_revoked, item.shared_owner_id, item.user_id]);
 
     const measuredHeight = useRef(0);
     const translateX = useSharedValue(0);
@@ -429,6 +439,7 @@ const NoteItemRow = React.memo(function NoteItemRow({
                             onLongPress={() => onLongPress(item.id)}
                             style={[
                                 styles.noteItem,
+                                isGuestRevoked && { opacity: 0.72 },
                                 isSelected && {
                                     backgroundColor: isDark ? 'rgba(59, 130, 246, 0.16)' : 'rgba(59, 130, 246, 0.09)',
                                     borderLeftWidth: 3.5,
@@ -478,7 +489,28 @@ const NoteItemRow = React.memo(function NoteItemRow({
                                         </View>
                                     )}
 
-                                    {(item.is_shared === 1 || item.shared_owner_id) && (
+                                    {isGuestRevoked ? (
+                                        <View
+                                            style={[
+                                                styles.folderInlineBadge,
+                                                {
+                                                    backgroundColor: isDark ? 'rgba(239, 68, 68, 0.18)' : 'rgba(239, 68, 68, 0.1)',
+                                                    borderColor: isDark ? 'rgba(239, 68, 68, 0.4)' : 'rgba(239, 68, 68, 0.3)',
+                                                },
+                                            ]}
+                                        >
+                                            <Lock size={10} color={isDark ? '#F87171' : '#DC2626'} strokeWidth={2.2} />
+                                            <Text
+                                                style={[
+                                                    styles.folderInlineText,
+                                                    { color: isDark ? '#F87171' : '#DC2626', fontWeight: '700' },
+                                                ]}
+                                                numberOfLines={1}
+                                            >
+                                                {language === 'es' ? 'Acceso bloqueado' : 'Access blocked'}
+                                            </Text>
+                                        </View>
+                                    ) : (item.is_shared === 1 || item.shared_owner_id) && (
                                         <View
                                             style={[
                                                 styles.folderInlineBadge,
@@ -560,7 +592,7 @@ const NoteItemRow = React.memo(function NoteItemRow({
 /**
  * NotesScreen — Organización por Contenedores Cronológicos y Carpetas Personalizadas
  */
-export default function NotesScreen({ hideBars = false }: { hideBars?: boolean } = {}) {
+function NotesScreenComponent({ hideBars = false }: { hideBars?: boolean } = {}) {
     const { t } = useTranslation();
     const router = useRouter();
 
@@ -572,6 +604,7 @@ export default function NotesScreen({ hideBars = false }: { hideBars?: boolean }
     }, [hideBars, router]);
     const language = useStore(state => state.language);
     const triggerSync = useStore(state => state.triggerSync);
+    const session = useStore(state => state.session);
     const notes = useNotesStore(state => state.notes);
     const loadNotes = useNotesStore(state => state.loadNotes);
     const deleteNote = useNotesStore(state => state.deleteNote);
@@ -580,6 +613,7 @@ export default function NotesScreen({ hideBars = false }: { hideBars?: boolean }
     const updateNotesBatch = useNotesStore(state => state.updateNotesBatch);
     const moveNotesBatch = useNotesStore(state => state.moveNotesBatch);
     const addNote = useNotesStore(state => state.addNote);
+    const markNoteRevoked = useNotesStore(state => state.markNoteRevoked);
     const setSelectedNotesIds = useNotesStore(state => state.setSelectedNotesIds);
 
     const folders = useFoldersStore(state => state.folders);
@@ -643,6 +677,7 @@ export default function NotesScreen({ hideBars = false }: { hideBars?: boolean }
     const [editingFolder, setEditingFolder] = useState<Folder | null>(null);
     const [isMoveModalVisible, setIsMoveModalVisible] = useState(false);
     const [isFolderShareModalVisible, setIsFolderShareModalVisible] = useState(false);
+    const [sharingNote, setSharingNote] = useState<Note | null>(null);
 
     // Animated values with Reanimated (runs on UI thread)
     const selectionAnim = useSharedValue(0);
@@ -824,9 +859,39 @@ export default function NotesScreen({ hideBars = false }: { hideBars?: boolean }
         if (isSelectionMode) {
             toggleSelection(id);
         } else {
+            const targetNote = notes.find(n => n.id === id);
+            const currentUserId = session?.user?.id;
+            const isGuestNote = targetNote && Boolean(
+                (targetNote.shared_owner_id && targetNote.shared_owner_id !== currentUserId) ||
+                (targetNote.user_id && currentUserId && targetNote.user_id !== currentUserId && targetNote.user_id !== 'local_user' && targetNote.shared_owner_id)
+            );
+            if (targetNote && targetNote.is_revoked === 1) {
+                if (!isGuestNote) {
+                    markNoteRevoked(id, false);
+                } else {
+                    Alert.alert(
+                        t('collaboration.access_revoked_title', { defaultValue: 'Acceso bloqueado' }),
+                        t('collaboration.access_revoked_modal', { defaultValue: 'El propietario ha revocado tu acceso a esta nota. Ya no puedes acceder a su contenido.' }),
+                        [
+                            {
+                                text: t('common.cancel', { defaultValue: 'Entendido' }),
+                                style: 'cancel',
+                            },
+                            {
+                                text: t('collaboration.remove_from_list', { defaultValue: 'Eliminar de mi lista' }),
+                                style: 'destructive',
+                                onPress: () => {
+                                    deleteNote(id);
+                                },
+                            },
+                        ]
+                    );
+                    return;
+                }
+            }
             router.push(`/notes/${id}`);
         }
-    }, [isFolderSelectionMode, isSelectionMode, router]);
+    }, [isFolderSelectionMode, isSelectionMode, router, notes, t, deleteNote, markNoteRevoked, session?.user?.id]);
 
     const handleLongPress = (id: string) => {
         if (isFolderSelectionMode) {
@@ -985,26 +1050,44 @@ export default function NotesScreen({ hideBars = false }: { hideBars?: boolean }
         const selectedObjList = notes.filter(n => selectedNotes.includes(n.id));
         if (selectedObjList.length === 0) return;
 
-        let shareText = '';
         if (selectedObjList.length === 1) {
-            const n = selectedObjList[0];
-            const plain = extractPlainTextFromPages(n.content);
-            shareText = `${n.title || (language === 'es' ? 'Sin título' : 'Untitled')}\n\n${plain}`;
-        } else {
-            shareText = selectedObjList
-                .map((n, idx) => {
-                    const plain = extractPlainTextFromPages(n.content);
-                    return `--- ${n.title || (language === 'es' ? `Nota ${idx + 1}` : `Note ${idx + 1}`)} ---\n${plain}`;
-                })
-                .join('\n\n');
+            const noteToShare = selectedObjList[0];
+            setSelectedNotes([]);
+            setSharingNote(noteToShare);
+            return;
         }
 
-        try {
-            await Share.share({
-                title: language === 'es' ? 'Notas de Veyra' : 'Veyra Notes',
-                message: shareText,
-            });
-        } catch (e) {}
+        // Si hay más de una nota seleccionada, advertir que la colaboración es individual y ofrecer enviar copia en texto
+        Alert.alert(
+            language === 'es' ? 'Compartir notas' : 'Share notes',
+            language === 'es'
+                ? `Has seleccionado ${selectedObjList.length} notas. La colaboración en tiempo real se gestiona por nota individual. ¿Deseas enviar una copia en texto de todas las notas seleccionadas?`
+                : `You have selected ${selectedObjList.length} notes. Real-time collaboration is managed per individual note. Would you like to send a text copy of all selected notes?`,
+            [
+                {
+                    text: language === 'es' ? 'Enviar copia de texto' : 'Send text copy',
+                    onPress: async () => {
+                        const shareText = selectedObjList
+                            .map((n, idx) => {
+                                const plain = extractPlainTextFromPages(n.content);
+                                return `--- ${n.title || (language === 'es' ? `Nota ${idx + 1}` : `Note ${idx + 1}`)} ---\n${plain}`;
+                            })
+                            .join('\n\n');
+
+                        try {
+                            await Share.share({
+                                title: language === 'es' ? 'Notas de Veyra' : 'Veyra Notes',
+                                message: shareText,
+                            });
+                        } catch (e) {}
+                    },
+                },
+                {
+                    text: language === 'es' ? 'Cancelar' : 'Cancel',
+                    style: 'cancel',
+                },
+            ]
+        );
     };
 
     // 5. Eliminar notas seleccionadas en bloque con salida animada suave
@@ -2205,6 +2288,8 @@ export default function NotesScreen({ hideBars = false }: { hideBars?: boolean }
             {/* Lista Base de Secciones */}
             <ScrollView
                 showsVerticalScrollIndicator={false}
+                removeClippedSubviews={Platform.OS === 'android'}
+                scrollEventThrottle={16}
                 contentContainerStyle={{
                     paddingTop: 8,
                     paddingBottom: insets.bottom + ((isSelectionMode || isFolderSelectionMode) ? 130 : 90),
@@ -2785,6 +2870,18 @@ export default function NotesScreen({ hideBars = false }: { hideBars?: boolean }
                     isOwner={activeFolderObj.is_shared !== 1}
                 />
             )}
+
+            {/* Modal de Colaboración de Nota */}
+            {sharingNote && (
+                <ShareModal
+                    visible={Boolean(sharingNote)}
+                    onClose={() => setSharingNote(null)}
+                    targetType="note"
+                    targetId={sharingNote.id}
+                    targetTitle={sharingNote.title || (language === 'es' ? 'Nota sin título' : 'Untitled note')}
+                    isOwner={!sharingNote.shared_owner_id || sharingNote.shared_owner_id === session?.user?.id || sharingNote.is_shared !== 1}
+                />
+            )}
         </View>
     );
 
@@ -2808,6 +2905,9 @@ export default function NotesScreen({ hideBars = false }: { hideBars?: boolean }
         </View>
     );
 }
+
+const NotesScreen = React.memo(NotesScreenComponent);
+export default NotesScreen;
 
 const styles = StyleSheet.create({
     screen: {

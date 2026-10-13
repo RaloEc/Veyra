@@ -33,6 +33,7 @@ import {
     MoreVertical,
     Undo2,
     Redo2,
+    Eye,
 } from '@tamagui/lucide-icons';
 import { useTranslation } from 'react-i18next';
 import { format } from 'date-fns';
@@ -70,10 +71,12 @@ import { FolderIconRenderer } from '../../src/components/notes/FolderIconRendere
 import { MoveToFolderModal } from '../../src/components/notes/MoveToFolderModal';
 import { FolderModal } from '../../src/components/notes/FolderModal';
 import { NoteOptionsMenu } from '../../src/components/notes/NoteOptionsMenu';
+import { NoteFontModal } from '../../src/components/notes/NoteFontModal';
 import { ShareModal } from '../../src/components/collaboration/ShareModal';
 import { ActivityHistoryModal } from '../../src/components/collaboration/ActivityHistoryModal';
 import { CollaboratorsAvatars } from '../../src/components/collaboration/CollaboratorsAvatars';
 import { exportNoteToPdf } from '../../src/utils/pdfExportUtils';
+import { actions } from 'react-native-pell-rich-editor';
 
 export default function NoteDetailAndEditScreen() {
     const { t } = useTranslation();
@@ -90,12 +93,12 @@ export default function NoteDetailAndEditScreen() {
     const [galleryIndex, setGalleryIndex] = useState(0);
     const [isPagesModalVisible, setIsPagesModalVisible] = useState(false);
     const [isOptionsMenuVisible, setIsOptionsMenuVisible] = useState(false);
+    const [isFontModalVisible, setIsFontModalVisible] = useState(false);
     const [isExportingPdf, setIsExportingPdf] = useState(false);
     const [isShareModalVisible, setIsShareModalVisible] = useState(false);
     const [isHistoryModalVisible, setIsHistoryModalVisible] = useState(false);
 
     const currentNote = useNotesStore(state => state.notes.find(n => n.id === id));
-    const isOwner = currentNote ? currentNote.is_shared !== 1 : true;
 
     const folders = useFoldersStore(state => state.folders);
     const createFolder = useFoldersStore(state => state.createFolder);
@@ -124,15 +127,8 @@ export default function NoteDetailAndEditScreen() {
 
     const isExiting = useRef(false);
 
-    // Transición de opacidad fluida idéntica al crossfade entre Recordatorios y Notas
-    const fadeProgress = useSharedValue(0);
-
-    useEffect(() => {
-        fadeProgress.value = withTiming(1, {
-            duration: 220,
-            easing: ReanimatedEasing.bezier(0.25, 0.1, 0.25, 1),
-        });
-    }, []);
+    // Visibilidad inmediata en 0ms; la transición nativa del Stack gestiona la navegación fluida
+    const fadeProgress = useSharedValue(1);
 
     const screenAnimatedStyle = useAnimatedStyle(() => ({
         opacity: fadeProgress.value,
@@ -175,6 +171,8 @@ export default function NoteDetailAndEditScreen() {
         folderId,
         setFolderId,
         eventId,
+        fontFamily,
+        setFontFamily,
         attachments,
         isPinned,
         setIsPinned,
@@ -196,7 +194,94 @@ export default function NoteDetailAndEditScreen() {
         setAlertVisible,
         alertConfig,
         maxAttachments,
-    } = useCreateNote(id);
+        remoteSyncNotice,
+        liveCollaborator,
+        broadcastCursorMove,
+        broadcastCursorRemove,
+        userPermission,
+        canEdit,
+        hasAccess,
+        isRevoked,
+    } = useCreateNote(id, undefined, undefined, undefined, undefined, { isEditMode });
+
+    const isOwner = userPermission.isOwner;
+
+    // Si el acceso a la nota fue revocado por el propietario
+    useEffect(() => {
+        if (isRevoked || !hasAccess) {
+            Keyboard.dismiss();
+            setIsEditMode(false);
+            Alert.alert(
+                t('collaboration.access_revoked_title', { defaultValue: 'Acceso bloqueado' }),
+                t('collaboration.access_revoked_desc', { defaultValue: 'El propietario ha retirado tu acceso a esta nota. Ya no puedes acceder a su contenido.' }),
+                [
+                    {
+                        text: t('common.accept', { defaultValue: 'Entendido' }),
+                        onPress: () => {
+                            router.replace('/notes');
+                        },
+                    },
+                ],
+                { cancelable: false }
+            );
+        }
+    }, [isRevoked, hasAccess]);
+
+    const [showSyncNotice, setShowSyncNotice] = useState(false);
+    const syncNoticeAnim = useRef(new Animated.Value(0)).current;
+    const syncNoticeTimeoutRef = useRef<any>(null);
+
+    // Si los permisos se actualizan en tiempo real a solo lectura, salir del modo edición inmediatamente
+    useEffect(() => {
+        if (!canEdit && !isRevoked) {
+            Keyboard.dismiss();
+            editorRefs.current.forEach(ed => {
+                try {
+                    ed?.blurContentEditor?.();
+                    ed?.injectJavaScript?.(`
+                        (function() {
+                            var ed = document.querySelector('.pell-content') || document.getElementById('content') || document.getElementById('editor') || document.body;
+                            if (ed) {
+                                ed.setAttribute('contenteditable', 'false');
+                                ed.blur();
+                            }
+                            if (document.activeElement && document.activeElement.blur) {
+                                document.activeElement.blur();
+                            }
+                        })();
+                        true;
+                    `);
+                } catch (e) {}
+            });
+            if (isEditMode) {
+                handleExitEditMode();
+                Alert.alert(
+                    t('collaboration.view_only_title', { defaultValue: 'Solo lectura' }),
+                    t('collaboration.view_only_desc', { defaultValue: 'Tus permisos han sido actualizados a solo lectura por el propietario.' })
+                );
+            }
+        }
+    }, [canEdit, isEditMode, isRevoked]);
+
+    useEffect(() => {
+        if (!remoteSyncNotice) return;
+        setShowSyncNotice(true);
+        Animated.timing(syncNoticeAnim, { toValue: 1, duration: 150, useNativeDriver: true }).start();
+
+        if (syncNoticeTimeoutRef.current) {
+            clearTimeout(syncNoticeTimeoutRef.current);
+        }
+
+        syncNoticeTimeoutRef.current = setTimeout(() => {
+            Animated.timing(syncNoticeAnim, { toValue: 0, duration: 250, useNativeDriver: true }).start(() => {
+                setShowSyncNotice(false);
+            });
+        }, 2200);
+
+        return () => {
+            if (syncNoticeTimeoutRef.current) clearTimeout(syncNoticeTimeoutRef.current);
+        };
+    }, [remoteSyncNotice]);
 
     const currentFolder = folders.find(f => f.id === folderId);
     const linkedEvent = events.find(e => e.id === eventId);
@@ -212,9 +297,16 @@ export default function NoteDetailAndEditScreen() {
             titleAnim.setValue(1);
             bodyAnim.setValue(1);
 
+            // Refrescar notas del almacenamiento local si hay cambios recientes
+            useNotesStore.getState().loadNotes().catch(() => {});
+
             const onHardwareBack = () => {
                 if (isOptionsMenuVisible) {
                     setIsOptionsMenuVisible(false);
+                    return true;
+                }
+                if (isFontModalVisible) {
+                    setIsFontModalVisible(false);
                     return true;
                 }
                 if (isPagesModalVisible) {
@@ -234,12 +326,19 @@ export default function NoteDetailAndEditScreen() {
             };
             const subscription = BackHandler.addEventListener('hardwareBackPress', onHardwareBack);
             return () => subscription.remove();
-        }, [isEditMode, isOptionsMenuVisible, isPagesModalVisible, isCropperVisible, alertVisible])
+        }, [isEditMode, isOptionsMenuVisible, isFontModalVisible, isPagesModalVisible, isCropperVisible, alertVisible])
     );
 
     const editModeAnim = useRef(new Animated.Value(isCreating ? 1 : 0)).current;
 
     const handleEnterEditMode = () => {
+        if (!canEdit) {
+            Alert.alert(
+                t('collaboration.view_only', { defaultValue: 'Solo lectura' }),
+                t('collaboration.view_only_desc', { defaultValue: 'Tienes permisos de solo lectura en esta nota.' })
+            );
+            return;
+        }
         setIsEditMode(true);
         Animated.spring(editModeAnim, {
             toValue: 1,
@@ -250,15 +349,32 @@ export default function NoteDetailAndEditScreen() {
     };
 
     const handleExitEditMode = async () => {
+        setIsEditMode(false);
         Keyboard.dismiss();
+        editorRefs.current.forEach(ed => {
+            try {
+                ed?.blurContentEditor?.();
+                ed?.injectJavaScript?.(`
+                    (function() {
+                        var ed = document.querySelector('.pell-content') || document.getElementById('content') || document.getElementById('editor') || document.body;
+                        if (ed) {
+                            ed.setAttribute('contenteditable', 'false');
+                            ed.blur();
+                        }
+                        if (document.activeElement && document.activeElement.blur) {
+                            document.activeElement.blur();
+                        }
+                    })();
+                    true;
+                `);
+            } catch (e) {}
+        });
         await saveSilently();
         Animated.timing(editModeAnim, {
             toValue: 0,
             duration: 160,
             useNativeDriver: true,
-        }).start(() => {
-            setIsEditMode(false);
-        });
+        }).start();
     };
 
     const handleInsertImage = async (useCamera: boolean) => {
@@ -282,7 +398,7 @@ export default function NoteDetailAndEditScreen() {
     const handleExportPdf = async () => {
         try {
             setIsExportingPdf(true);
-            await exportNoteToPdf(title, pages);
+            await exportNoteToPdf(title, pages, { fontFamily });
         } catch (error) {
             console.error('Error exporting note to PDF:', error);
             Alert.alert(
@@ -294,20 +410,31 @@ export default function NoteDetailAndEditScreen() {
         }
     };
 
+    const handleApplyFontToSelection = useCallback((fontName: string) => {
+        const editor = editorRefs.current[currentPageIndex] || editorRefs.current[0] || null;
+        if (!editor) return;
+        try {
+            editor.injectJavaScript?.(`
+                (function() {
+                    if (typeof window.__veyraApplyFont === 'function') {
+                        window.__veyraApplyFont("${fontName.replace(/"/g, '\\"')}");
+                    } else {
+                        document.execCommand('fontName', false, "${fontName.replace(/"/g, '\\"')}");
+                    }
+                })();
+                true;
+            `);
+        } catch {}
+        editor.sendAction(actions.fontName, 'result', fontName);
+    }, [currentPageIndex, editorRefs]);
+
     const handleBack = async () => {
         if (isEditMode) {
             await handleExitEditMode();
         } else {
             if (isExiting.current) return;
             isExiting.current = true;
-            fadeProgress.value = withTiming(0, {
-                duration: 220,
-                easing: ReanimatedEasing.bezier(0.25, 0.1, 0.25, 1),
-            }, (finished) => {
-                if (finished) {
-                    runOnJS(router.back)();
-                }
-            });
+            router.back();
         }
     };
 
@@ -424,7 +551,7 @@ export default function NoteDetailAndEditScreen() {
                         ],
                     }}
                 >
-                    {isEditMode ? (
+                    {isEditMode && canEdit ? (
                         <TitleInput
                             title={title}
                             setTitle={setTitle}
@@ -503,8 +630,9 @@ export default function NoteDetailAndEditScreen() {
                                         <RichTextEditorSection
                                             description={pageContent}
                                             setDescription={html => updatePageContent(index, html)}
-                                            readOnly={!isEditMode}
+                                            readOnly={!isEditMode || !canEdit}
                                             isDark={isDark}
+                                            fontFamily={fontFamily}
                                             editorRef={{
                                                 get current() {
                                                     return editorRefs.current[index];
@@ -517,7 +645,10 @@ export default function NoteDetailAndEditScreen() {
                                                 setCurrentPageIndex(index);
                                                 setIsNotesFocused(true);
                                             }}
-                                            onBlur={() => setIsNotesFocused(false)}
+                                            onBlur={() => {
+                                                setIsNotesFocused(false);
+                                                broadcastCursorRemove(index);
+                                            }}
                                             flat={true}
                                             onUndo={undo}
                                             onRedo={redo}
@@ -529,6 +660,8 @@ export default function NoteDetailAndEditScreen() {
                                             onDragStateChange={setIsDraggingImage}
                                             onAutoScroll={handleAutoScroll}
                                             onCursorPosition={(offsetY) => handleCursorPosition(index, offsetY)}
+                                            onCursorActivity={(cursor) => broadcastCursorMove(index, cursor)}
+                                            onCursorRemove={() => broadcastCursorRemove(index)}
                                         />
                                     )}
                                 </View>
@@ -537,7 +670,7 @@ export default function NoteDetailAndEditScreen() {
                     })}
 
                     {/* Botón para Añadir Nueva Hoja — Solo en modo edición */}
-                    {isEditMode && (
+                    {isEditMode && canEdit && (
                         <Animated.View
                             style={{
                                 opacity: editModeAnim,
@@ -619,7 +752,7 @@ export default function NoteDetailAndEditScreen() {
         return (
             <View style={{ flex: 1, paddingTop: 10 }}>
                 <View style={{ paddingHorizontal: 20, marginBottom: 12 }}>
-                    {isEditMode ? (
+                    {isEditMode && canEdit ? (
                         <TitleInput
                             title={title}
                             setTitle={setTitle}
@@ -719,8 +852,9 @@ export default function NoteDetailAndEditScreen() {
                                             <RichTextEditorSection
                                                 description={pageContent}
                                                 setDescription={html => updatePageContent(index, html)}
-                                                readOnly={!isEditMode}
+                                                readOnly={!isEditMode || !canEdit}
                                                 isDark={isDark}
+                                                fontFamily={fontFamily}
                                                 editorRef={{
                                                     get current() {
                                                         return editorRefs.current[index];
@@ -733,7 +867,10 @@ export default function NoteDetailAndEditScreen() {
                                                     setCurrentPageIndex(index);
                                                     setIsNotesFocused(true);
                                                 }}
-                                                onBlur={() => setIsNotesFocused(false)}
+                                                onBlur={() => {
+                                                 setIsNotesFocused(false);
+                                                 broadcastCursorRemove(index);
+                                             }}
                                                 flat={true}
                                                 onUndo={undo}
                                                 onRedo={redo}
@@ -745,6 +882,8 @@ export default function NoteDetailAndEditScreen() {
                                                 onDragStateChange={setIsDraggingImage}
                                                 onAutoScroll={handleAutoScroll}
                                                 onCursorPosition={(offsetY) => handleCursorPosition(index, offsetY)}
+                                                onCursorActivity={(cursor) => broadcastCursorMove(index, cursor)}
+                                                onCursorRemove={() => broadcastCursorRemove(index)}
                                             />
                                         )}
                                     </View>
@@ -816,11 +955,16 @@ export default function NoteDetailAndEditScreen() {
                     <View style={styles.headerActions}>
                         {/* Colaboradores de la nota */}
                         {!isCreating && id && (
-                            <CollaboratorsAvatars
-                                targetType="note"
-                                targetId={id}
-                                onPress={() => setIsShareModalVisible(true)}
-                            />
+                            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                                <CollaboratorsAvatars
+                                    targetType="note"
+                                    targetId={id}
+                                    onPress={() => setIsShareModalVisible(true)}
+                                />
+                                {showSyncNotice && (
+                                    <View style={[styles.headerLiveDot, { backgroundColor: '#22C55E' }]} />
+                                )}
+                            </View>
                         )}
 
                         {/* Selector de Carpeta */}
@@ -901,7 +1045,26 @@ export default function NoteDetailAndEditScreen() {
                             </>
                         )}
 
-                        {!isEditMode ? (
+                        {!canEdit ? (
+                            <View
+                                style={{
+                                    flexDirection: 'row',
+                                    alignItems: 'center',
+                                    gap: 5,
+                                    paddingHorizontal: 10,
+                                    paddingVertical: 6,
+                                    borderRadius: 14,
+                                    backgroundColor: isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.05)',
+                                    borderWidth: 1,
+                                    borderColor: isDark ? 'rgba(255, 255, 255, 0.12)' : 'rgba(0, 0, 0, 0.08)',
+                                }}
+                            >
+                                <Eye size={13} color={colors.textSecondary} />
+                                <Text style={{ fontSize: 12, fontWeight: '600', color: colors.textSecondary }}>
+                                    {t('collaboration.viewer_badge', { defaultValue: 'Solo lectura' })}
+                                </Text>
+                            </View>
+                        ) : !isEditMode ? (
                             <VeyraButton
                                 variant="secondary"
                                 size="sm"
@@ -929,6 +1092,8 @@ export default function NoteDetailAndEditScreen() {
                     </View>
                 </Animated.View>
 
+
+
                 {/* Contenido Unificado — Sin recargas ni parpadeos */}
                 <View style={{ flex: 1 }}>
                     {scrollLayout === 'vertical' ? renderVertical() : renderHorizontal()}
@@ -946,7 +1111,7 @@ export default function NoteDetailAndEditScreen() {
                                     },
                                 ]}
                             >
-                                <Layers size={13} color={accent.primary} />
+                                <Layers size={13} color={accent.primary as any} />
                                 <Text style={[styles.pageIndicatorText, { color: colors.textPrimary }]}>
                                     {t('notes.page_indicator', {
                                         current: currentPageIndex + 1,
@@ -956,7 +1121,7 @@ export default function NoteDetailAndEditScreen() {
                                 </Text>
                             </TouchableOpacity>
 
-                            {isEditMode && (
+                            {isEditMode && canEdit && (
                                 <Animated.View
                                     style={{
                                         opacity: editModeAnim,
@@ -987,7 +1152,7 @@ export default function NoteDetailAndEditScreen() {
                         </View>
 
                     {/* Toolbar anclada encima del teclado en modo edición */}
-                    {isEditMode && (
+                    {isEditMode && canEdit && (
                         <Animated.View
                             style={{
                                 marginBottom: lift,
@@ -1014,6 +1179,10 @@ export default function NoteDetailAndEditScreen() {
                                 onRedo={redo}
                                 canUndo={canUndo}
                                 canRedo={canRedo}
+                                onOpenNoteFontPicker={() => setIsFontModalVisible(true)}
+                                currentFontFamily={fontFamily}
+                                onSelectFont={setFontFamily}
+                                onApplyFontToSelection={handleApplyFontToSelection}
                             />
                         </Animated.View>
                     )}
@@ -1116,6 +1285,7 @@ export default function NoteDetailAndEditScreen() {
                     onExportPdf={handleExportPdf}
                     isExportingPdf={isExportingPdf}
                     onOpenPagesManager={() => setIsPagesModalVisible(true)}
+                    onOpenFontPicker={() => setIsFontModalVisible(true)}
                     pageCount={pages.length}
                     isPinned={isPinned}
                     onTogglePin={() => setIsPinned(!isPinned)}
@@ -1131,13 +1301,22 @@ export default function NoteDetailAndEditScreen() {
                         setIsHistoryModalVisible(true);
                     } : undefined}
                     isEditMode={isEditMode}
-                    onToggleEditMode={() => {
+                    onToggleEditMode={canEdit ? () => {
                         if (isEditMode) {
                             handleExitEditMode();
                         } else {
                             handleEnterEditMode();
                         }
-                    }}
+                    } : undefined}
+                />
+
+                {/* Modal de Tipografía General de la Nota */}
+                <NoteFontModal
+                    visible={isFontModalVisible}
+                    onClose={() => setIsFontModalVisible(false)}
+                    selectedFont={fontFamily}
+                    onSelectFont={setFontFamily}
+                    onApplyFontToSelection={handleApplyFontToSelection}
                 />
 
                 {/* Modal de Colaboración y Recursos Compartidos */}
@@ -1373,5 +1552,12 @@ const styles = StyleSheet.create({
         fontSize: 12,
         fontWeight: '600',
         maxWidth: 200,
+    },
+    headerLiveDot: {
+        width: 6,
+        height: 6,
+        borderRadius: 3,
+        marginLeft: 4,
+        backgroundColor: '#22C55E',
     },
 });

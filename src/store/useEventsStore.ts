@@ -37,15 +37,16 @@ export const useEventsStore = create<EventsState>((set, get) => ({
     },
 
     loadAllEvents: async () => {
-        set({ isLoading: true });
+        if (get().events.length === 0) {
+            set({ isLoading: true });
+        }
         try {
             const events = await EventService.getAllEvents(false);
-            set({ events, isEventsDirty: false });
+            set({ events, isEventsDirty: false, isLoading: false });
             WidgetService.syncAgenda(undefined, events).catch(() => {});
             WidgetService.syncSchedule().catch(() => {});
         } catch (error) {
             console.error('[useEventsStore] Failed to load all events:', error);
-        } finally {
             set({ isLoading: false });
         }
     },
@@ -98,6 +99,17 @@ export const useEventsStore = create<EventsState>((set, get) => ({
                 await NotificationService.cancelEventNotifications(currentEvent.notification_ids);
             }
 
+            if (currentEvent && (currentEvent.is_shared === 1 || currentEvent.shared_owner_id)) {
+                import('../services/collaborationService').then(({ CollaborationService }) => {
+                    CollaborationService.notifyChange({
+                        targetType: 'event',
+                        targetId: currentEvent.id,
+                        action: 'edited',
+                        itemTitle: updates.title || currentEvent.title || 'Evento',
+                    }).catch(() => {});
+                }).catch(() => {});
+            }
+
             await EventService.updateEvent(id, updates);
             const updated = await EventService.getEventById(id);
 
@@ -127,6 +139,18 @@ export const useEventsStore = create<EventsState>((set, get) => ({
             if (event?.notification_ids) {
                 await NotificationService.cancelEventNotifications(event.notification_ids);
             }
+
+            if (event && (event.is_shared === 1 || event.shared_owner_id)) {
+                import('../services/collaborationService').then(({ CollaborationService }) => {
+                    CollaborationService.notifyChange({
+                        targetType: 'event',
+                        targetId: event.id,
+                        action: 'deleted',
+                        itemTitle: event.title || 'Evento',
+                    }).catch(() => {});
+                }).catch(() => {});
+            }
+
             await EventService.deleteEvent(id);
             await get().loadAllEvents();
             await get().loadEventsForDate(get().selectedDate);

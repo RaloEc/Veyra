@@ -199,8 +199,14 @@ export default function ProfileScreen() {
         if (session?.user?.id) {
             try {
                 await supabase.auth.updateUser({
-                    data: { full_name: name.trim() }
+                    data: { full_name: name.trim(), name: name.trim() }
                 });
+                if (name.trim()) {
+                    await supabase
+                        .from('collaboration_activity')
+                        .update({ actor_name: name.trim() })
+                        .eq('actor_id', session.user.id);
+                }
             } catch (err) {
                 console.warn('[Profile] Supabase metadata update note:', err);
             }

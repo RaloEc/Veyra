@@ -33,8 +33,6 @@ export function CustomDateTimePicker({
     onChange,
     isDark = false,
 }: CustomDateTimePickerProps) {
-    if (!visible) return null;
-
     const [tempDate, setTempDate] = useState(() => new Date(value || Date.now()));
     const [viewDate, setViewDate] = useState(() => new Date(value || Date.now()));
 

@@ -205,7 +205,8 @@ export const initDatabase = async () => {
       attachments TEXT,
       links TEXT,
       deleted INTEGER DEFAULT 0,
-      last_modified_ms INTEGER
+      last_modified_ms INTEGER,
+      font_family TEXT
     );
   `);
   console.log('Notes table checked');
@@ -228,6 +229,15 @@ export const initDatabase = async () => {
   } catch (e) { }
   try {
     await db.execAsync('ALTER TABLE notes ADD COLUMN shared_owner_id TEXT;');
+  } catch (e) { }
+  try {
+    await db.execAsync('ALTER TABLE notes ADD COLUMN font_family TEXT;');
+  } catch (e) { }
+  try {
+    await db.execAsync('ALTER TABLE notes ADD COLUMN is_revoked INTEGER DEFAULT 0;');
+  } catch (e) { }
+  try {
+    await db.execAsync('ALTER TABLE notes ADD COLUMN collab_role TEXT DEFAULT "editor";');
   } catch (e) { }
 
   // Set last_modified_ms for existing notes that don't have it
@@ -281,6 +291,16 @@ export const initDatabase = async () => {
     await db.execAsync('ALTER TABLE events ADD COLUMN tags TEXT;');
   } catch (e) { }
 
+  // Reparación automática de ownership en recursos compartidos
+  try {
+    await db.execAsync(`
+      UPDATE events SET user_id = shared_owner_id WHERE is_shared = 1 AND shared_owner_id IS NOT NULL AND user_id != shared_owner_id;
+      UPDATE notes SET user_id = shared_owner_id WHERE is_shared = 1 AND shared_owner_id IS NOT NULL AND user_id != shared_owner_id;
+      UPDATE reminders SET user_id = shared_owner_id WHERE is_shared = 1 AND shared_owner_id IS NOT NULL AND user_id != shared_owner_id;
+      UPDATE folders SET user_id = shared_owner_id WHERE is_shared = 1 AND shared_owner_id IS NOT NULL AND user_id != shared_owner_id;
+    `);
+  } catch (e) { }
+
   // Sync metadata table to track last sync timestamps
   await db.execAsync(`
     CREATE TABLE IF NOT EXISTS sync_metadata (
@@ -290,21 +310,34 @@ export const initDatabase = async () => {
   `);
   console.log('Sync metadata table checked');
 
-  // Indices for Folders, Notes & Events
+  // Indices for Folders, Notes, Events & Reminders
   try {
     await db.execAsync(`
+      CREATE INDEX IF NOT EXISTS idx_reminders_due_date ON reminders (due_date_ms);
+      CREATE INDEX IF NOT EXISTS idx_reminders_deleted ON reminders (deleted);
+      CREATE INDEX IF NOT EXISTS idx_reminders_user_id ON reminders (user_id);
+      CREATE INDEX IF NOT EXISTS idx_reminders_status_due ON reminders (status, due_date_ms);
+
       CREATE INDEX IF NOT EXISTS idx_folders_updated_at ON folders (updated_at_ms);
       CREATE INDEX IF NOT EXISTS idx_folders_last_modified ON folders (last_modified_ms);
       CREATE INDEX IF NOT EXISTS idx_folders_parent_id ON folders (parent_id);
+      CREATE INDEX IF NOT EXISTS idx_folders_deleted ON folders (deleted);
+
       CREATE INDEX IF NOT EXISTS idx_notes_updated_at ON notes (updated_at_ms);
       CREATE INDEX IF NOT EXISTS idx_notes_last_modified ON notes (last_modified_ms);
       CREATE INDEX IF NOT EXISTS idx_notes_folder_id ON notes (folder_id);
       CREATE INDEX IF NOT EXISTS idx_notes_event_id ON notes (event_id);
+      CREATE INDEX IF NOT EXISTS idx_notes_deleted ON notes (deleted);
+      CREATE INDEX IF NOT EXISTS idx_notes_user_id ON notes (user_id);
+      CREATE INDEX IF NOT EXISTS idx_notes_pinned ON notes (is_pinned);
+
       CREATE INDEX IF NOT EXISTS idx_events_start_time ON events (start_time_ms);
+      CREATE INDEX IF NOT EXISTS idx_events_end_time ON events (end_time_ms);
       CREATE INDEX IF NOT EXISTS idx_events_deleted ON events (deleted);
       CREATE INDEX IF NOT EXISTS idx_events_note_id ON events (note_id);
+      CREATE INDEX IF NOT EXISTS idx_events_user_id ON events (user_id);
     `);
-    console.log('Folders, Notes & Events indices created');
+    console.log('Folders, Notes, Reminders & Events indices created');
   } catch (err) {
     console.warn('[DB] Non-critical index creation warning:', err);
   }

@@ -663,7 +663,10 @@
         "delete_note": "Delete note",
         "delete_note_desc": "Move this note to trash",
         "undo": "Undo",
-        "redo": "Redo"
+        "redo": "Redo",
+        "font_family": "Note typography",
+        "font_family_title": "Note typography",
+        "font_family_subtitle": "Choose the default font for the whole note"
     },
     "notifications": {
         "default_body": "It's time to act. Confirm your action.",

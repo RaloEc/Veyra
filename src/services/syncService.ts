@@ -11,6 +11,16 @@ import { StorageService } from './storageService';
  * - Baja los registros remotos modificados después del último sync.
  * - El registro con mayor last_modified_ms gana en caso de conflicto.
  */
+/**
+ * Helper para verificar si un ítem pertenece a otro usuario y se comparte colaborativamente.
+ */
+function isSharedItem(item: any, currentUserId: string): boolean {
+    if (item.is_shared === 1) return true;
+    if (item.shared_owner_id && item.shared_owner_id !== currentUserId) return true;
+    if (item.user_id && item.user_id !== currentUserId && item.user_id !== 'local_user') return true;
+    return false;
+}
+
 export const SyncService = {
 
     // ─── Metadata helpers ───────────────────────────────────────────
@@ -176,6 +186,7 @@ export const SyncService = {
         const isOwner = isWhitelistedPremiumEmail(authEmail);
         const profilePayload: any = {
             id: userId,
+            email: authEmail || undefined,
             user_profile: currentStore.userProfile || 'personal',
             default_control_level: currentStore.defaultControlLevel,
             is_premium: isOwner ? 1 : (remoteProfile?.is_premium ? 1 : (currentStore.isPremium ? 1 : 0)),
@@ -189,6 +200,8 @@ export const SyncService = {
         try {
             await supabase.auth.updateUser({
                 data: {
+                    full_name: currentStore.userName || undefined,
+                    name: currentStore.userName || undefined,
                     settings: {
                         theme: currentStore.theme,
                         accentTheme: currentStore.accentTheme,
@@ -201,6 +214,32 @@ export const SyncService = {
                     }
                 }
             });
+            if (currentStore.userName) {
+                (async () => {
+                    try {
+                        await supabase
+                            .from('collaboration_activity')
+                            .update({ actor_name: currentStore.userName })
+                            .eq('actor_id', userId);
+
+                        const { data: ownedCollabs } = await supabase
+                            .from('collaborations')
+                            .select('target_type, target_id')
+                            .eq('owner_id', userId);
+
+                        if (ownedCollabs && ownedCollabs.length > 0) {
+                            const { CollaborationService } = await import('./collaborationService');
+                            const uniqueTargets = new Map<string, string>();
+                            for (const oc of ownedCollabs) {
+                                if (!uniqueTargets.has(oc.target_id)) {
+                                    uniqueTargets.set(oc.target_id, oc.target_type);
+                                    await CollaborationService.ensureActorIdentity(oc.target_type as any, oc.target_id, 'Elemento compartido', true);
+                                }
+                            }
+                        }
+                    } catch {}
+                })();
+            }
         } catch (e) {
             console.warn('[Sync] Could not update user metadata settings:', e);
         }
@@ -214,7 +253,7 @@ export const SyncService = {
 
         // 1. Obtener registros locales modificados desde el último sync (propios y compartidos)
         const localModified = await db.getAllAsync<Reminder>(
-            `SELECT * FROM reminders WHERE last_modified_ms > ? AND (user_id = ? OR is_shared = 1)`,
+            `SELECT * FROM reminders WHERE last_modified_ms > ? AND (user_id = ? OR is_shared = 1 OR shared_owner_id IS NOT NULL)`,
             [lastSync, userId]
         );
         // También incluir los que fueron creados localmente (user_id 'local_user')
@@ -241,7 +280,8 @@ export const SyncService = {
         [...localModified, ...localNew].forEach(r => localMap.set(r.id, r));
 
         // 3. Resolver conflictos y preparar actualizaciones
-        const toUpsertRemote: any[] = [];
+        const toUpsertRemoteOwn: any[] = [];
+        const toUpdateRemoteShared: Reminder[] = [];
         const toUpsertLocal: any[] = [];
         const processedIds = new Set<string>();
 
@@ -251,7 +291,11 @@ export const SyncService = {
 
             if (!remote || local.last_modified_ms > remote.last_modified_ms) {
                 // Local gana - subir al servidor
-                toUpsertRemote.push(this.localReminderToRemote(local, userId));
+                if (isSharedItem(local, userId)) {
+                    toUpdateRemoteShared.push(local);
+                } else {
+                    toUpsertRemoteOwn.push(this.localReminderToRemote(local, userId));
+                }
             } else if (remote.last_modified_ms > local.last_modified_ms) {
                 // Remoto gana - actualizar local
                 toUpsertLocal.push(remote);
@@ -273,7 +317,7 @@ export const SyncService = {
                 }
                 if (localNew.length > 0) {
                     await db.runAsync(
-                        `UPDATE reminders SET user_id = ? WHERE user_id = 'local_user'`,
+                        `UPDATE reminders SET user_id = ? WHERE user_id = 'local_user' AND (is_shared IS NULL OR is_shared = 0)`,
                         [userId]
                     );
                 }
@@ -308,12 +352,13 @@ export const SyncService = {
         }
 
         // 5. Subir cambios locales al servidor
-        if (toUpsertRemote.length > 0) {
+        // 5a. Propios: batch upsert seguro (el usuario es propietario de user_id)
+        if (toUpsertRemoteOwn.length > 0) {
             const { error: upsertError } = await supabase
                 .from('reminders')
-                .upsert(toUpsertRemote, { onConflict: 'id' });
+                .upsert(toUpsertRemoteOwn, { onConflict: 'id' });
             if (upsertError && (upsertError.message?.includes('subtasks') || upsertError.code === 'PGRST204')) {
-                const fallbackRemote = toUpsertRemote.map(({ subtasks, ...rest }) => rest);
+                const fallbackRemote = toUpsertRemoteOwn.map(({ subtasks, ...rest }) => rest);
                 const { error: retryError } = await supabase
                     .from('reminders')
                     .upsert(fallbackRemote, { onConflict: 'id' });
@@ -321,6 +366,38 @@ export const SyncService = {
             } else if (upsertError) {
                 throw upsertError;
             }
+        }
+
+        // 5b. Compartidos: update atómico (PATCH) sin user_id para respetar la política RLS de colaborador
+        for (const local of toUpdateRemoteShared) {
+            const ownerId = local.shared_owner_id || local.user_id || userId;
+            const remoteData = this.localReminderToRemote(local, ownerId);
+            const { id, user_id, ...updateFields } = remoteData;
+            let { error: updateErr } = await supabase
+                .from('reminders')
+                .update(updateFields)
+                .eq('id', local.id);
+            if (updateErr && (updateErr.message?.includes('subtasks') || updateErr.code === 'PGRST204')) {
+                const { subtasks, ...fallbackFields } = updateFields;
+                const { error: retryErr } = await supabase
+                    .from('reminders')
+                    .update(fallbackFields)
+                    .eq('id', local.id);
+                if (retryErr) throw retryErr;
+            } else if (updateErr) {
+                console.error('[Sync] Error updating shared reminder on Supabase:', updateErr.message);
+                throw updateErr;
+            }
+
+            try {
+                const { CollaborationService } = await import('./collaborationService');
+                CollaborationService.notifyChange({
+                    targetType: 'reminder',
+                    targetId: local.id,
+                    action: local.deleted === 1 ? 'deleted' : 'edited',
+                    itemTitle: local.title || 'Recordatorio',
+                }).catch(() => {});
+            } catch {}
         }
 
         await this.setLastSyncTime(`${userId}_reminders_sync`, Date.now());
@@ -458,7 +535,7 @@ export const SyncService = {
 
         // 1. Obtener notas locales modificadas (propias y compartidas)
         const localModified = await db.getAllAsync<Note & { last_modified_ms: number; user_id?: string }>(
-            `SELECT * FROM notes WHERE (last_modified_ms > ? OR last_modified_ms IS NULL) AND (user_id = ? OR user_id = 'local_user' OR user_id IS NULL OR is_shared = 1)`,
+            `SELECT * FROM notes WHERE (last_modified_ms > ? OR last_modified_ms IS NULL) AND (user_id = ? OR user_id = 'local_user' OR user_id IS NULL OR is_shared = 1 OR shared_owner_id IS NOT NULL)`,
             [lastSync, userId]
         );
 
@@ -481,7 +558,8 @@ export const SyncService = {
         localModified.forEach(n => localMap.set(n.id, n));
 
         // 3. Resolver conflictos
-        const toUpsertRemote: any[] = [];
+        const toUpsertRemoteOwn: any[] = [];
+        const toUpdateRemoteShared: any[] = [];
         const toUpsertLocal: any[] = [];
         const processedIds = new Set<string>();
 
@@ -490,9 +568,13 @@ export const SyncService = {
             const localModMs = local.last_modified_ms || local.updated_at_ms;
             const remote = remoteMap.get(id);
 
-            if (!remote || localModMs > remote.last_modified_ms) {
-                toUpsertRemote.push(this.localNoteToRemote(local, userId));
-            } else if (remote.last_modified_ms > localModMs) {
+            if (!remote || localModMs > (remote.last_modified_ms || 0)) {
+                if (isSharedItem(local, userId)) {
+                    toUpdateRemoteShared.push(local);
+                } else {
+                    toUpsertRemoteOwn.push(this.localNoteToRemote(local, userId));
+                }
+            } else if ((remote.last_modified_ms || 0) > localModMs) {
                 toUpsertLocal.push(remote);
             }
         }
@@ -514,12 +596,13 @@ export const SyncService = {
         }
 
         // 5. Subir
-        if (toUpsertRemote.length > 0) {
+        // 5a. Propias: batch upsert seguro
+        if (toUpsertRemoteOwn.length > 0) {
             const { error: upsertError } = await supabase
                 .from('notes')
-                .upsert(toUpsertRemote, { onConflict: 'id' });
+                .upsert(toUpsertRemoteOwn, { onConflict: 'id' });
             if (upsertError && (upsertError.message?.includes('folder_id') || upsertError.message?.includes('event_id') || upsertError.code === 'PGRST204')) {
-                const fallbackRemote = toUpsertRemote.map(({ folder_id, event_id, ...rest }) => rest);
+                const fallbackRemote = toUpsertRemoteOwn.map(({ folder_id, event_id, ...rest }) => rest);
                 const { error: retryError } = await supabase
                     .from('notes')
                     .upsert(fallbackRemote, { onConflict: 'id' });
@@ -529,9 +612,43 @@ export const SyncService = {
             }
         }
 
-        // 6. Marcar locales sin user_id
+        // 5b. Compartidas: update atómico (PATCH) sin user_id para respetar la política RLS
+        for (const local of toUpdateRemoteShared) {
+            const ownerId = local.shared_owner_id || local.user_id || userId;
+            const remoteData = this.localNoteToRemote(local, ownerId);
+            const { id, user_id, created_at, created_at_ms, ...updateFields } = remoteData;
+            // No sincronizar is_pinned en notas compartidas: fijar es una preferencia de visualización individual
+            delete updateFields.is_pinned;
+            let { error: updateErr } = await supabase
+                .from('notes')
+                .update(updateFields)
+                .eq('id', local.id);
+            if (updateErr && (updateErr.message?.includes('folder_id') || updateErr.message?.includes('event_id') || updateErr.code === 'PGRST204')) {
+                const { folder_id, event_id, ...fallbackFields } = updateFields;
+                const { error: retryErr } = await supabase
+                    .from('notes')
+                    .update(fallbackFields)
+                    .eq('id', local.id);
+                if (retryErr) throw retryErr;
+            } else if (updateErr) {
+                console.error('[Sync] Error updating shared note on Supabase:', updateErr.message);
+                throw updateErr;
+            }
+
+            try {
+                const { CollaborationService } = await import('./collaborationService');
+                CollaborationService.notifyChange({
+                    targetType: 'note',
+                    targetId: local.id,
+                    action: local.deleted ? 'deleted' : 'edited',
+                    itemTitle: local.title || 'Nota',
+                }).catch(() => {});
+            } catch {}
+        }
+
+        // 6. Marcar locales sin user_id (solo propios)
         await db.runAsync(
-            `UPDATE notes SET user_id = ?, last_modified_ms = COALESCE(last_modified_ms, updated_at_ms) WHERE user_id IS NULL OR user_id = 'local_user'`,
+            `UPDATE notes SET user_id = ?, last_modified_ms = COALESCE(last_modified_ms, updated_at_ms) WHERE (user_id IS NULL OR user_id = 'local_user') AND (is_shared IS NULL OR is_shared = 0)`,
             [userId]
         );
 
@@ -559,7 +676,7 @@ export const SyncService = {
         }
 
         const localModified = await db.getAllAsync<CalendarEvent>(
-            `SELECT * FROM events WHERE (last_modified_ms > ? OR last_modified_ms IS NULL) AND (user_id = ? OR user_id = 'local_user' OR user_id IS NULL OR is_shared = 1)`,
+            `SELECT * FROM events WHERE (last_modified_ms > ? OR last_modified_ms IS NULL) AND (user_id = ? OR user_id = 'local_user' OR user_id IS NULL OR is_shared = 1 OR shared_owner_id IS NOT NULL)`,
             [lastSync, userId]
         );
 
@@ -569,7 +686,8 @@ export const SyncService = {
         const localMap = new Map<string, CalendarEvent>();
         localModified.forEach(e => localMap.set(e.id, e));
 
-        const toUpsertRemote: any[] = [];
+        const toUpsertRemoteOwn: any[] = [];
+        const toUpdateRemoteShared: CalendarEvent[] = [];
         const toUpsertLocal: any[] = [];
         const processedIds = new Set<string>();
 
@@ -579,7 +697,11 @@ export const SyncService = {
             const localMod = local.last_modified_ms || local.updated_at_ms;
 
             if (!remote || localMod > (remote.last_modified_ms || 0)) {
-                toUpsertRemote.push(this.localEventToRemote(local, userId));
+                if (isSharedItem(local, userId)) {
+                    toUpdateRemoteShared.push(local);
+                } else {
+                    toUpsertRemoteOwn.push(this.localEventToRemote(local, userId));
+                }
             } else if ((remote.last_modified_ms || 0) > localMod) {
                 toUpsertLocal.push(remote);
             }
@@ -623,16 +745,57 @@ export const SyncService = {
             }
         }
 
-        if (toUpsertRemote.length > 0) {
-            const { error: upsertErr } = await supabase.from('events').upsert(toUpsertRemote, { onConflict: 'id' });
-            if (upsertErr) {
+        // 5a. Propios: batch upsert seguro (el usuario es propietario de user_id)
+        if (toUpsertRemoteOwn.length > 0) {
+            let { error: upsertErr } = await supabase.from('events').upsert(toUpsertRemoteOwn, { onConflict: 'id' });
+            if (upsertErr && (upsertErr.message?.includes('tags') || upsertErr.code === 'PGRST204')) {
+                const fallback = toUpsertRemoteOwn.map(({ tags, ...rest }) => rest);
+                const { error: retryErr } = await supabase.from('events').upsert(fallback, { onConflict: 'id' });
+                if (retryErr) throw retryErr;
+            } else if (upsertErr) {
                 console.error('[Sync] Error upserting events to Supabase:', upsertErr.message);
                 throw upsertErr;
             }
         }
 
+        // 5b. Compartidos: update atómico (PATCH) sin user_id para respetar la política RLS de colaborador
+        for (const local of toUpdateRemoteShared) {
+            const ownerId = local.shared_owner_id || local.user_id || userId;
+            const remoteData = this.localEventToRemote(local, ownerId);
+            const { id, user_id, created_at_ms, ...updateFields } = remoteData;
+
+            let { error: updateErr } = await supabase
+                .from('events')
+                .update(updateFields)
+                .eq('id', local.id);
+
+            if (updateErr && (updateErr.message?.includes('tags') || updateErr.code === 'PGRST204')) {
+                const { tags, ...fallbackFields } = updateFields;
+                const { error: retryErr } = await supabase
+                    .from('events')
+                    .update(fallbackFields)
+                    .eq('id', local.id);
+                if (retryErr) throw retryErr;
+            } else if (updateErr) {
+                console.error('[Sync] Error updating shared event on Supabase:', updateErr.message);
+                throw updateErr;
+            }
+
+            try {
+                const { CollaborationService } = await import('./collaborationService');
+                CollaborationService.notifyChange({
+                    targetType: 'event',
+                    targetId: local.id,
+                    action: local.deleted === 1 ? 'deleted' : 'edited',
+                    itemTitle: local.title || 'Evento',
+                }).catch(() => {});
+            } catch {
+                // Notificación silenciosa
+            }
+        }
+
         await db.runAsync(
-            `UPDATE events SET user_id = ?, last_modified_ms = COALESCE(last_modified_ms, updated_at_ms) WHERE user_id IS NULL OR user_id = 'local_user'`,
+            `UPDATE events SET user_id = ?, last_modified_ms = COALESCE(last_modified_ms, updated_at_ms) WHERE (user_id IS NULL OR user_id = 'local_user') AND (is_shared IS NULL OR is_shared = 0)`,
             [userId]
         );
 
@@ -786,7 +949,7 @@ export const SyncService = {
             const lastSync = isInitialLogin ? 0 : await this.getLastSyncTime(`${userId}_folders_sync`);
 
             const localModified = await db.getAllAsync<Folder>(
-                `SELECT * FROM folders WHERE (last_modified_ms > ? OR last_modified_ms IS NULL) AND (user_id = ? OR is_shared = 1)`,
+                `SELECT * FROM folders WHERE (last_modified_ms > ? OR last_modified_ms IS NULL) AND (user_id = ? OR is_shared = 1 OR shared_owner_id IS NOT NULL)`,
                 [lastSync, userId]
             );
             const localNew = await db.getAllAsync<Folder>(
@@ -813,7 +976,8 @@ export const SyncService = {
             const localMap = new Map<string, Folder>();
             [...localModified, ...localNew].forEach(f => localMap.set(f.id, f));
 
-            const toUpsertRemote: any[] = [];
+            const toUpsertRemoteOwn: any[] = [];
+            const toUpdateRemoteShared: Folder[] = [];
             const toUpsertLocal: any[] = [];
             const processedIds = new Set<string>();
 
@@ -822,9 +986,13 @@ export const SyncService = {
                 const remote = remoteMap.get(id);
                 const localMod = local.last_modified_ms || local.updated_at_ms;
 
-                if (!remote || localMod > remote.last_modified_ms) {
-                    toUpsertRemote.push(this.localFolderToRemote(local, userId));
-                } else if (remote.last_modified_ms > localMod) {
+                if (!remote || localMod > (remote.last_modified_ms || 0)) {
+                    if (isSharedItem(local, userId)) {
+                        toUpdateRemoteShared.push(local);
+                    } else {
+                        toUpsertRemoteOwn.push(this.localFolderToRemote(local, userId));
+                    }
+                } else if ((remote.last_modified_ms || 0) > localMod) {
                     toUpsertLocal.push(remote);
                 }
             }
@@ -848,17 +1016,31 @@ export const SyncService = {
                 });
             }
 
-            if (toUpsertRemote.length > 0) {
-                toUpsertRemote.sort((a, b) => {
+            // 5a. Propias: batch upsert seguro
+            if (toUpsertRemoteOwn.length > 0) {
+                toUpsertRemoteOwn.sort((a, b) => {
                     if (!a.parent_id && b.parent_id) return -1;
                     if (a.parent_id && !b.parent_id) return 1;
                     return 0;
                 });
-                await supabase.from('folders').upsert(toUpsertRemote, { onConflict: 'id' });
+                await supabase.from('folders').upsert(toUpsertRemoteOwn, { onConflict: 'id' });
+            }
+
+            // 5b. Compartidas: update atómico (PATCH) sin user_id para respetar la política RLS
+            for (const local of toUpdateRemoteShared) {
+                const ownerId = local.shared_owner_id || local.user_id || userId;
+                const remoteData = this.localFolderToRemote(local, ownerId);
+                const { id, user_id, created_at, created_at_ms, ...updateFields } = remoteData;
+                delete updateFields.is_pinned;
+                const { error: updateErr } = await supabase
+                    .from('folders')
+                    .update(updateFields)
+                    .eq('id', local.id);
+                if (updateErr) throw updateErr;
             }
 
             await db.runAsync(
-                `UPDATE folders SET user_id = ?, last_modified_ms = COALESCE(last_modified_ms, updated_at_ms) WHERE user_id IS NULL OR user_id = 'local_user'`,
+                `UPDATE folders SET user_id = ?, last_modified_ms = COALESCE(last_modified_ms, updated_at_ms) WHERE (user_id IS NULL OR user_id = 'local_user') AND (is_shared IS NULL OR is_shared = 0)`,
                 [userId]
             );
 
@@ -894,8 +1076,8 @@ export const SyncService = {
 
     async upsertLocalFolder(db: any, remote: any, userId: string): Promise<void> {
         const existing = await db.getFirstAsync(
-            `SELECT id, created_at_ms, updated_at_ms FROM folders WHERE id = ?`, [remote.id]
-        ) as Folder | null;
+            `SELECT id, created_at_ms, updated_at_ms, is_pinned, is_shared, shared_owner_id FROM folders WHERE id = ?`, [remote.id]
+        ) as (Folder & { is_pinned?: number; is_shared?: number; shared_owner_id?: string }) | null;
 
         let createdAtMs: number;
         if (existing?.created_at_ms && Number(existing.created_at_ms) > 0) {
@@ -923,6 +1105,12 @@ export const SyncService = {
 
         const isShared = (remote.user_id && remote.user_id !== userId) ? 1 : 0;
         const sharedOwnerId = isShared ? remote.user_id : null;
+        const isLocallyOrRemotelyShared = isShared === 1 || existing?.is_shared === 1 || Boolean(existing?.shared_owner_id);
+
+        // En carpetas compartidas, is_pinned es una preferencia de visualización local y privada
+        const resolvedIsPinned = isLocallyOrRemotelyShared
+            ? (existing && existing.is_pinned !== undefined && existing.is_pinned !== null ? existing.is_pinned : 0)
+            : (remote.is_pinned ?? 0);
 
         const params = [
             remote.id,
@@ -931,7 +1119,7 @@ export const SyncService = {
             remote.name,
             remote.icon || 'folder',
             remote.color || '#8B5CF6',
-            remote.is_pinned ?? 0,
+            resolvedIsPinned,
             createdAtMs,
             updatedAtMs,
             remote.last_modified_ms || updatedAtMs,
@@ -982,8 +1170,8 @@ export const SyncService = {
 
     async upsertLocalNote(db: any, remote: any, userId: string): Promise<void> {
         const existing = (await db.getFirstAsync(
-            `SELECT id, created_at_ms, updated_at_ms FROM notes WHERE id = ?`, [remote.id]
-        )) as Note | null;
+            `SELECT id, created_at_ms, updated_at_ms, is_pinned, is_shared, shared_owner_id FROM notes WHERE id = ?`, [remote.id]
+        )) as (Note & { is_pinned?: number; is_shared?: number; shared_owner_id?: string }) | null;
 
         // Recuperar la fecha original de creación con máxima resiliencia
         let createdAtMs: number;
@@ -1017,8 +1205,32 @@ export const SyncService = {
             ? Number(remote.last_modified_ms)
             : updatedAtMs;
 
-        const isShared = (remote.user_id && remote.user_id !== userId) ? 1 : 0;
-        const sharedOwnerId = isShared ? remote.user_id : null;
+        // Verificar si la nota pertenece a una carpeta compartida
+        let folderIsShared = false;
+        let folderSharedOwnerId: string | null = null;
+        if (remote.folder_id) {
+            const folderRow = (await db.getFirstAsync(
+                'SELECT is_shared, shared_owner_id, user_id FROM folders WHERE id = ?',
+                [remote.folder_id]
+            )) as { is_shared?: number; shared_owner_id?: string; user_id?: string } | null;
+            if (folderRow && (folderRow.is_shared === 1 || Boolean(folderRow.shared_owner_id))) {
+                folderIsShared = true;
+                folderSharedOwnerId = folderRow.shared_owner_id || (folderRow.user_id && folderRow.user_id !== userId && folderRow.user_id !== 'local_user' ? folderRow.user_id : null);
+            }
+        }
+
+        const isShared = (remote.user_id && remote.user_id !== userId) || folderIsShared || existing?.is_shared === 1 ? 1 : 0;
+        const sharedOwnerId = (remote.user_id && remote.user_id !== userId)
+            ? remote.user_id
+            : (existing?.shared_owner_id || folderSharedOwnerId || null);
+        const isLocallyOrRemotelyShared = isShared === 1 || existing?.is_shared === 1 || Boolean(existing?.shared_owner_id);
+
+        // El estado de fijado (pin) en notas compartidas es una preferencia de visualización local y privada de cada usuario:
+        // Si ya existe la nota localmente, conservamos el is_pinned local del usuario.
+        // Si es una nota compartida nueva que llega por primera vez, se inicializa sin fijar (0).
+        const resolvedIsPinned = isLocallyOrRemotelyShared
+            ? (existing && existing.is_pinned !== undefined && existing.is_pinned !== null ? existing.is_pinned : 0)
+            : (remote.is_pinned ? 1 : 0);
 
         const params = [
             remote.id,
@@ -1029,7 +1241,7 @@ export const SyncService = {
             remote.content || null,
             createdAtMs,
             updatedAtMs,
-            remote.is_pinned ? 1 : 0,
+            resolvedIsPinned,
             remote.attachments ? JSON.stringify(remote.attachments) : null,
             remote.links ? JSON.stringify(remote.links) : null,
             remote.deleted ? 1 : 0,

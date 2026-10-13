@@ -119,28 +119,26 @@ export const useStore = create<AppState>()(
             isLoading: false,
 
             loadReminders: async () => {
-                set({ isLoading: true });
+                if (get().reminders.length === 0) {
+                    set({ isLoading: true });
+                }
                 try {
                     const reminders = await ReminderService.getReminders();
-                    set({ reminders, isRemindersDirty: false });
+                    set({ reminders, isRemindersDirty: false, isLoading: false });
                     WidgetService.sync(reminders).catch(() => {});
                     WidgetService.syncSchedule().catch(() => {});
                 } catch (error: any) {
                     if (!error.message?.includes('no such table')) console.error(error);
-                } finally {
                     set({ isLoading: false });
                 }
             },
 
             loadHistory: async () => {
-                set({ isLoading: true });
                 try {
                     const history = await ReminderService.getHistory();
-                    set({ history });
+                    set({ history, isLoading: false });
                 } catch (error) {
                     console.error('Failed to load history', error);
-                } finally {
-                    set({ isLoading: false });
                 }
             },
 

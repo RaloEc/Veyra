@@ -126,7 +126,9 @@ export default function CreateOrEditEventScreen() {
     const { notes, addNote } = useNotesStore();
 
     const isEditing = Boolean(id && id !== 'create');
-    const existingEvent = isEditing ? events.find(e => e.id === id) : null;
+    const existingEventFromStore = isEditing ? events.find(e => e.id === id) : null;
+    const [fetchedEvent, setFetchedEvent] = useState<CalendarEvent | null>(null);
+    const existingEvent = existingEventFromStore || fetchedEvent;
 
     // Estado de formulario
     const [title, setTitle] = useState(existingEvent?.title || '');
@@ -135,6 +137,94 @@ export default function CreateOrEditEventScreen() {
     const [selectedColor, setSelectedColor] = useState(existingEvent?.color || EVENT_COLORS[0].color);
     const [isRecurringDeleteModalVisible, setIsRecurringDeleteModalVisible] = useState(false);
     const [isShareModalVisible, setIsShareModalVisible] = useState(false);
+
+    // Carga de fallback desde SQLite o Supabase si el evento no está en el store en memoria
+    useEffect(() => {
+        if (!isEditing || !id || existingEventFromStore) return;
+
+        let isMounted = true;
+        (async () => {
+            try {
+                const { getDB } = await import('../../src/db');
+                const db = await getDB();
+                const local = await db.getFirstAsync<CalendarEvent>('SELECT * FROM events WHERE id = ?', [id]);
+                if (local && isMounted) {
+                    setFetchedEvent(local);
+                    return;
+                }
+
+                // Si no está en SQLite local, intentar consultar Supabase
+                const { supabase } = await import('../../src/lib/supabase');
+                const { data: remote } = await supabase.from('events').select('*').eq('id', id).maybeSingle();
+                if (remote && isMounted) {
+                    const { SyncService } = await import('../../src/services/syncService');
+                    const userId = useStore.getState().session?.user?.id || 'local_user';
+                    await SyncService.upsertLocalEvent(db, remote, userId);
+                    setFetchedEvent({
+                        id: remote.id,
+                        user_id: remote.user_id,
+                        title: remote.title,
+                        description: remote.description,
+                        start_time_ms: remote.start_time_ms,
+                        end_time_ms: remote.end_time_ms,
+                        repeat_rule: remote.repeat_rule,
+                        location: remote.location,
+                        color: remote.color,
+                        notification_offset_min: remote.notification_offset_min,
+                        notification_offsets: remote.notification_offsets,
+                        notification_ids: remote.notification_ids,
+                        note_id: remote.note_id,
+                        tags: remote.tags,
+                        created_at_ms: remote.created_at_ms,
+                        updated_at_ms: remote.updated_at_ms,
+                        last_modified_ms: remote.last_modified_ms,
+                        deleted: remote.deleted,
+                        is_shared: 1,
+                    });
+                }
+            } catch (err) {
+                console.warn('[CreateEvent] Error buscando evento por ID:', err);
+            }
+        })();
+
+        return () => { isMounted = false; };
+    }, [id, isEditing, existingEventFromStore]);
+
+    // Sincronizar el formulario cuando el evento esté disponible (evita que aparezca en blanco)
+    useEffect(() => {
+        if (!existingEvent) return;
+        setTitle(existingEvent.title || '');
+        setDescription(existingEvent.description || '');
+        setLocation(existingEvent.location || '');
+        setSelectedColor(existingEvent.color || EVENT_COLORS[0].color);
+        if (existingEvent.note_id) setLinkedNoteId(existingEvent.note_id);
+        if (existingEvent.tags) {
+            try {
+                const parsed = JSON.parse(existingEvent.tags);
+                if (Array.isArray(parsed)) setTags(parsed);
+            } catch {}
+        }
+        if (existingEvent.notification_offsets) {
+            try {
+                const parsed = JSON.parse(existingEvent.notification_offsets);
+                if (Array.isArray(parsed)) setSelectedOffsets(parsed.sort((a, b) => a - b));
+            } catch {}
+        } else if (existingEvent.notification_offset_min !== undefined && existingEvent.notification_offset_min !== null) {
+            setSelectedOffsets([existingEvent.notification_offset_min]);
+        }
+        const evStart = new Date(existingEvent.start_time_ms);
+        const evEnd = new Date(existingEvent.end_time_ms || existingEvent.start_time_ms);
+        setEventDate(evStart);
+        setStartTime(evStart);
+        setEndTime(evEnd);
+        if (existingEvent.repeat_rule) {
+            try {
+                const parsed = JSON.parse(existingEvent.repeat_rule);
+                setIsRecurring(parsed.type === 'weekly');
+                if (Array.isArray(parsed.days)) setSelectedDays(parsed.days);
+            } catch {}
+        }
+    }, [existingEvent]);
 
     // Tags / Etiquetas
     const [tags, setTags] = useState<string[]>(() => {

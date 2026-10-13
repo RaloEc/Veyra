@@ -50,7 +50,9 @@ import { FolderIconRenderer } from '../../src/components/notes/FolderIconRendere
 import { MoveToFolderModal } from '../../src/components/notes/MoveToFolderModal';
 import { FolderModal } from '../../src/components/notes/FolderModal';
 import { NoteOptionsMenu } from '../../src/components/notes/NoteOptionsMenu';
+import { NoteFontModal } from '../../src/components/notes/NoteFontModal';
 import { exportNoteToPdf } from '../../src/utils/pdfExportUtils';
+import { actions } from 'react-native-pell-rich-editor';
 
 export default function CreateNoteScreen() {
     const { t } = useTranslation();
@@ -105,6 +107,8 @@ export default function CreateNoteScreen() {
         folderId,
         setFolderId,
         eventId,
+        fontFamily,
+        setFontFamily,
         attachments,
         isPinned,
         setIsPinned,
@@ -127,6 +131,8 @@ export default function CreateNoteScreen() {
         setAlertVisible,
         alertConfig,
         maxAttachments,
+        broadcastCursorMove,
+        broadcastCursorRemove,
     } = useCreateNote(id, paramFolderId, paramEventId, paramInitialTitle);
 
     const currentFolder = folders.find(f => f.id === folderId);
@@ -134,6 +140,7 @@ export default function CreateNoteScreen() {
 
     const [isPagesModalVisible, setIsPagesModalVisible] = useState(false);
     const [isOptionsMenuVisible, setIsOptionsMenuVisible] = useState(false);
+    const [isFontModalVisible, setIsFontModalVisible] = useState(false);
     const [isExportingPdf, setIsExportingPdf] = useState(false);
     const [isEditingExistingImage, setIsEditingExistingImage] = useState(false);
     const [isDraggingImage, setIsDraggingImage] = useState(false);
@@ -198,7 +205,7 @@ export default function CreateNoteScreen() {
     const handleExportPdf = async () => {
         try {
             setIsExportingPdf(true);
-            await exportNoteToPdf(title, pages);
+            await exportNoteToPdf(title, pages, { fontFamily });
         } catch (error) {
             console.error('Error exporting note to PDF:', error);
             Alert.alert(
@@ -210,6 +217,24 @@ export default function CreateNoteScreen() {
         }
     };
 
+    const handleApplyFontToSelection = useCallback((fontName: string) => {
+        const editor = editorRefs.current[currentPageIndex] || editorRefs.current[0] || null;
+        if (!editor) return;
+        try {
+            editor.injectJavaScript?.(`
+                (function() {
+                    if (typeof window.__veyraApplyFont === 'function') {
+                        window.__veyraApplyFont("${fontName.replace(/"/g, '\\"')}");
+                    } else {
+                        document.execCommand('fontName', false, "${fontName.replace(/"/g, '\\"')}");
+                    }
+                })();
+                true;
+            `);
+        } catch {}
+        editor.sendAction(actions.fontName, 'result', fontName);
+    }, [currentPageIndex, editorRefs]);
+
     useFocusEffect(
         React.useCallback(() => {
             isExiting.current = false;
@@ -219,6 +244,10 @@ export default function CreateNoteScreen() {
             const onHardwareBack = () => {
                 if (isOptionsMenuVisible) {
                     setIsOptionsMenuVisible(false);
+                    return true;
+                }
+                if (isFontModalVisible) {
+                    setIsFontModalVisible(false);
                     return true;
                 }
                 if (isPagesModalVisible) {
@@ -238,7 +267,7 @@ export default function CreateNoteScreen() {
             };
             const subscription = BackHandler.addEventListener('hardwareBackPress', onHardwareBack);
             return () => subscription.remove();
-        }, [isOptionsMenuVisible, isPagesModalVisible, isCropperVisible, alertVisible])
+        }, [isOptionsMenuVisible, isFontModalVisible, isPagesModalVisible, isCropperVisible, alertVisible])
     );
 
     const pageLayoutsRef = useRef<{ [index: number]: number }>({});
@@ -344,6 +373,7 @@ export default function CreateNoteScreen() {
                                         description={page.content}
                                         setDescription={html => updatePageContent(index, html)}
                                         isDark={isDark}
+                                        fontFamily={fontFamily}
                                         editorRef={{
                                             get current() {
                                                 return editorRefs.current[index];
@@ -356,7 +386,10 @@ export default function CreateNoteScreen() {
                                             setCurrentPageIndex(index);
                                             setIsNotesFocused(true);
                                         }}
-                                        onBlur={() => setIsNotesFocused(false)}
+                                        onBlur={() => {
+                                            setIsNotesFocused(false);
+                                            broadcastCursorRemove(index);
+                                        }}
                                         flat={true}
                                         onUndo={undo}
                                         onRedo={redo}
@@ -368,6 +401,8 @@ export default function CreateNoteScreen() {
                                         onDragStateChange={setIsDraggingImage}
                                         onAutoScroll={handleAutoScroll}
                                         onCursorPosition={(offsetY) => handleCursorPosition(index, offsetY)}
+                                        onCursorActivity={(cursor) => broadcastCursorMove(index, cursor)}
+                                        onCursorRemove={() => broadcastCursorRemove(index)}
                                     />
                                 </View>
                             </View>
@@ -494,6 +529,7 @@ export default function CreateNoteScreen() {
                                             description={page.content}
                                             setDescription={html => updatePageContent(index, html)}
                                             isDark={isDark}
+                                            fontFamily={fontFamily}
                                             editorRef={{
                                                 get current() {
                                                     return editorRefs.current[index];
@@ -506,7 +542,10 @@ export default function CreateNoteScreen() {
                                                 setCurrentPageIndex(index);
                                                 setIsNotesFocused(true);
                                             }}
-                                            onBlur={() => setIsNotesFocused(false)}
+                                            onBlur={() => {
+                                                setIsNotesFocused(false);
+                                                broadcastCursorRemove(index);
+                                            }}
                                             flat={true}
                                             onUndo={undo}
                                             onRedo={redo}
@@ -518,6 +557,8 @@ export default function CreateNoteScreen() {
                                             onDragStateChange={setIsDraggingImage}
                                             onAutoScroll={handleAutoScroll}
                                             onCursorPosition={(offsetY) => handleCursorPosition(index, offsetY)}
+                                            onCursorActivity={(cursor) => broadcastCursorMove(index, cursor)}
+                                            onCursorRemove={() => broadcastCursorRemove(index)}
                                         />
                                     </View>
                                 </ScrollView>
@@ -728,6 +769,10 @@ export default function CreateNoteScreen() {
                         onRedo={redo}
                         canUndo={canUndo}
                         canRedo={canRedo}
+                        onOpenNoteFontPicker={() => setIsFontModalVisible(true)}
+                        currentFontFamily={fontFamily}
+                        onSelectFont={setFontFamily}
+                        onApplyFontToSelection={handleApplyFontToSelection}
                     />
                 </View>
 
@@ -756,12 +801,22 @@ export default function CreateNoteScreen() {
                     onExportPdf={handleExportPdf}
                     isExportingPdf={isExportingPdf}
                     onOpenPagesManager={() => setIsPagesModalVisible(true)}
+                    onOpenFontPicker={() => setIsFontModalVisible(true)}
                     pageCount={pages.length}
                     isPinned={isPinned}
                     onTogglePin={() => setIsPinned(!isPinned)}
                     onMoveFolder={() => setIsMoveModalVisible(true)}
                     folderName={currentFolder?.name}
                     onDelete={isEditing ? handleDelete : undefined}
+                />
+
+                {/* Modal de Tipografía General de la Nota */}
+                <NoteFontModal
+                    visible={isFontModalVisible}
+                    onClose={() => setIsFontModalVisible(false)}
+                    selectedFont={fontFamily}
+                    onSelectFont={setFontFamily}
+                    onApplyFontToSelection={handleApplyFontToSelection}
                 />
 
                 <ImageCropperModal
