@@ -5,7 +5,7 @@ import { getTiptapHtml } from './editor-web/htmlTemplate';
 
 export interface VeyraTiptapEditorRef {
     applyRemoteUpdate: (base64Update: string) => void;
-    applyRemoteAwareness: (base64Awareness: string) => void;
+    applyRemoteAwareness: (base64Awareness: string, senderClientId?: string) => void;
     requestSyncStep1: () => void;
     handleSyncStep1: (base64RemoteSv: string, correlationId?: string, isReturnHandshake?: boolean) => void;
     removePeer: (remoteClientId?: number | string) => void;
@@ -82,8 +82,9 @@ export const VeyraTiptapYjsEditor = forwardRef<VeyraTiptapEditorRef, VeyraTiptap
             applyRemoteUpdate: (base64Update: string) => {
                 executeInWebView(`window.veyraApplyUpdate && window.veyraApplyUpdate(${JSON.stringify(base64Update)})`);
             },
-            applyRemoteAwareness: (base64Awareness: string) => {
-                executeInWebView(`window.veyraApplyAwareness && window.veyraApplyAwareness(${JSON.stringify(base64Awareness)})`);
+            applyRemoteAwareness: (base64Awareness: string, senderClientId?: string) => {
+                const escapedSender = senderClientId ? JSON.stringify(senderClientId) : 'null';
+                executeInWebView(`window.veyraApplyAwareness && window.veyraApplyAwareness(${JSON.stringify(base64Awareness)}, ${escapedSender})`);
             },
             requestSyncStep1: () => {
                 executeInWebView(`window.veyraRequestSyncStep1 && window.veyraRequestSyncStep1()`);

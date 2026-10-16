@@ -292,7 +292,7 @@ export const useNotesStore = create<NotesState>((set, get) => ({
             await NoteService.updateNote(id, updates);
 
             if (useStore.getState().session?.user?.id && useStore.getState().cloudSyncEnabled) {
-                useStore.getState().triggerSync();
+                useStore.getState().triggerSync(false, true);
             }
         } catch (error) {
             console.error('Failed to update note', error);
@@ -314,7 +314,7 @@ export const useNotesStore = create<NotesState>((set, get) => ({
             await NoteService.updateNotes(ids, updates);
 
             if (useStore.getState().session?.user?.id && useStore.getState().cloudSyncEnabled) {
-                useStore.getState().triggerSync();
+                useStore.getState().triggerSync(false, true);
             }
         } catch (error) {
             console.error('Failed to update notes batch', error);

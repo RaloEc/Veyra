@@ -1,5 +1,5 @@
 import { withDB } from '../db';
-import { Note } from '../types/db';
+import { Note, NoteSyncMode } from '../types/db';
 import * as Crypto from 'expo-crypto';
 
 function triggerNotesWidgetSync() {
@@ -20,7 +20,8 @@ export const NoteService = {
         eventId?: string | null,
         fontFamily?: string,
         isShared: number = 0,
-        sharedOwnerId?: string | null
+        sharedOwnerId?: string | null,
+        syncMode: NoteSyncMode = 'rest'
     ): Promise<Note> {
         return withDB(async (db) => {
             const id = Crypto.randomUUID();
@@ -43,12 +44,13 @@ export const NoteService = {
                 font_family: fontFamily || 'sans',
                 is_shared: isShared,
                 shared_owner_id: sharedOwnerId || undefined,
+                sync_mode: syncMode,
             };
 
             await db.runAsync(
-                `INSERT INTO notes (id, user_id, folder_id, event_id, title, content, created_at_ms, updated_at_ms, is_pinned, attachments, links, deleted, last_modified_ms, font_family, is_shared, shared_owner_id)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                [id, userId || null, folderId || null, eventId || null, title || null, content || null, now, now, isPinned ? 1 : 0, attachments || null, links || null, 0, now, fontFamily || 'sans', isShared, sharedOwnerId || null]
+                `INSERT INTO notes (id, user_id, folder_id, event_id, title, content, created_at_ms, updated_at_ms, is_pinned, attachments, links, deleted, last_modified_ms, font_family, is_shared, shared_owner_id, sync_mode)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                [id, userId || null, folderId || null, eventId || null, title || null, content || null, now, now, isPinned ? 1 : 0, attachments || null, links || null, 0, now, fontFamily || 'sans', isShared, sharedOwnerId || null, syncMode]
             );
 
             if (eventId) {
@@ -260,6 +262,17 @@ export const NoteService = {
     async setNoteCollabRole(id: string, role: string): Promise<void> {
         return withDB(async (db) => {
             await db.runAsync(`UPDATE notes SET collab_role = ? WHERE id = ?`, [role, id]);
+        });
+    },
+
+    async setNoteSyncMode(id: string, syncMode: NoteSyncMode): Promise<void> {
+        return withDB(async (db) => {
+            const now = Date.now();
+            await db.runAsync(
+                `UPDATE notes SET sync_mode = ?, updated_at_ms = ?, last_modified_ms = ? WHERE id = ?`,
+                [syncMode, now, now, id]
+            );
+            triggerNotesWidgetSync();
         });
     }
 };

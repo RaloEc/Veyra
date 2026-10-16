@@ -108,6 +108,8 @@ interface AppState {
     setWidgetHighContrast: (enabled: boolean) => void;
 }
 
+let currentSyncStartTime = 0;
+
 export const useStore = create<AppState>()(
     persist(
         (set, get) => ({
@@ -743,7 +745,17 @@ export const useStore = create<AppState>()(
             syncError: null,
             triggerSync: async (isInitialLogin = false, isBackground = false) => {
                 const state = get();
-                if (!state.session?.user?.id || state.isSyncing) return;
+                if (!state.session?.user?.id) return;
+
+                const SYNC_TIMEOUT_MS = 25000;
+                // Si ya está sincronizando, verificar si la sincronización previa lleva más del tiempo límite (watchdog de 25s)
+                if (state.isSyncing) {
+                    const elapsedSinceStart = Date.now() - currentSyncStartTime;
+                    if (currentSyncStartTime > 0 && elapsedSinceStart < SYNC_TIMEOUT_MS) {
+                        return;
+                    }
+                    console.warn('[Sync] Previous sync exceeded 25s watchdog or was stuck; releasing sync lock.');
+                }
 
                 // Cooldown inteligente para aperturas automáticas y reanudación desde segundo plano:
                 // Si la sincronización es en segundo plano / automática (isBackground = true) y no es login inicial,
@@ -756,41 +768,51 @@ export const useStore = create<AppState>()(
                     }
                 }
 
+                currentSyncStartTime = Date.now();
                 set({ isSyncing: true, syncError: null });
+
                 try {
                     const { SyncService } = await import('../services/syncService');
-                    const result = await SyncService.syncAll(state.session.user.id, isInitialLogin);
-                    // Recargar datos locales inmediatamente para que todo lo descargado se refleje en la UI
-                    await get().loadReminders();
-                    await get().loadHistory();
-                    await get().loadStreak();
-                    try {
-                        const { useNotesStore } = await import('./useNotesStore');
-                        await useNotesStore.getState().loadNotes();
-                    } catch (e) {
-                        console.warn('[Sync] Could not reload notes store:', e);
-                    }
-                    try {
-                        const { useFoldersStore } = await import('./useFoldersStore');
-                        await useFoldersStore.getState().loadFolders();
-                    } catch (e) {
-                        console.warn('[Sync] Could not reload folders store:', e);
-                    }
-                    try {
-                        const { useEventsStore } = await import('./useEventsStore');
-                        await useEventsStore.getState().loadAllEvents();
-                    } catch (e) {
-                        console.warn('[Sync] Could not reload events store:', e);
-                    }
+                    
+                    // Promise.race con timeout estricto de 25s para que NUNCA se congele la interfaz
+                    const syncPromise = SyncService.syncAll(state.session.user.id, isInitialLogin);
+                    const timeoutPromise = new Promise<{ success: boolean; errors: string[] }>((_, reject) =>
+                        setTimeout(() => reject(new Error('La sincronización tardó demasiado (timeout 25s)')), SYNC_TIMEOUT_MS)
+                    );
+
+                    const result = await Promise.race([syncPromise, timeoutPromise]);
+
+                    // Recargar datos locales inmediatamente para que todo lo descargado se refleje en la UI de forma resiliente
+                    await Promise.allSettled([
+                        get().loadReminders().catch(() => {}),
+                        get().loadHistory().catch(() => {}),
+                        get().loadStreak().catch(() => {}),
+                        (async () => {
+                            const { useNotesStore } = await import('./useNotesStore');
+                            await useNotesStore.getState().loadNotes();
+                        })().catch(() => {}),
+                        (async () => {
+                            const { useFoldersStore } = await import('./useFoldersStore');
+                            await useFoldersStore.getState().loadFolders();
+                        })().catch(() => {}),
+                        (async () => {
+                            const { useEventsStore } = await import('./useEventsStore');
+                            await useEventsStore.getState().loadAllEvents();
+                        })().catch(() => {}),
+                    ]);
 
                     if (result.success) {
-                        set({ lastSyncTime: Date.now(), isSyncing: false });
+                        set({ lastSyncTime: Date.now(), syncError: null });
                     } else {
-                        set({ syncError: result.errors.join(', '), isSyncing: false });
+                        set({ syncError: result.errors.join(', ') });
                     }
                 } catch (e: any) {
-                    console.error('Sync failed:', e);
-                    set({ syncError: e.message, isSyncing: false });
+                    console.error('[Sync] Sync failed or timed out:', e);
+                    set({ syncError: e?.message || 'Error de sincronización' });
+                } finally {
+                    // GARANTÍA ABSOLUTA: isSyncing NUNCA puede quedarse en true
+                    currentSyncStartTime = 0;
+                    set({ isSyncing: false });
                 }
             },
             streak: 0,
@@ -841,12 +863,14 @@ export const useStore = create<AppState>()(
                 widgetHighContrast: state.widgetHighContrast,
             }),
             onRehydrateStorage: () => (state) => {
+                currentSyncStartTime = 0;
                 const sessionEmail = state?.session?.user?.email;
                 // Si no hay sesión o el email guardado es el del propietario sin sesión activa, limpiarlo
                 const effectiveEmail = sessionEmail || (state?.userEmail && !isWhitelistedPremiumEmail(state.userEmail) ? state.userEmail : null);
                 const isOwner = isWhitelistedPremiumEmail(sessionEmail);
                 useStore.setState({
                     isHydrated: true,
+                    isSyncing: false,
                     userEmail: effectiveEmail,
                     isPremium: isOwner ? true : (sessionEmail ? Boolean(state?.isPremium) : false),
                 });

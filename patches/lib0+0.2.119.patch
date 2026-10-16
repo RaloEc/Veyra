@@ -1,0 +1,68 @@
+diff --git a/node_modules/lib0/dist/webcrypto.react-native.cjs b/node_modules/lib0/dist/webcrypto.react-native.cjs
+index 4e6d3c4..ed84a4e 100644
+--- a/node_modules/lib0/dist/webcrypto.react-native.cjs
++++ b/node_modules/lib0/dist/webcrypto.react-native.cjs
+@@ -2,18 +2,19 @@
+ 
+ Object.defineProperty(exports, '__esModule', { value: true });
+ 
+-var webcrypto = require('isomorphic-webcrypto/src/react-native');
+-
+-function _interopDefaultLegacy (e) { return e && typeof e === 'object' && 'default' in e ? e : { 'default': e }; }
+-
+-var webcrypto__default = /*#__PURE__*/_interopDefaultLegacy(webcrypto);
+-
+-// @ts-ignore
+-
+-webcrypto__default["default"].ensureSecure();
+-
+-const subtle = webcrypto__default["default"].subtle;
+-const getRandomValues = webcrypto__default["default"].getRandomValues.bind(webcrypto__default["default"]);
++var _crypto = (typeof globalThis !== 'undefined' && globalThis.crypto) || (typeof global !== 'undefined' && global.crypto) || {};
++
++const getRandomValues = function (arr) {
++    if (typeof _crypto.getRandomValues === 'function') {
++        return _crypto.getRandomValues(arr);
++    }
++    for (let i = 0; i < arr.length; i++) {
++        arr[i] = Math.floor(Math.random() * 256);
++    }
++    return arr;
++};
++
++const subtle = _crypto.subtle || null;
+ 
+ exports.getRandomValues = getRandomValues;
+ exports.subtle = subtle;
+diff --git a/node_modules/lib0/webcrypto.react-native.js b/node_modules/lib0/webcrypto.react-native.js
+index b16091a..bb89478 100644
+--- a/node_modules/lib0/webcrypto.react-native.js
++++ b/node_modules/lib0/webcrypto.react-native.js
+@@ -1,7 +1,22 @@
+-// @ts-ignore
+-import webcrypto from 'isomorphic-webcrypto/src/react-native'
++// Shim para React Native
++const _crypto = (typeof globalThis !== 'undefined' && globalThis.crypto) || (typeof global !== 'undefined' && global.crypto) || {};
+ 
+-webcrypto.ensureSecure()
++export const getRandomValues = function (arr) {
++    if (typeof _crypto.getRandomValues === 'function') {
++        return _crypto.getRandomValues(arr);
++    }
++    for (let i = 0; i < arr.length; i++) {
++        arr[i] = Math.floor(Math.random() * 256);
++    }
++    return arr;
++};
+ 
+-export const subtle = webcrypto.subtle
+-export const getRandomValues = webcrypto.getRandomValues.bind(webcrypto)
++export const subtle = _crypto.subtle || null;
++
++export const ensureSecure = () => {};
++
++export default {
++    getRandomValues,
++    subtle,
++    ensureSecure,
++};

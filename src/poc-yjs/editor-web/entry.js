@@ -34,11 +34,22 @@ let currentUser = {
     color: '#8B5CF6'
 };
 
+let isAwarenessDestroyed = false;
+
 // Evitar que pérdidas temporales de foco DOM en Android borren el cursor colaborativo
 const originalSetLocalStateField = awareness.setLocalStateField.bind(awareness);
 awareness.setLocalStateField = function(field, value) {
+    if (isAwarenessDestroyed) return;
     if (field === 'cursor' && value === null) {
         // En móvil no borramos el cursor por simple pérdida de foco DOM (ej. tocar toolbar o scroll)
+        return;
+    }
+    // Si el estado local era null y no está destruido, inicializar con user
+    if (awareness.getLocalState() === null) {
+        awareness.setLocalState({
+            user: currentUser,
+            [field]: value
+        });
         return;
     }
     return originalSetLocalStateField(field, value);
@@ -240,9 +251,11 @@ awareness.on('update', ({ added, updated, removed }, origin) => {
     }
 });
 
-// 3. Watchdog de presencia (TTL de 35 segundos para entornos móviles)
-// Si un cliente remoto no renueva su señal en más de 35 segundos, se purga localmente sin re-emitir
+// 3. Watchdog de presencia (TTL de 5 segundos para entornos móviles)
+// Si un cliente remoto no renueva su señal en más de 5 segundos, se purga localmente sin re-emitir
 const clientLastSeen = new Map();
+const peerSenderMap = new Map(); // senderClientId -> Set of Yjs clientIds
+const clientToSenderMap = new Map(); // Yjs clientId -> senderClientId
 
 awareness.on('change', () => {
     const now = Date.now();
@@ -257,13 +270,16 @@ setInterval(() => {
     const now = Date.now();
     const staleClients = [];
     clientLastSeen.forEach((lastSeen, clientId) => {
-        if (now - lastSeen > 35000) {
+        if (now - lastSeen > 5000) {
             staleClients.push(clientId);
         }
     });
 
     if (staleClients.length > 0) {
-        staleClients.forEach(cid => clientLastSeen.delete(cid));
+        staleClients.forEach(cid => {
+            clientLastSeen.delete(cid);
+            clientToSenderMap.delete(cid);
+        });
         awarenessProtocol.removeAwarenessStates(awareness, staleClients, 'timeout-purge');
         if (editor && editor.view && !editor.isDestroyed) {
             try {
@@ -273,14 +289,13 @@ setInterval(() => {
         }
         logToNative('watchdog', 'purge-stale-carets', 0, { purgedClients: staleClients.length });
     }
-}, 3000);
+}, 1500);
 
 // Re-broadcast periódico del awareness local (cada 5s) para mantener cursores
 // visibles en pares remotos incluso tras reconexiones o pérdidas de paquetes.
-// Esto es especialmente importante en Android donde el WebView puede perder
-// eventos internos de awareness sin que React Native se entere.
 setInterval(() => {
     try {
+        if (isAwarenessDestroyed) return;
         const localState = awareness.getLocalState();
         if (localState && localState.user) {
             const awarenessUpdate = awarenessProtocol.encodeAwarenessUpdate(awareness, [ydoc.clientID]);
@@ -299,6 +314,7 @@ setInterval(() => {
 // Emite el estado de Awareness local para mantener cursores visibles
 window.veyraBroadcastAwareness = function() {
     try {
+        if (isAwarenessDestroyed || awareness.getLocalState() === null) return;
         updateLocalCursor();
         const awarenessUpdate = awarenessProtocol.encodeAwarenessUpdate(awareness, [ydoc.clientID]);
         sendToNative({
@@ -315,6 +331,9 @@ window.veyraTouchPeer = function(remoteClientId) {
     const now = Date.now();
     if (typeof remoteClientId === 'number') {
         clientLastSeen.set(remoteClientId, now);
+    } else if (typeof remoteClientId === 'string' && peerSenderMap.has(remoteClientId)) {
+        const peerSet = peerSenderMap.get(remoteClientId);
+        peerSet.forEach(cid => clientLastSeen.set(cid, now));
     } else {
         // Renovar todos los clientes remotos registrados
         awareness.getStates().forEach((_, cid) => {
@@ -346,10 +365,24 @@ window.veyraApplyUpdate = function(base64Update) {
 };
 
 // Aplica actualización de Awareness remota recibida de Supabase
-window.veyraApplyAwareness = function(base64Awareness) {
+window.veyraApplyAwareness = function(base64Awareness, senderClientId) {
     try {
         const update = base64ToUint8Array(base64Awareness);
         awarenessProtocol.applyAwarenessUpdate(awareness, update, 'remote');
+
+        if (senderClientId) {
+            let peerSet = peerSenderMap.get(senderClientId);
+            if (!peerSet) {
+                peerSet = new Set();
+                peerSenderMap.set(senderClientId, peerSet);
+            }
+            awareness.getStates().forEach((state, cid) => {
+                if (cid !== ydoc.clientID && state) {
+                    peerSet.add(cid);
+                    clientToSenderMap.set(cid, senderClientId);
+                }
+            });
+        }
 
         // Forzar inmediatamente re-evaluación del yCursorPlugin de ProseMirror
         if (editor && editor.view && !editor.isDestroyed) {
@@ -383,41 +416,70 @@ window.veyraApplyAwareness = function(base64Awareness) {
 // Elimina inmediatamente un par específico por su client ID o retiro voluntario
 window.veyraRemovePeer = function(remoteClientId) {
     try {
+        const toRemove = [];
         if (typeof remoteClientId === 'number') {
-            awarenessProtocol.removeAwarenessStates(awareness, [remoteClientId], 'peer-left');
-            clientLastSeen.delete(remoteClientId);
-        } else if (remoteClientId === 'ALL' || remoteClientId === true) {
-            // Solo purgar todo si explícitamente se solicita 'ALL'
-            const remoteClients = [];
-            awareness.getStates().forEach((_, cid) => {
-                if (cid !== ydoc.clientID) remoteClients.push(cid);
-            });
-            if (remoteClients.length > 0) {
-                awarenessProtocol.removeAwarenessStates(awareness, remoteClients, 'peer-left');
-            }
-            clientLastSeen.clear();
-        } else if (typeof remoteClientId === 'string') {
-            // Purgar clientes remotos que coincidan o el cliente remoto activo
-            const remoteClients = [];
+            toRemove.push(remoteClientId);
+        } else if (typeof remoteClientId === 'string' && peerSenderMap.has(remoteClientId)) {
+            const peerSet = peerSenderMap.get(remoteClientId);
+            peerSet.forEach(cid => toRemove.push(cid));
+            peerSenderMap.delete(remoteClientId);
+        } else {
             awareness.getStates().forEach((state, cid) => {
                 if (cid !== ydoc.clientID) {
-                    if (!remoteClientId || remoteClientId === 'peer' || (state && state.user && (state.user.id === remoteClientId || state.user.name?.includes(remoteClientId)))) {
-                        remoteClients.push(cid);
+                    if (
+                        remoteClientId === 'ALL' ||
+                        remoteClientId === true ||
+                        !remoteClientId ||
+                        remoteClientId === 'peer' ||
+                        (state && state.user && (state.user.id === remoteClientId || state.user.name?.includes(remoteClientId))) ||
+                        clientToSenderMap.get(cid) === remoteClientId
+                    ) {
+                        toRemove.push(cid);
                     }
                 }
             });
-            if (remoteClients.length > 0) {
-                awarenessProtocol.removeAwarenessStates(awareness, remoteClients, 'peer-left');
-                remoteClients.forEach(cid => clientLastSeen.delete(cid));
+            // Si no encontró coincidencia exacta pero se recibió un remoteClientId y existen clientes remotos,
+            // purgar los clientes remotos registrados
+            if (toRemove.length === 0 && remoteClientId) {
+                awareness.getStates().forEach((_, cid) => {
+                    if (cid !== ydoc.clientID) toRemove.push(cid);
+                });
             }
         }
+
+        if (toRemove.length > 0) {
+            toRemove.forEach(cid => {
+                clientLastSeen.delete(cid);
+                clientToSenderMap.delete(cid);
+            });
+            awarenessProtocol.removeAwarenessStates(awareness, toRemove, 'peer-left');
+        }
+
         if (editor && editor.view && !editor.isDestroyed) {
             try {
                 const tr = editor.state.tr.setMeta(yCursorPluginKey, { awarenessUpdated: true });
                 editor.view.dispatch(tr);
             } catch (_) {}
         }
-        logToNative('provider', 'peer-removed', 0);
+
+        // Notificar cambio de lista de pares a React Native
+        const peers = [];
+        awareness.getStates().forEach((state, cid) => {
+            if (cid !== ydoc.clientID && state && state.user) {
+                peers.push({
+                    clientId: cid,
+                    name: state.user.name || 'Invitado',
+                    color: state.user.color || '#8B5CF6',
+                    hasCursor: Boolean(state.cursor),
+                });
+            }
+        });
+        sendToNative({
+            type: 'AWARENESS_PEERS_CHANGED',
+            peers
+        });
+
+        logToNative('provider', 'peer-removed', 0, { removedCount: toRemove.length });
     } catch (e) {
         console.error('Error en veyraRemovePeer:', e);
     }
@@ -476,6 +538,7 @@ window.veyraHandleSyncStep1 = function(base64RemoteSv, correlationId, isReturnHa
 // Destruye o limpia el estado de Awareness al desconectar o pasar a segundo plano
 window.veyraDestroyAwareness = function() {
     try {
+        isAwarenessDestroyed = true;
         awareness.setLocalState(null);
         logToNative('lifecycle', 'destroy-awareness-local', 0);
     } catch (e) {
@@ -484,10 +547,12 @@ window.veyraDestroyAwareness = function() {
 };
 
 // Reactiva la presencia local cuando la app vuelve a primer plano
-// IMPORTANTE: preservar el cursor existente; solo restaurar user si falta
 window.veyraRestoreAwareness = function() {
     try {
-        originalSetLocalStateField('user', currentUser);
+        isAwarenessDestroyed = false;
+        awareness.setLocalState({
+            user: currentUser
+        });
         updateLocalCursor();
         window.veyraBroadcastAwareness();
         logToNative('lifecycle', 'restore-awareness-local', 0);

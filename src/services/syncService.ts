@@ -21,6 +21,16 @@ function isSharedItem(item: any, currentUserId: string): boolean {
     return false;
 }
 
+/**
+ * Helper para limitar el tiempo de espera de promesas de red y evitar bloqueos permanentes.
+ */
+function withTimeout<T>(promise: Promise<T>, ms: number, errorMsg: string): Promise<T> {
+    return Promise.race([
+        promise,
+        new Promise<T>((_, reject) => setTimeout(() => reject(new Error(errorMsg)), ms)),
+    ]);
+}
+
 export const SyncService = {
 
     // ─── Metadata helpers ───────────────────────────────────────────
@@ -41,60 +51,110 @@ export const SyncService = {
         );
     },
 
+    // ─── Local Data Adoption (Orphan & Restored Backups) ───────────
+
+    async claimOrphanLocalData(userId: string): Promise<void> {
+        const db = await getDB();
+        const now = Date.now();
+
+        // Transferir cualquier ítem local no compartido (creado sin cuenta o restaurado por Google Drive con un user_id antiguo) al nuevo userId
+        await db.runAsync(
+            `UPDATE reminders 
+             SET user_id = ?, last_modified_ms = ? 
+             WHERE (user_id IS NULL OR user_id = 'local_user' OR user_id != ?) 
+               AND (is_shared IS NULL OR is_shared = 0) 
+               AND (shared_owner_id IS NULL)`,
+            [userId, now, userId]
+        );
+
+        await db.runAsync(
+            `UPDATE events 
+             SET user_id = ?, last_modified_ms = ? 
+             WHERE (user_id IS NULL OR user_id = 'local_user' OR user_id != ?) 
+               AND (is_shared IS NULL OR is_shared = 0) 
+               AND (shared_owner_id IS NULL)`,
+            [userId, now, userId]
+        );
+
+        await db.runAsync(
+            `UPDATE notes 
+             SET user_id = ?, last_modified_ms = ? 
+             WHERE (user_id IS NULL OR user_id = 'local_user' OR user_id != ?) 
+               AND (is_shared IS NULL OR is_shared = 0) 
+               AND (shared_owner_id IS NULL)`,
+            [userId, now, userId]
+        );
+
+        await db.runAsync(
+            `UPDATE folders 
+             SET user_id = ?, last_modified_ms = ? 
+             WHERE (user_id IS NULL OR user_id = 'local_user' OR user_id != ?) 
+               AND (is_shared IS NULL OR is_shared = 0) 
+               AND (shared_owner_id IS NULL)`,
+            [userId, now, userId]
+        );
+    },
+
     // ─── Full Sync ──────────────────────────────────────────────────
 
     async syncAll(userId: string, isInitialLogin = false): Promise<{ success: boolean; errors: string[] }> {
         const errors: string[] = [];
         const syncStart = Date.now();
 
+        // 0. Reclamar datos locales / restaurados huérfanos para asignarlos al usuario autenticado
         try {
-            await this.syncProfile(userId, isInitialLogin);
+            await this.claimOrphanLocalData(userId);
+        } catch (claimErr: any) {
+            console.warn('[Sync] Could not claim orphan local data:', claimErr);
+        }
+
+        try {
+            await withTimeout(this.syncProfile(userId, isInitialLogin), 8000, 'syncProfile timeout (8s)');
         } catch (e: any) {
             console.error('Sync profile/settings failed:', e);
             errors.push(`Profile: ${e.message}`);
         }
 
         try {
-            await this.syncReminders(userId, isInitialLogin);
+            await withTimeout(this.syncReminders(userId, isInitialLogin), 12000, 'syncReminders timeout (12s)');
         } catch (e: any) {
             console.error('Sync reminders failed:', e);
             errors.push(`Reminders: ${e.message}`);
         }
 
         try {
-            await this.syncFolders(userId, isInitialLogin);
+            await withTimeout(this.syncFolders(userId, isInitialLogin), 8000, 'syncFolders timeout (8s)');
         } catch (e: any) {
             console.error('Sync folders failed:', e);
             errors.push(`Folders: ${e.message}`);
         }
 
         try {
-            await this.syncNotes(userId, isInitialLogin);
+            await withTimeout(this.syncNotes(userId, isInitialLogin), 12000, 'syncNotes timeout (12s)');
         } catch (e: any) {
             console.error('Sync notes failed:', e);
             errors.push(`Notes: ${e.message}`);
         }
 
         try {
-            await this.syncEvents(userId, isInitialLogin);
+            await withTimeout(this.syncEvents(userId, isInitialLogin), 10000, 'syncEvents timeout (10s)');
         } catch (e: any) {
             console.error('Sync events failed:', e);
             errors.push(`Events: ${e.message}`);
         }
 
         try {
-            await this.syncComplianceEvents(userId);
+            await withTimeout(this.syncComplianceEvents(userId), 8000, 'syncCompliance timeout (8s)');
         } catch (e: any) {
             console.error('Sync compliance failed:', e);
             errors.push(`Compliance: ${e.message}`);
         }
 
-        // Sync de archivos multimedia (después de datos)
+        // Sync de archivos multimedia (después de datos) con timeout y sin bloquear éxito global
         try {
-            await this.syncAttachmentFiles(userId);
+            await withTimeout(this.syncAttachmentFiles(userId), 10000, 'syncFiles timeout (10s)');
         } catch (e: any) {
-            console.error('Sync files failed:', e);
-            errors.push(`Files: ${e.message}`);
+            console.warn('[Sync] Sync files notice:', e.message);
         }
 
         if (errors.length === 0) {
@@ -108,23 +168,33 @@ export const SyncService = {
     // ─── Profile & Settings Sync ────────────────────────────────────
 
     async syncProfile(userId: string, isInitialLogin = false): Promise<void> {
-        // 1. Obtener perfil remoto de la tabla profiles
-        const { data: remoteProfile, error } = await supabase
-            .from('profiles')
-            .select('*')
-            .eq('id', userId)
-            .single();
+        // 1. Obtener perfil remoto de la tabla profiles con timeout
+        const { data: remoteProfile, error } = await withTimeout(
+            supabase.from('profiles').select('*').eq('id', userId).single(),
+            6000,
+            'Profiles select timeout'
+        ).catch(() => ({ data: null, error: null }));
 
-        if (error && error.code !== 'PGRST116') {
-            console.warn('[Sync] Profile query warning:', error.message);
+        if (error && (error as any).code !== 'PGRST116') {
+            console.warn('[Sync] Profile query warning:', (error as any).message);
         }
 
         const { useStore, isWhitelistedPremiumEmail } = await import('../store/useStore');
         const store = useStore.getState();
 
-        // 2. Obtener metadatos de usuario de Supabase Auth (donde se guardan los ajustes completos)
-        const { data: userData } = await supabase.auth.getUser();
-        const metaSettings = userData?.user?.user_metadata?.settings;
+        // 2. Obtener metadatos de usuario (primero desde la sesión en memoria para evitar llamadas redundantes a Auth)
+        let userData = store.session?.user;
+        let metaSettings = userData?.user_metadata?.settings;
+
+        if (!metaSettings && !userData) {
+            try {
+                const authRes = await withTimeout(supabase.auth.getUser(), 4000, 'auth.getUser timeout');
+                userData = authRes.data?.user as any;
+                metaSettings = userData?.user_metadata?.settings;
+            } catch (authErr) {
+                console.warn('[Sync] Could not fetch auth user:', authErr);
+            }
+        }
 
         if (isInitialLogin || !store.userProfile) {
             // Si es login inicial, restaurar los ajustes desde la nube
@@ -135,7 +205,7 @@ export const SyncService = {
                 if (remoteProfile.default_control_level) {
                     store.setDefaultControlLevel(remoteProfile.default_control_level);
                 }
-                const authEmail = userData?.user?.email || store.session?.user?.email;
+                const authEmail = userData?.email || store.session?.user?.email;
                 const isOwner = isWhitelistedPremiumEmail(authEmail);
                 if (isOwner) {
                     store.setPremium(true);
@@ -153,7 +223,7 @@ export const SyncService = {
                 if (metaSettings.theme) {
                     useStore.setState({ theme: metaSettings.theme });
                 }
-                const cloudAccent = metaSettings?.accentTheme || userData?.user?.user_metadata?.accentTheme;
+                const cloudAccent = metaSettings?.accentTheme || userData?.user_metadata?.accentTheme;
                 if (cloudAccent) {
                     store.setAccentTheme(cloudAccent);
                 }
@@ -172,77 +242,84 @@ export const SyncService = {
                 }
                 if (metaSettings.userName) {
                     store.setUserName(metaSettings.userName);
-                } else if (userData?.user?.user_metadata?.full_name) {
-                    store.setUserName(userData.user.user_metadata.full_name);
-                } else if (userData?.user?.user_metadata?.name) {
-                    store.setUserName(userData.user.user_metadata.name);
+                } else if (userData?.user_metadata?.full_name) {
+                    store.setUserName(userData.user_metadata.full_name);
+                } else if (userData?.user_metadata?.name) {
+                    store.setUserName(userData.user_metadata.name);
                 }
             }
         }
 
         // 3. Subir/sincronizar el perfil actual hacia la nube
         const currentStore = useStore.getState();
-        const authEmail = userData?.user?.email || currentStore.session?.user?.email;
+        const authEmail = userData?.email || currentStore.session?.user?.email;
         const isOwner = isWhitelistedPremiumEmail(authEmail);
         const profilePayload: any = {
             id: userId,
             email: authEmail || undefined,
             user_profile: currentStore.userProfile || 'personal',
             default_control_level: currentStore.defaultControlLevel,
-            is_premium: isOwner ? 1 : (remoteProfile?.is_premium ? 1 : (currentStore.isPremium ? 1 : 0)),
-            onboarding_completed: currentStore.onboardingCompleted ? 1 : 0,
+            is_premium: isOwner ? true : (remoteProfile?.is_premium ? true : Boolean(currentStore.isPremium)),
+            onboarding_completed: Boolean(currentStore.onboardingCompleted),
             updated_at: new Date().toISOString(),
         };
 
-        await supabase.from('profiles').upsert(profilePayload, { onConflict: 'id' });
+        await withTimeout(
+            supabase.from('profiles').upsert(profilePayload, { onConflict: 'id' }),
+            6000,
+            'Profiles upsert timeout'
+        ).catch((err) => console.warn('[Sync] Profile upsert warning:', err));
 
-        // Guardar también en user_metadata de Auth (para persistir theme, accentTheme, language, soundSettings, etc.)
-        try {
-            await supabase.auth.updateUser({
-                data: {
-                    full_name: currentStore.userName || undefined,
-                    name: currentStore.userName || undefined,
-                    settings: {
-                        theme: currentStore.theme,
-                        accentTheme: currentStore.accentTheme,
-                        language: currentStore.language,
-                        soundSettings: currentStore.soundSettings,
-                        defaultControlLevel: currentStore.defaultControlLevel,
-                        userName: currentStore.userName,
-                        userProfile: currentStore.userProfile,
-                        homeViewMode: currentStore.homeViewMode,
-                    }
-                }
-            });
-            if (currentStore.userName) {
-                (async () => {
-                    try {
-                        await supabase
-                            .from('collaboration_activity')
-                            .update({ actor_name: currentStore.userName })
-                            .eq('actor_id', userId);
-
-                        const { data: ownedCollabs } = await supabase
-                            .from('collaborations')
-                            .select('target_type, target_id')
-                            .eq('owner_id', userId);
-
-                        if (ownedCollabs && ownedCollabs.length > 0) {
-                            const { CollaborationService } = await import('./collaborationService');
-                            const uniqueTargets = new Map<string, string>();
-                            for (const oc of ownedCollabs) {
-                                if (!uniqueTargets.has(oc.target_id)) {
-                                    uniqueTargets.set(oc.target_id, oc.target_type);
-                                    await CollaborationService.ensureActorIdentity(oc.target_type as any, oc.target_id, 'Elemento compartido', true);
-                                }
+        // 4. Guardar en user_metadata de Auth y actualizar identidades en segundo plano (no bloqueante)
+        (async () => {
+            try {
+                await withTimeout(
+                    supabase.auth.updateUser({
+                        data: {
+                            full_name: currentStore.userName || undefined,
+                            name: currentStore.userName || undefined,
+                            settings: {
+                                theme: currentStore.theme,
+                                accentTheme: currentStore.accentTheme,
+                                language: currentStore.language,
+                                soundSettings: currentStore.soundSettings,
+                                defaultControlLevel: currentStore.defaultControlLevel,
+                                userName: currentStore.userName,
+                                userProfile: currentStore.userProfile,
+                                homeViewMode: currentStore.homeViewMode,
                             }
                         }
-                    } catch {}
-                })();
+                    }),
+                    5000,
+                    'auth.updateUser timeout'
+                );
+
+                if (currentStore.userName) {
+                    await supabase
+                        .from('collaboration_activity')
+                        .update({ actor_name: currentStore.userName })
+                        .eq('actor_id', userId);
+
+                    const { data: ownedCollabs } = await supabase
+                        .from('collaborations')
+                        .select('target_type, target_id')
+                        .eq('owner_id', userId);
+
+                    if (ownedCollabs && ownedCollabs.length > 0) {
+                        const { CollaborationService } = await import('./collaborationService');
+                        const uniqueTargets = new Map<string, string>();
+                        for (const oc of ownedCollabs) {
+                            if (!uniqueTargets.has(oc.target_id)) {
+                                uniqueTargets.set(oc.target_id, oc.target_type);
+                                await CollaborationService.ensureActorIdentity(oc.target_type as any, oc.target_id, 'Elemento compartido', true);
+                            }
+                        }
+                    }
+                }
+            } catch (e) {
+                console.warn('[Sync] Background user metadata / identity update notice:', e);
             }
-        } catch (e) {
-            console.warn('[Sync] Could not update user metadata settings:', e);
-        }
+        })();
     },
 
     // ─── Reminders Sync ─────────────────────────────────────────────
@@ -472,7 +549,7 @@ export const SyncService = {
             retry_count: local.retry_count,
             max_retries: local.max_retries,
             last_modified_ms: local.last_modified_ms,
-            deleted: local.deleted === 1,
+            deleted: (local.deleted === 1 || (local.deleted as any) === true) ? 1 : 0,
             deleted_at_ms: local.deleted_at_ms || null,
             notification_ids: parsedNotificationIds,
             attachments: parsedAttachments,
@@ -565,6 +642,16 @@ export const SyncService = {
 
         for (const [id, local] of localMap) {
             processedIds.add(id);
+
+            // ─── AISLAMIENTO FASE 1 (YJS) ───────────────────────────────────
+            // Las notas en modo 'yjs' son gestionadas exclusivamente por el
+            // subsistema colaborativo. Quedan excluidas de la subida por REST
+            // para evitar sobrescribir PostgreSQL con contenido obsoleto,
+            // y tampoco deben ser sobrescritas por payloads REST remotos.
+            if (local.sync_mode === 'yjs') {
+                continue;
+            }
+
             const localModMs = local.last_modified_ms || local.updated_at_ms;
             const remote = remoteMap.get(id);
 
@@ -619,6 +706,7 @@ export const SyncService = {
             const { id, user_id, created_at, created_at_ms, ...updateFields } = remoteData;
             // No sincronizar is_pinned en notas compartidas: fijar es una preferencia de visualización individual
             delete updateFields.is_pinned;
+            delete (updateFields as any).sync_mode;
             let { error: updateErr } = await supabase
                 .from('notes')
                 .update(updateFields)
@@ -864,7 +952,7 @@ export const SyncService = {
             created_at_ms: createdAtMs,
             updated_at_ms: updatedAtMs,
             last_modified_ms: local.last_modified_ms || updatedAtMs,
-            deleted: local.deleted === 1 ? 1 : 0,
+            deleted: (local.deleted === 1 || (local.deleted as any) === true) ? 1 : 0,
         };
     },
 
@@ -1065,12 +1153,12 @@ export const SyncService = {
             name: local.name,
             icon: local.icon || 'folder',
             color: local.color || '#8B5CF6',
-            is_pinned: local.is_pinned ?? 0,
+            is_pinned: (local.is_pinned === 1 || (local.is_pinned as any) === true) ? 1 : 0,
             created_at: new Date(createdAtMs).toISOString(),
             created_at_ms: createdAtMs,
             updated_at_ms: updatedAtMs,
             last_modified_ms: local.last_modified_ms || updatedAtMs,
-            deleted: local.deleted === 1 ? 1 : 0,
+            deleted: (local.deleted === 1 || (local.deleted as any) === true) ? 1 : 0,
         };
     },
 
@@ -1160,18 +1248,20 @@ export const SyncService = {
             created_at: new Date(createdAtMs).toISOString(),
             created_at_ms: createdAtMs,
             updated_at_ms: updatedAtMs,
-            is_pinned: local.is_pinned === 1,
-            attachments: local.attachments ? JSON.parse(local.attachments) : [],
-            links: local.links ? JSON.parse(local.links) : [],
-            deleted: local.deleted === 1,
+            is_pinned: (local.is_pinned === 1 || (local.is_pinned as any) === true) ? 1 : 0,
+            attachments: local.attachments ? (typeof local.attachments === 'string' ? JSON.parse(local.attachments) : local.attachments) : [],
+            links: local.links ? (typeof local.links === 'string' ? JSON.parse(local.links) : local.links) : [],
+            deleted: (local.deleted === 1 || (local.deleted as any) === true) ? 1 : 0,
             last_modified_ms: local.last_modified_ms || updatedAtMs,
+            // NOTA: sync_mode SE OMITE INTENCIONALMENTE aquí porque public.notes
+            // en Supabase todavía no tiene esa columna en producción en esta fase.
         };
     },
 
     async upsertLocalNote(db: any, remote: any, userId: string): Promise<void> {
         const existing = (await db.getFirstAsync(
-            `SELECT id, created_at_ms, updated_at_ms, is_pinned, is_shared, shared_owner_id FROM notes WHERE id = ?`, [remote.id]
-        )) as (Note & { is_pinned?: number; is_shared?: number; shared_owner_id?: string }) | null;
+            `SELECT id, created_at_ms, updated_at_ms, is_pinned, is_shared, shared_owner_id, content, sync_mode FROM notes WHERE id = ?`, [remote.id]
+        )) as (Note & { is_pinned?: number; is_shared?: number; shared_owner_id?: string; content?: string; sync_mode?: any }) | null;
 
         // Recuperar la fecha original de creación con máxima resiliencia
         let createdAtMs: number;
@@ -1232,13 +1322,21 @@ export const SyncService = {
             ? (existing && existing.is_pinned !== undefined && existing.is_pinned !== null ? existing.is_pinned : 0)
             : (remote.is_pinned ? 1 : 0);
 
+        // ─── AISLAMIENTO FASE 1 (YJS) ───────────────────────────────────
+        // Si la nota local ya existe y es 'yjs', blindamos su contenido HTML/JSON
+        // y su modo para que un payload REST remoto desactualizado nunca la sobrescriba
+        // ni restablezca sync_mode a 'rest'.
+        const isLocalYjs = existing?.sync_mode === 'yjs';
+        const resolvedContent = isLocalYjs ? (existing?.content ?? null) : (remote.content || null);
+        const resolvedSyncMode = isLocalYjs ? 'yjs' : (remote.sync_mode === 'yjs' ? 'yjs' : (existing?.sync_mode || 'rest'));
+
         const params = [
             remote.id,
             remote.user_id || userId,
             remote.folder_id || null,
             remote.event_id || null,
             remote.title || null,
-            remote.content || null,
+            resolvedContent,
             createdAtMs,
             updatedAtMs,
             resolvedIsPinned,
@@ -1248,16 +1346,17 @@ export const SyncService = {
             lastModifiedMs,
             isShared,
             sharedOwnerId,
+            resolvedSyncMode,
         ];
 
         if (existing) {
             await db.runAsync(
-                `UPDATE notes SET user_id=?, folder_id=?, event_id=?, title=?, content=?, created_at_ms=?, updated_at_ms=?, is_pinned=?, attachments=?, links=?, deleted=?, last_modified_ms=?, is_shared=?, shared_owner_id=? WHERE id=?`,
+                `UPDATE notes SET user_id=?, folder_id=?, event_id=?, title=?, content=?, created_at_ms=?, updated_at_ms=?, is_pinned=?, attachments=?, links=?, deleted=?, last_modified_ms=?, is_shared=?, shared_owner_id=?, sync_mode=? WHERE id=?`,
                 [...params.slice(1), remote.id]
             );
         } else {
             await db.runAsync(
-                `INSERT INTO notes (id, user_id, folder_id, event_id, title, content, created_at_ms, updated_at_ms, is_pinned, attachments, links, deleted, last_modified_ms, is_shared, shared_owner_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                `INSERT INTO notes (id, user_id, folder_id, event_id, title, content, created_at_ms, updated_at_ms, is_pinned, attachments, links, deleted, last_modified_ms, is_shared, shared_owner_id, sync_mode) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                 params
             );
         }
@@ -1404,28 +1503,33 @@ export const SyncService = {
         }
 
         // 3. Descargar archivos remotos que faltan localmente
-        const allWithRemotePaths = await db.getAllAsync<{ id: string; attachments: string }>(
-            `SELECT id, attachments FROM reminders WHERE attachments LIKE '%remotePath%' AND user_id = ?
+        const allWithRemotePaths = await db.getAllAsync<{ id: string; attachments: string; item_type: 'reminder' | 'note' }>(
+            `SELECT id, attachments, 'reminder' as item_type FROM reminders WHERE attachments LIKE '%remotePath%' AND user_id = ?
              UNION ALL
-             SELECT id, attachments FROM notes WHERE attachments LIKE '%remotePath%' AND (user_id = ? OR user_id IS NULL)`,
+             SELECT id, attachments, 'note' as item_type FROM notes WHERE attachments LIKE '%remotePath%' AND (user_id = ? OR user_id IS NULL)`,
             [userId, userId]
         );
 
-        for (const row of allWithRemotePaths) {
+        // Procesar un máximo de 5 filas por ciclo para no saturar la red ni la sincronización
+        const rowsToProcess = allWithRemotePaths.slice(0, 5);
+
+        for (const row of rowsToProcess) {
             try {
                 const atts = JSON.parse(row.attachments);
                 const downloaded = await StorageService.downloadAttachments(atts);
                 const downloadedJson = JSON.stringify(downloaded);
                 if (downloadedJson !== row.attachments) {
-                    // Determinar si es reminder o note
-                    await db.runAsync(
-                        `UPDATE reminders SET attachments = ? WHERE id = ?`,
-                        [downloadedJson, row.id]
-                    );
-                    await db.runAsync(
-                        `UPDATE notes SET attachments = ? WHERE id = ?`,
-                        [downloadedJson, row.id]
-                    );
+                    if (row.item_type === 'reminder') {
+                        await db.runAsync(
+                            `UPDATE reminders SET attachments = ? WHERE id = ?`,
+                            [downloadedJson, row.id]
+                        );
+                    } else {
+                        await db.runAsync(
+                            `UPDATE notes SET attachments = ? WHERE id = ?`,
+                            [downloadedJson, row.id]
+                        );
+                    }
                 }
             } catch (e) {
                 console.warn(`[Sync] Error downloading attachments for ${row.id}:`, e);

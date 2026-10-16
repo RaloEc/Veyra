@@ -435,7 +435,8 @@ export const CollaborationService = {
                 return;
             }
 
-            const tempChannel = supabase.channel(channelName);
+            const isPrivateTopic = channelName.startsWith('note_live_') || channelName.startsWith('note_yjs_');
+            const tempChannel = supabase.channel(channelName, isPrivateTopic ? { config: { private: true } } : undefined);
             await new Promise<void>((resolve) => {
                 const timer = setTimeout(() => {
                     supabase.removeChannel(tempChannel).catch(() => {});
@@ -487,7 +488,7 @@ export const CollaborationService = {
         }
 
         if (collab) {
-            await CollaborationService.broadcastToChannel(`note_live_${collab.target_id}`, 'LIVE_NOTE_CHANGE', {
+            await CollaborationService.broadcastToChannel(`note_live_edit_${collab.target_id}`, 'LIVE_NOTE_CHANGE', {
                 changeType: 'PERMISSIONS_UPDATE',
                 targetId: collab.target_id,
                 collaborationId,
@@ -629,7 +630,7 @@ export const CollaborationService = {
 
         // 5. Notificar en tiempo real por WebSockets a los dispositivos conectados
         if (targetId) {
-            await CollaborationService.broadcastToChannel(`note_live_${targetId}`, 'LIVE_NOTE_CHANGE', {
+            await CollaborationService.broadcastToChannel(`note_live_edit_${targetId}`, 'LIVE_NOTE_CHANGE', {
                 changeType: 'PERMISSIONS_UPDATE',
                 targetId,
                 collaborationId: resolvedCollabId,
@@ -909,7 +910,7 @@ export const CollaborationService = {
                 .eq('owner_id', user.id);
 
             // Notificar en tiempo real a los teléfonos conectados sobre el cambio de visibilidad
-            await CollaborationService.broadcastToChannel(`note_live_${targetId}`, 'LIVE_NOTE_CHANGE', {
+            await CollaborationService.broadcastToChannel(`note_live_edit_${targetId}`, 'LIVE_NOTE_CHANGE', {
                 changeType: 'PERMISSIONS_UPDATE',
                 targetId,
                 isPublicMembers: isPublic,
@@ -973,7 +974,7 @@ export const CollaborationService = {
             }
 
             // 5. Notificar al canal en vivo general del recurso
-            await CollaborationService.broadcastToChannel(`note_live_${targetId}`, 'LIVE_NOTE_CHANGE', {
+            await CollaborationService.broadcastToChannel(`note_live_edit_${targetId}`, 'LIVE_NOTE_CHANGE', {
                 changeType: 'PERMISSIONS_UPDATE',
                 targetId,
                 role,

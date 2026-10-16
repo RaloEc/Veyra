@@ -99,7 +99,10 @@ export interface Note {
     is_revoked?: number; // 0 | 1 (1 si el propietario revocó el acceso)
     collab_role?: string; // 'editor' | 'viewer' para notas colaborativas
     font_family?: string; // ID de tipografía base ('sans' | 'serif' | 'mono' | 'script' | 'rounded')
+    sync_mode?: NoteSyncMode; // 'rest' (por defecto) | 'yjs' (colaborativa)
 }
+
+export type NoteSyncMode = 'rest' | 'yjs';
 
 export interface CalendarEvent {
     id: string; // UUID

@@ -1,0 +1,15 @@
+diff --git a/node_modules/expo/android/build.gradle b/node_modules/expo/android/build.gradle
+index e07b4f0..435903b 100644
+--- a/node_modules/expo/android/build.gradle
++++ b/node_modules/expo/android/build.gradle
+@@ -40,6 +40,10 @@ android {
+       setRoot 'src/release'
+     }
+   }
++
++  publishing {
++    singleVariant("release")
++  }
+ }
+ 
+ dependencies { dependencyHandler ->

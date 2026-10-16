@@ -79,7 +79,25 @@ CREATE INDEX IF NOT EXISTS idx_share_invitations_code ON public.share_invitation
 CREATE INDEX IF NOT EXISTS idx_share_invitations_target ON public.share_invitations(target_type, target_id);
 
 
--- 2.1 FUNCIÓN AUXILIAR DE SEGURIDAD (Evita recursión infinita en políticas RLS)
+-- 2.1 TABLA: collaborations (Membresías activas de colaboración)
+CREATE TABLE IF NOT EXISTS public.collaborations (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    target_type TEXT NOT NULL CHECK (target_type IN ('folder', 'reminder', 'note', 'event')),
+    target_id TEXT NOT NULL,
+    owner_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    member_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    role TEXT NOT NULL DEFAULT 'editor' CHECK (role IN ('viewer', 'editor')),
+    is_public_members BOOLEAN DEFAULT true,
+    joined_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(target_type, target_id, member_id)
+);
+
+ALTER TABLE public.collaborations ADD COLUMN IF NOT EXISTS is_public_members BOOLEAN DEFAULT true;
+
+ALTER TABLE public.collaborations ENABLE ROW LEVEL SECURITY;
+
+
+-- 2.2 FUNCIÓN AUXILIAR DE SEGURIDAD (Evita recursión infinita en políticas RLS)
 CREATE OR REPLACE FUNCTION public.is_target_collaborator(
     p_target_type text,
     p_target_id text,
@@ -100,24 +118,6 @@ AS $$
 $$;
 
 GRANT EXECUTE ON FUNCTION public.is_target_collaborator(text, text, text) TO authenticated;
-
-
--- 3. TABLA: collaborations (Membresías activas de colaboración)
-CREATE TABLE IF NOT EXISTS public.collaborations (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    target_type TEXT NOT NULL CHECK (target_type IN ('folder', 'reminder', 'note', 'event')),
-    target_id TEXT NOT NULL,
-    owner_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
-    member_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
-    role TEXT NOT NULL DEFAULT 'editor' CHECK (role IN ('viewer', 'editor')),
-    is_public_members BOOLEAN DEFAULT true,
-    joined_at TIMESTAMPTZ DEFAULT NOW(),
-    UNIQUE(target_type, target_id, member_id)
-);
-
-ALTER TABLE public.collaborations ADD COLUMN IF NOT EXISTS is_public_members BOOLEAN DEFAULT true;
-
-ALTER TABLE public.collaborations ENABLE ROW LEVEL SECURITY;
 
 DO $$ BEGIN
     DROP POLICY IF EXISTS "Members and owners can view collaborations" ON public.collaborations;

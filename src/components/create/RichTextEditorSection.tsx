@@ -1744,6 +1744,21 @@ export function RichTextEditorSection({
                     return nodes;
                 }
 
+                // Helper para transformar rectángulos de cliente a coordenadas relativas al contenedor de cursores
+                function getCoordsRelativeToContainer(r, container) {
+                    if (!container) {
+                        container = document.getElementById('veyra-remote-cursors');
+                    }
+                    var cRect = container ? container.getBoundingClientRect() : null;
+                    var cTop = cRect ? cRect.top : -window.pageYOffset;
+                    var cLeft = cRect ? cRect.left : -window.pageXOffset;
+                    return {
+                        top: Math.round(r.top - cTop),
+                        left: Math.round(r.left - cLeft),
+                        height: Math.round(r.height || 22)
+                    };
+                }
+
                 function getCoordsFromRange(range) {
                     if (!range) return null;
                     try {
@@ -1760,11 +1775,7 @@ export function RichTextEditorSection({
                                     var rects = dummyRange.getClientRects();
                                     var r = (rects && rects.length > 0) ? rects[0] : dummyRange.getBoundingClientRect();
                                     if (r && r.height > 0) {
-                                        return {
-                                            top: Math.round(r.top + window.pageYOffset),
-                                            left: Math.round(r.left + window.pageXOffset),
-                                            height: Math.round(r.height || 22)
-                                        };
+                                        return getCoordsRelativeToContainer(r);
                                     }
                                 } else if (offset > 0) {
                                     dummyRange.setStart(textNode, offset - 1);
@@ -1772,11 +1783,12 @@ export function RichTextEditorSection({
                                     var rects = dummyRange.getClientRects();
                                     var r = (rects && rects.length > 0) ? rects[0] : dummyRange.getBoundingClientRect();
                                     if (r && r.height > 0) {
-                                        return {
-                                            top: Math.round(r.top + window.pageYOffset),
-                                            left: Math.round(r.right + window.pageXOffset),
-                                            height: Math.round(r.height || 22)
-                                        };
+                                        var c = getCoordsRelativeToContainer(r);
+                                        var container = document.getElementById('veyra-remote-cursors');
+                                        var cRect = container ? container.getBoundingClientRect() : null;
+                                        var cLeft = cRect ? cRect.left : -window.pageXOffset;
+                                        c.left = Math.round(r.right - cLeft);
+                                        return c;
                                     }
                                 }
                             }
@@ -1785,12 +1797,7 @@ export function RichTextEditorSection({
                         // 2. Rectángulos de cliente estándar (si el browser los soporta en collapsed range)
                         var rects = range.getClientRects();
                         if (rects && rects.length > 0 && rects[0].height > 0) {
-                            var r = rects[0];
-                            return {
-                                top: Math.round(r.top + window.pageYOffset),
-                                left: Math.round(r.left + window.pageXOffset),
-                                height: Math.round(r.height || 22)
-                            };
+                            return getCoordsRelativeToContainer(rects[0]);
                         }
 
                         // 3. Medición universal con marcador temporal no destructivo para líneas vacías, <br> o saltos de línea
@@ -1803,11 +1810,8 @@ export function RichTextEditorSection({
                         var mRect = marker.getBoundingClientRect();
                         var markerRes = null;
                         if (mRect && (mRect.top > 0 || mRect.height > 0)) {
-                            markerRes = {
-                                top: Math.round(mRect.top + window.pageYOffset),
-                                left: Math.round(mRect.left + window.pageXOffset),
-                                height: Math.round(Math.max(18, Math.min(mRect.height || 22, 32)))
-                            };
+                            markerRes = getCoordsRelativeToContainer(mRect);
+                            markerRes.height = Math.round(Math.max(18, Math.min(mRect.height || 22, 32)));
                         }
                         if (marker.parentNode) {
                             var markerParent = marker.parentNode;
@@ -1819,11 +1823,7 @@ export function RichTextEditorSection({
                         // 4. BoundingClientRect directo
                         var bRect = range.getBoundingClientRect();
                         if (bRect && (bRect.height > 0 || bRect.width > 0)) {
-                            return {
-                                top: Math.round(bRect.top + window.pageYOffset),
-                                left: Math.round(bRect.left + window.pageXOffset),
-                                height: Math.round(bRect.height || 22)
-                            };
+                            return getCoordsRelativeToContainer(bRect);
                         }
 
                         // 5. Fallback con elemento contenedor más cercano
@@ -1834,11 +1834,10 @@ export function RichTextEditorSection({
                         if (elem && elem !== document.body) {
                             var eRect = elem.getBoundingClientRect();
                             if (eRect && (eRect.height > 0 || eRect.top > 0)) {
-                                return {
-                                    top: Math.round(eRect.top + window.pageYOffset),
-                                    left: Math.round(eRect.left + 8 + window.pageXOffset),
-                                    height: Math.round(Math.min(eRect.height || 22, 28))
-                                };
+                                var c = getCoordsRelativeToContainer(eRect);
+                                c.left += 8;
+                                c.height = Math.round(Math.min(eRect.height || 22, 28));
+                                return c;
                             }
                         }
                     } catch(e) {}
@@ -1909,15 +1908,22 @@ export function RichTextEditorSection({
 
                         var textNodes = findTextNodes(targetBlock);
                         if (textNodes.length === 0) {
-                            var blockRect = targetBlock.getBoundingClientRect();
-                            if (blockRect && (blockRect.top > 0 || blockRect.left > 0)) {
-                                return {
-                                    top: Math.round(blockRect.top + window.pageYOffset),
-                                    left: Math.round(blockRect.left + window.pageXOffset),
-                                    height: Math.round(Math.min(blockRect.height || 22, 28))
-                                };
+                            // Medición no destructiva con marcador temporal para bloques vacíos o <br>
+                            var marker = document.createElement('span');
+                            marker.textContent = '\uFEFF';
+                            marker.style.cssText = 'display:inline-block;width:1px;height:1em;padding:0;margin:0;border:0;line-height:inherit;font-size:inherit;';
+                            targetBlock.appendChild(marker);
+                            var mRect = marker.getBoundingClientRect();
+                            var res = null;
+                            if (mRect && (mRect.height > 0 || mRect.top > 0)) {
+                                var c = getCoordsRelativeToContainer(mRect);
+                                c.height = Math.round(Math.max(18, Math.min(mRect.height || 22, 32)));
+                                res = c;
                             }
-                            return null;
+                            if (marker.parentNode) {
+                                marker.parentNode.removeChild(marker);
+                            }
+                            return res;
                         }
 
                         var cur = 0;
@@ -1951,11 +1957,7 @@ export function RichTextEditorSection({
                                 var rects = r.getClientRects();
                                 var rect = (rects && rects.length > 0) ? rects[0] : r.getBoundingClientRect();
                                 if (rect && rect.height > 0) {
-                                    return {
-                                        top: Math.round(rect.top + window.pageYOffset),
-                                        left: Math.round(rect.left + window.pageXOffset),
-                                        height: Math.round(rect.height || 22)
-                                    };
+                                    return getCoordsRelativeToContainer(rect);
                                 }
                             } else if (clamped > 0) {
                                 r.setStart(targetNode, clamped - 1);
@@ -1963,11 +1965,12 @@ export function RichTextEditorSection({
                                 var rects = r.getClientRects();
                                 var rect = (rects && rects.length > 0) ? rects[0] : r.getBoundingClientRect();
                                 if (rect && rect.height > 0) {
-                                    return {
-                                        top: Math.round(rect.top + window.pageYOffset),
-                                        left: Math.round(rect.right + window.pageXOffset),
-                                        height: Math.round(rect.height || 22)
-                                    };
+                                    var c = getCoordsRelativeToContainer(rect);
+                                    var container = document.getElementById('veyra-remote-cursors');
+                                    var cRect = container ? container.getBoundingClientRect() : null;
+                                    var cLeft = cRect ? cRect.left : -window.pageXOffset;
+                                    c.left = Math.round(rect.right - cLeft);
+                                    return c;
                                 }
                             }
 
@@ -2000,7 +2003,6 @@ export function RichTextEditorSection({
                             cur += len;
                         }
 
-                        // Si el offset global está más allá de todo el texto disponible en este cliente, no clampear a la primera línea
                         if (!targetNode) return null;
 
                         var nodeLen = targetNode.nodeValue ? targetNode.nodeValue.length : 0;
@@ -2013,11 +2015,7 @@ export function RichTextEditorSection({
                             var rects = r.getClientRects();
                             var rect = (rects && rects.length > 0) ? rects[0] : r.getBoundingClientRect();
                             if (rect && rect.height > 0) {
-                                return {
-                                    top: Math.round(rect.top + window.pageYOffset),
-                                    left: Math.round(rect.left + window.pageXOffset),
-                                    height: Math.round(rect.height || 22)
-                                };
+                                return getCoordsRelativeToContainer(rect);
                             }
                         } else if (clamped > 0) {
                             r.setStart(targetNode, clamped - 1);
@@ -2025,11 +2023,12 @@ export function RichTextEditorSection({
                             var rects = r.getClientRects();
                             var rect = (rects && rects.length > 0) ? rects[0] : r.getBoundingClientRect();
                             if (rect && rect.height > 0) {
-                                return {
-                                    top: Math.round(rect.top + window.pageYOffset),
-                                    left: Math.round(rect.right + window.pageXOffset),
-                                    height: Math.round(rect.height || 22)
-                                };
+                                var c = getCoordsRelativeToContainer(rect);
+                                var container = document.getElementById('veyra-remote-cursors');
+                                var cRect = container ? container.getBoundingClientRect() : null;
+                                var cLeft = cRect ? cRect.left : -window.pageXOffset;
+                                c.left = Math.round(rect.right - cLeft);
+                                return c;
                             }
                         }
 
@@ -2052,16 +2051,16 @@ export function RichTextEditorSection({
                     var el = (node && node.nodeType === 1) ? node : (node ? node.parentElement : null);
                     if (el && el !== document.body) {
                         var elRect = el.getBoundingClientRect();
-                        return {
-                            top: Math.round(elRect.top + window.pageYOffset),
-                            left: Math.round(elRect.left + window.pageXOffset),
-                            height: Math.round(Math.min(elRect.height || 22, 28))
-                        };
+                        var c = getCoordsRelativeToContainer(elRect);
+                        c.height = Math.round(Math.min(elRect.height || 22, 28));
+                        return c;
                     }
                     return null;
                 }
 
-                // 4. Renderizado adaptativo de cursores remotos (prioridad directa a coordenadas transmitidas por el emisor)
+                // 4. Renderizado adaptativo de cursores remotos
+                // Prioridad 1 (Principal): Resolución semántica local en el DOM (invariante a tamaño de pantalla, DPI y saltos de línea)
+                // Prioridad 2 (Fallback): Coordenadas transmitidas por el emisor (solo si la estructura DOM local aún no contiene el bloque)
                 function renderRemoteCursor(data) {
                     try {
                         if (!data || !data.clientId || !data.cursor) return;
@@ -2087,12 +2086,6 @@ export function RichTextEditorSection({
                         var col = data.color || '#8B5CF6';
                         cursorEl.style.backgroundColor = col;
 
-                        // Las coordenadas transmitidas por el emisor son la fuente de verdad directa del cursor.
-                        // Solo usar resolución semántica local si el emisor no transmitió top > 0 o para afinar la columna si está en la misma línea.
-                        var sentTop = (typeof data.cursor.top === 'number' && data.cursor.top > 0) ? data.cursor.top : null;
-                        var sentLeft = (typeof data.cursor.left === 'number') ? data.cursor.left : null;
-                        var sentHeight = (typeof data.cursor.height === 'number' && data.cursor.height > 0) ? data.cursor.height : 22;
-
                         var localCoords = null;
                         if (typeof data.cursor.blockIndex === 'number' && typeof data.cursor.charOffset === 'number') {
                             localCoords = getCoordsFromBlock(data.cursor.blockIndex, data.cursor.charOffset);
@@ -2101,19 +2094,32 @@ export function RichTextEditorSection({
                             localCoords = getCoordsFromGlobalOffset(data.cursor.globalCharOffset);
                         }
 
-                        var finalTop = sentTop !== null ? sentTop : (localCoords ? localCoords.top : 0);
-                        var finalLeft = sentLeft !== null ? sentLeft : (localCoords ? localCoords.left : 0);
-                        var finalHeight = sentHeight;
+                        var sentTop = (typeof data.cursor.top === 'number' && data.cursor.top > 0) ? data.cursor.top : null;
+                        var sentLeft = (typeof data.cursor.left === 'number') ? data.cursor.left : null;
+                        var sentHeight = (typeof data.cursor.height === 'number' && data.cursor.height > 0) ? data.cursor.height : 22;
 
-                        // Si la resolución local confirma exactamente la misma línea vertical, afinar posición horizontal
-                        if (localCoords && sentTop !== null && Math.abs(localCoords.top - sentTop) <= 15) {
-                            finalLeft = localCoords.left;
-                        }
+                        // La resolución semántica local es la FUENTE DE VERDAD.
+                        // Solo recurrir a sentTop/sentLeft si localCoords no pudo resolverse en el DOM local.
+                        var finalTop = localCoords ? localCoords.top : (sentTop !== null ? sentTop : 0);
+                        var finalLeft = localCoords ? localCoords.left : (sentLeft !== null ? sentLeft : 0);
+                        var finalHeight = localCoords ? (localCoords.height || 22) : sentHeight;
 
                         cursorEl.style.height = finalHeight + 'px';
                         cursorEl.style.top = finalTop + 'px';
                         cursorEl.style.left = finalLeft + 'px';
                         cursorEl.style.opacity = '1';
+
+                        try {
+                            console.log('[VeyraCursor:Render]', {
+                                clientId: data.clientId,
+                                blockIndex: data.cursor.blockIndex,
+                                charOffset: data.cursor.charOffset,
+                                usedLocalCoords: Boolean(localCoords),
+                                finalTop: finalTop,
+                                finalLeft: finalLeft,
+                                finalHeight: finalHeight
+                            });
+                        } catch(logErr) {}
 
                         var flagEl = cursorEl.querySelector('.veyra-cursor-flag');
                         if (flagEl) {
@@ -2254,6 +2260,17 @@ export function RichTextEditorSection({
                         }
                         lastSentCursor = payload;
 
+                        try {
+                            console.log('[VeyraCursor:Emit]', {
+                                blockIndex: payload.blockIndex,
+                                charOffset: payload.charOffset,
+                                globalOffset: payload.globalCharOffset,
+                                top: payload.top,
+                                left: payload.left,
+                                height: payload.height
+                            });
+                        } catch(logErr) {}
+
                         if (window.ReactNativeWebView && typeof window.ReactNativeWebView.postMessage === 'function') {
                             window.ReactNativeWebView.postMessage(JSON.stringify({
                                 type: 'CURSOR_ACTIVITY',
@@ -2283,6 +2300,8 @@ export function RichTextEditorSection({
                         refreshAllRemoteCursors();
                     }, true);
                     window.addEventListener('resize', refreshAllRemoteCursors, { passive: true });
+                    window.addEventListener('scroll', refreshAllRemoteCursors, { passive: true });
+                    window.addEventListener('orientationchange', refreshAllRemoteCursors, { passive: true });
                     editor.addEventListener('focus', onSelectionChange, true);
                     editor.addEventListener('blur', function() {
                         lastSentCursor = null;

@@ -7,7 +7,11 @@
     "android": "expo run:android",
     "ios": "expo run:ios",
     "web": "expo start --web",
-    "postinstall": "patch-package"
+    "postinstall": "patch-package",
+    "test:poc-yjs": "node src/poc-yjs/test-remote-persistence.js",
+    "test:poc-yjs:unit": "node src/poc-yjs/test-remote-persistence.js --unit",
+    "test:poc-yjs:real": "node src/poc-yjs/test-remote-persistence.js --real",
+    "test:phase1": "node src/poc-yjs/test-phase1-sqlite-sync-isolation.js"
   },
   "dependencies": {
     "@expo/metro-runtime": "~57.0.15",

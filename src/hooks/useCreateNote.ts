@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNotesStore } from '../store/useNotesStore';
 import { useRouter } from 'expo-router';
-import { Alert, StatusBar, Platform } from 'react-native';
+import { Alert, StatusBar, Platform, AppState, AppStateStatus } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -16,6 +16,7 @@ import { supabase } from '../lib/supabase';
 import { RealtimeChannel } from '@supabase/supabase-js';
 import { getCollabColor, CollaborationService } from '../services/collaborationService';
 import { CollabRole } from '../types/db';
+import { getCollabContentHash, logCollabEvent, normalizeToEpochMs } from '../utils/collabLogger';
 
 export interface UseCreateNoteOptions {
     isEditMode?: boolean;
@@ -64,7 +65,10 @@ export function useCreateNote(
     const localClientIdRef = useRef<string>(
         `client_${Math.random().toString(36).substring(2, 9)}_${Date.now()}`
     );
-    const liveChannelRef = useRef<RealtimeChannel | null>(null);
+    const liveEditChannelRef = useRef<RealtimeChannel | null>(null);
+    const liveCursorChannelRef = useRef<RealtimeChannel | null>(null);
+    const [liveSyncError, setLiveSyncError] = useState<string | null>(null);
+    const [createdNoteId, setCreatedNoteId] = useState<string | null>(null);
     const isApplyingRemoteBroadcastRef = useRef(false);
     const lastRemoteBroadcastReceivedRef = useRef<{ [pageIndex: number]: string }>({});
     const lastRemoteBroadcastTimeRef = useRef<{ [pageIndex: number]: number }>({});
@@ -104,45 +108,56 @@ export function useCreateNote(
         userPermissionRef.current = userPermission;
     }, [userPermission]);
 
-    // Carga y sincronización en tiempo real de permisos sobre esta nota
-    useEffect(() => {
-        const activeId = id && id !== 'create' ? id : noteIdRef.current;
+    // Función segura para refrescar y validar permisos reales contra PostgreSQL/SQLite
+    const refreshPerms = useCallback(() => {
+        const activeId = id && id !== 'create' ? id : (noteIdRef.current || createdNoteId);
         if (!activeId) return;
 
-        const refreshPerms = () => {
-            CollaborationService.getUserPermission('note', activeId)
-                .then(perm => {
-                    const isKnownOtherOwner = Boolean(
-                        (cachedNote?.shared_owner_id && cachedNote.shared_owner_id !== session?.user?.id) ||
-                        (cachedNote?.user_id && session?.user?.id && cachedNote.user_id !== session?.user?.id && cachedNote.user_id !== 'local_user' && cachedNote.shared_owner_id)
-                    );
-                    const safeIsOwner = isOwnerCached ? true : (isKnownOtherOwner ? false : perm.isOwner);
-                    const safeRole: CollabRole = safeIsOwner ? 'editor' : perm.role;
-                    const safeIsRevoked = safeIsOwner ? false : perm.isRevoked;
-                    const safeHasAccess = safeIsOwner ? true : perm.hasAccess;
-                    const safeCanEdit = safeIsOwner ? true : (safeRole === 'editor' && !safeIsRevoked && safeHasAccess);
+        CollaborationService.getUserPermission('note', activeId)
+            .then(perm => {
+                const currentUserId = useStore.getState().session?.user?.id;
+                const latestNote = useNotesStore.getState().notes.find(n => n.id === activeId);
+                const isKnownOtherOwner = Boolean(
+                    (latestNote?.shared_owner_id && latestNote.shared_owner_id !== currentUserId) ||
+                    (latestNote?.user_id && currentUserId && latestNote.user_id !== currentUserId && latestNote.user_id !== 'local_user' && latestNote.shared_owner_id)
+                );
+                const safeIsOwner = isOwnerCached ? true : (isKnownOtherOwner ? false : perm.isOwner);
+                const safeRole: CollabRole = safeIsOwner ? 'editor' : perm.role;
+                const safeIsRevoked = safeIsOwner ? false : perm.isRevoked;
+                const safeHasAccess = safeIsOwner ? true : perm.hasAccess;
+                const safeCanEdit = safeIsOwner ? true : (safeRole === 'editor' && !safeIsRevoked && safeHasAccess);
 
-                    const resolvedPerm = {
-                        ...perm,
-                        isOwner: safeIsOwner,
-                        role: safeRole,
-                        canEdit: safeCanEdit,
-                        isRevoked: safeIsRevoked,
-                        hasAccess: safeHasAccess,
-                    };
+                const resolvedPerm = {
+                    ...perm,
+                    isOwner: safeIsOwner,
+                    role: safeRole,
+                    canEdit: safeCanEdit,
+                    isRevoked: safeIsRevoked,
+                    hasAccess: safeHasAccess,
+                };
 
-                    setUserPermission(resolvedPerm);
-                    userPermissionRef.current = resolvedPerm;
-                    if (safeIsOwner && cachedNote?.is_revoked === 1) {
-                        useNotesStore.getState().markNoteRevoked(activeId, false).catch(() => {});
-                    } else if (resolvedPerm.isRevoked || !resolvedPerm.hasAccess) {
-                        useNotesStore.getState().markNoteRevoked(activeId, true).catch(() => {});
-                    } else if (resolvedPerm.role) {
-                        useNotesStore.getState().setNoteRole(activeId, resolvedPerm.role).catch(() => {});
-                    }
-                })
-                .catch(() => {});
-        };
+                setUserPermission(resolvedPerm);
+                userPermissionRef.current = resolvedPerm;
+                if (safeIsOwner && latestNote?.is_revoked === 1) {
+                    useNotesStore.getState().markNoteRevoked(activeId, false).catch(() => {});
+                } else if (resolvedPerm.isRevoked || !resolvedPerm.hasAccess) {
+                    useNotesStore.getState().markNoteRevoked(activeId, true).catch(() => {});
+                } else if (resolvedPerm.role) {
+                    useNotesStore.getState().setNoteRole(activeId, resolvedPerm.role).catch(() => {});
+                }
+            })
+            .catch(() => {});
+    }, [id, createdNoteId, isOwnerCached]);
+
+    const refreshPermsRef = useRef(refreshPerms);
+    useEffect(() => {
+        refreshPermsRef.current = refreshPerms;
+    }, [refreshPerms]);
+
+    // Carga y sincronización en tiempo real de permisos sobre esta nota
+    useEffect(() => {
+        const activeId = id && id !== 'create' ? id : (noteIdRef.current || createdNoteId);
+        if (!activeId) return;
 
         refreshPerms();
 
@@ -182,7 +197,7 @@ export function useCreateNote(
         return () => {
             supabase.removeChannel(channel).catch(() => {});
         };
-    }, [id]);
+    }, [id, createdNoteId, cachedNote?.folder_id, refreshPerms]);
 
     const initialParsed = parseNotePages(cachedNote?.content);
 
@@ -199,6 +214,8 @@ export function useCreateNote(
 
     // Callback para aplicar un snapshot restaurado desde el historial
     const onApplySnapshot = useCallback((snapshot: NoteHistorySnapshot) => {
+        isLocallyInteractedRef.current = true;
+        lastLocalEditTimeRef.current = Date.now();
         setTitle(snapshot.title);
         setPages(snapshot.pages);
         setCurrentPageIndex(snapshot.currentPageIndex);
@@ -249,16 +266,22 @@ export function useCreateNote(
         currentValuesRef.current = { title, pages, currentPageIndex, scrollLayout, attachments, isPinned, folderId, eventId, fontFamily };
     }, [title, pages, currentPageIndex, scrollLayout, attachments, isPinned, folderId, eventId, fontFamily]);
 
+    const initialSerialized = serializeNotePages(initialParsed.pages, initialParsed.layout);
     // Rastrear la última versión guardada para evitar escrituras redundantes
     const lastSavedValuesRef = useRef({
         title: cachedNote?.title || initialTitleParam || '',
-        serializedContent: cachedNote?.content || '',
+        serializedContent: cachedNote?.content ? cachedNote.content : initialSerialized,
         attachments: cachedNote?.attachments || '[]',
         isPinned: cachedNote?.is_pinned === 1,
         folderId: cachedNote?.folder_id || initialFolderId || null,
         eventId: cachedNote?.event_id || initialEventId || null,
         fontFamily: cachedNote?.font_family || 'sans',
     });
+
+    // Control de marcas de tiempo e interacción para inmunidad contra carreras y sobreescritura obsoleta
+    const lastLocalEditTimeRef = useRef<number>(0);
+    const lastLocalSaveTimeRef = useRef<number>(0);
+    const isLocallyInteractedRef = useRef<boolean>(false);
 
     // Mutex para evitar guardados concurrentes
     const isSavingRef = useRef(false);
@@ -340,19 +363,78 @@ export function useCreateNote(
             return;
         }
 
-        // Si estamos en modo edición, verificar si el usuario local tiene cambios no guardados (sucios)
+        const rawNoteTime = (
+            (note as any).last_modified_ms ||
+            (note as any).updated_at_ms ||
+            (note as any).updated_at ||
+            (note as any).created_at_ms ||
+            (note as any).created_at
+        );
+        const noteModTime = normalizeToEpochMs(rawNoteTime);
+        const lastLocalEditTime = normalizeToEpochMs(lastLocalEditTimeRef.current);
+        const lastLocalSaveTime = normalizeToEpochMs(lastLocalSaveTimeRef.current);
+
         const currentVals = currentValuesRef.current;
         const currentSerialized = serializeNotePages(currentVals.pages, currentVals.scrollLayout);
-        const isLocallyDirty = (
-            currentVals.title !== lastSaved.title ||
-            currentSerialized !== lastSaved.serializedContent ||
-            currentVals.fontFamily !== lastSaved.fontFamily
-        );
+        const hasLocalContent = currentVals.pages.some(p => Boolean(p.content.replace(/<[^>]+>/g, '').trim()) || p.content.includes('<img') || p.content.includes('<input') || p.content.includes('x-todo'));
 
-        // Si el usuario local está activamente escribiendo y tiene cambios pendientes, no sobreescribir su tipeo
-        if (isEditModeRef.current && isLocallyDirty) {
+        // REGLA DE PROTECCIÓN 1: Si la nota del store proviene de un timestamp anterior a nuestra última edición local
+        if (noteModTime > 0 && lastLocalEditTime > 0 && noteModTime < lastLocalEditTime) {
+            logCollabEvent('STORE_UPDATE', {
+                noteId: id,
+                origin: 'sqlite_load',
+                action: 'reject_stale_timestamp',
+                length: noteContent.length,
+                hash: getCollabContentHash(noteContent),
+                extra: { noteModTime, lastLocalEditTime },
+            });
             return;
         }
+
+        // REGLA DE PROTECCIÓN 2: Si el usuario local está en modo edición activa, un reload de base de datos nunca debe destruir su DOM con setContentHTML
+        if (isEditModeRef.current) {
+            logCollabEvent('STORE_UPDATE', {
+                noteId: id,
+                origin: 'sqlite_load',
+                action: 'reject_active_edit_mode',
+                length: noteContent.length,
+                hash: getCollabContentHash(noteContent),
+            });
+            return;
+        }
+
+        // REGLA DE PROTECCIÓN 3: Si localmente tenemos contenido y el payload del store está vacío, proteger contra vaciado accidental
+        if (hasLocalContent && !noteContent.trim()) {
+            logCollabEvent('STORE_UPDATE', {
+                noteId: id,
+                origin: 'sqlite_load',
+                action: 'reject_empty_payload',
+                length: 0,
+                hash: 'empty',
+            });
+            return;
+        }
+
+        // REGLA DE PROTECCIÓN 4: Si el timestamp de la nota coincide o es anterior a nuestro último autoguardado, es un eco de nuestro propio guardado
+        if (noteModTime > 0 && lastLocalSaveTime > 0 && noteModTime <= lastLocalSaveTime) {
+            logCollabEvent('STORE_UPDATE', {
+                noteId: id,
+                origin: 'sqlite_load',
+                action: 'ignore_own_echo',
+                length: noteContent.length,
+                hash: getCollabContentHash(noteContent),
+                extra: { noteModTime, lastLocalSaveTime },
+            });
+            return;
+        }
+
+        logCollabEvent('STORE_UPDATE', {
+            noteId: id,
+            origin: 'sqlite_load',
+            action: 'apply_external_update',
+            length: noteContent.length,
+            hash: getCollabContentHash(noteContent),
+        });
 
         // Aplicar la actualización externa en vivo
         const parsed = parseNotePages(noteContent);
@@ -394,12 +476,30 @@ export function useCreateNote(
             currentPageIndex: 0,
         });
 
-        // Actualizar el DOM del editor WebView de cada página
+        // Actualizar el DOM del editor WebView solo si el usuario no está editando activamente
         const updateEditorsHtml = () => {
+            if (isEditModeRef.current) return;
             parsed.pages.forEach((page, idx) => {
                 const editor = effectiveEditorRefs.current?.[idx];
-                if (editor && typeof editor.setContentHTML === 'function') {
-                    editor.setContentHTML(page.content || '');
+                if (editor) {
+                    const pageHtml = page.content || '';
+                    const escapedContent = JSON.stringify(pageHtml);
+                    // Preferir aplicación no destructiva vía DOM si está disponible
+                    const script = `
+                        (function() {
+                            if (typeof window.__veyraApplyRemoteContent === 'function') {
+                                window.__veyraApplyRemoteContent(${escapedContent});
+                            } else if (typeof setContentHTML === 'function') {
+                                setContentHTML(${escapedContent});
+                            }
+                        })();
+                        true;
+                    `;
+                    try {
+                        editor.injectJavascript?.(script);
+                        editor.injectJavaScript?.(script);
+                        editor.webviewBridge?.injectJavaScript?.(script);
+                    } catch (e) {}
                 }
             });
         };
@@ -416,46 +516,78 @@ export function useCreateNote(
         };
     }, [id, notes, effectiveEditorRefs]);
 
-    // ─── CANAL DE TRANSMISIÓN EN VIVO (WEBSOCKETS BROADCAST CLIENTE A CLIENTE) ───
-    // Permite ver lo que otro usuario escribe en tiempo real (estilo Google Docs / Word)
-    // sin tener que esperar a que se guarde la nota en la base de datos.
+    // ─── CANALES PRIVADOS DE TRANSMISIÓN EN VIVO (WEBSOCKETS REALTIME PRIVADOS) ───
+    // Separación de tráfico para seguridad y aislamiento por RLS:
+    // 1. note_live_edit_${activeId}: contenido, título, estructura y notificaciones de permisos (private: true)
+    // 2. note_live_cursor_${activeId}: movimientos y eliminación de cursores (private: true)
     useEffect(() => {
-        const activeId = id && id !== 'create' ? id : noteIdRef.current;
+        const activeId = id && id !== 'create' ? id : (noteIdRef.current || createdNoteId);
         if (!activeId) return;
 
-        const channelName = `note_live_${activeId}`;
-        const channel = supabase.channel(channelName, {
+        // 1. Canal privado de edición de contenido
+        const editChannelName = `note_live_edit_${activeId}`;
+        logCollabEvent('CHANNEL_SUB', {
+            noteId: activeId,
+            action: editChannelName,
+            status: 'SUBSCRIBING',
+        });
+
+        const editChannel = supabase.channel(editChannelName, {
             config: {
+                private: true,
                 broadcast: {
                     self: false, // El emisor no recibe sus propios mensajes
                 },
             },
         });
 
-        channel
+        editChannel
             .on('broadcast', { event: 'LIVE_NOTE_CHANGE' }, ({ payload }) => {
                 if (!payload || payload.senderClientId === localClientIdRef.current) return;
 
-                isApplyingRemoteBroadcastRef.current = true;
-                const senderName = payload.senderName || t('collaboration.collaborator', { defaultValue: 'Colaborador' });
-                const senderColor = payload.userColor || getCollabColor(payload.senderClientId);
-
-                setLiveCollaborators(prev => {
-                    const now = Date.now();
-                    const next = { ...prev };
-                    next[payload.senderClientId] = {
-                        name: senderName,
-                        color: senderColor,
-                        timestamp: now,
-                    };
-                    for (const id in next) {
-                        if (now - next[id].timestamp > 12000) {
-                            delete next[id];
-                        }
-                    }
-                    return next;
+                logCollabEvent('BROADCAST_RECV', {
+                    noteId: activeId,
+                    origin: 'realtime_recv',
+                    action: payload.changeType,
+                    length: payload.content?.length,
+                    hash: getCollabContentHash(payload.content),
+                    extra: {
+                        pageIndex: payload.pageIndex,
+                        senderClientId: payload.senderClientId,
+                        senderUserId: payload.senderUserId,
+                    },
                 });
-                setRemoteSyncNotice(Date.now());
+
+                const session = useStore.getState().session;
+                const currentUserId = session?.user?.id;
+                const isSameUserAccount = Boolean(
+                    currentUserId && payload.senderUserId && payload.senderUserId === currentUserId
+                );
+
+                isApplyingRemoteBroadcastRef.current = true;
+
+                // Objetivo C: Solo registrar presencia y emitir aviso si es un colaborador externo (otra cuenta)
+                if (!isSameUserAccount) {
+                    const senderName = payload.senderName || t('collaboration.collaborator', { defaultValue: 'Colaborador' });
+                    const senderColor = payload.userColor || getCollabColor(payload.senderClientId);
+
+                    setLiveCollaborators(prev => {
+                        const now = Date.now();
+                        const next = { ...prev };
+                        next[payload.senderClientId] = {
+                            name: senderName,
+                            color: senderColor,
+                            timestamp: now,
+                        };
+                        for (const cid in next) {
+                            if (now - next[cid].timestamp > 12000) {
+                                delete next[cid];
+                            }
+                        }
+                        return next;
+                    });
+                    setRemoteSyncNotice(Date.now());
+                }
 
                 if (payload.changeType === 'TITLE' && typeof payload.title === 'string') {
                     setTitle(payload.title);
@@ -466,6 +598,7 @@ export function useCreateNote(
                     lastRemoteBroadcastReceivedRef.current[pageIndex] = content;
                     lastRemoteBroadcastTimeRef.current[pageIndex] = Date.now();
 
+                    let nextPages: NotePage[] = [];
                     setPages(prev => {
                         const next = [...prev];
                         if (pageIndex >= 0 && pageIndex < next.length) {
@@ -475,10 +608,11 @@ export function useCreateNote(
                             next.push(createPage(content));
                         }
                         currentValuesRef.current.pages = next;
+                        nextPages = next;
                         return next;
                     });
 
-                    // Inyectar HTML mediante reconciliación DOM inteligente (no destructiva para el cursor local)
+                    // Inyectar HTML mediante reconciliación DOM inteligente
                     const editor = effectiveEditorRefs.current?.[pageIndex];
                     if (editor) {
                         const escapedContent = JSON.stringify(content || '');
@@ -499,12 +633,12 @@ export function useCreateNote(
                         } catch (e) {}
                     }
 
-                    // Sincronizar serializedContent en lastSavedValuesRef para no disparar auto-guardado en el receptor
-                    const currentVals = currentValuesRef.current;
-                    lastSavedValuesRef.current.serializedContent = serializeNotePages(
-                        currentVals.pages,
-                        currentVals.scrollLayout
-                    );
+                    if (nextPages.length > 0) {
+                        lastSavedValuesRef.current.serializedContent = serializeNotePages(
+                            nextPages,
+                            currentValuesRef.current.scrollLayout
+                        );
+                    }
                 } else if (payload.changeType === 'PAGES_STRUCTURE' && Array.isArray(payload.pages)) {
                     setPages(payload.pages);
                     currentValuesRef.current.pages = payload.pages;
@@ -539,10 +673,82 @@ export function useCreateNote(
                         payload.pages,
                         payload.layout || currentValuesRef.current.scrollLayout
                     );
-                } else if (payload.changeType === 'CURSOR_MOVE' && typeof payload.pageIndex === 'number' && payload.cursor) {
+                } else if (payload.changeType === 'PERMISSIONS_UPDATE') {
+                    // Objetivo D: NO confiar en el contenido del payload como autoridad.
+                    // Actuar únicamente como señal para revalidar contra la base de datos de forma segura.
+                    refreshPermsRef.current();
+                }
+
+                setTimeout(() => {
+                    isApplyingRemoteBroadcastRef.current = false;
+                }, 400);
+            })
+            .subscribe((status, err) => {
+                logCollabEvent('CHANNEL_STATUS', {
+                    noteId: activeId,
+                    action: editChannelName,
+                    status,
+                    extra: err ? { error: (err as any).message || String(err) } : undefined,
+                });
+                if (status === 'SUBSCRIBED') {
+                    setLiveSyncError(null);
+                } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+                    console.warn(`[useCreateNote] Error en suscripción a canal privado de edición (${status}):`, err);
+                    setLiveSyncError('CHANNEL_ERROR');
+                }
+            });
+
+        liveEditChannelRef.current = editChannel;
+
+        // 2. Canal privado de cursores y actividad de colaboradores
+        const cursorChannelName = `note_live_cursor_${activeId}`;
+        logCollabEvent('CHANNEL_SUB', {
+            noteId: activeId,
+            action: cursorChannelName,
+            status: 'SUBSCRIBING',
+        });
+
+        const cursorChannel = supabase.channel(cursorChannelName, {
+            config: {
+                private: true,
+                broadcast: {
+                    self: false,
+                },
+            },
+        });
+
+        cursorChannel
+            .on('broadcast', { event: 'LIVE_NOTE_CHANGE' }, ({ payload }) => {
+                if (!payload || payload.senderClientId === localClientIdRef.current) return;
+
+                const session = useStore.getState().session;
+                const currentUserId = session?.user?.id;
+                const isSameUserAccount = Boolean(
+                    currentUserId && payload.senderUserId && payload.senderUserId === currentUserId
+                );
+
+                // Objetivo C: Si es otro dispositivo de la misma cuenta, NO dibujar cursor ni considerarlo colaborador externo
+                if (isSameUserAccount) return;
+
+                if (payload.changeType === 'CURSOR_MOVE' && typeof payload.pageIndex === 'number' && payload.cursor) {
                     const { pageIndex, cursor, userColor, senderClientId, senderUserId, senderName } = payload;
 
-                    // 1. Un colaborador solo puede estar activo en una única hoja a la vez.
+                    setLiveCollaborators(prev => {
+                        const now = Date.now();
+                        const next = { ...prev };
+                        next[senderClientId] = {
+                            name: senderName || t('collaboration.collaborator', { defaultValue: 'Colaborador' }),
+                            color: userColor || getCollabColor(senderClientId),
+                            timestamp: now,
+                        };
+                        for (const cid in next) {
+                            if (now - next[cid].timestamp > 12000) {
+                                delete next[cid];
+                            }
+                        }
+                        return next;
+                    });
+
                     // Limpiar inmediatamente el cursor de este cliente en cualquier otra hoja (idx !== pageIndex)
                     if (effectiveEditorRefs.current && Array.isArray(effectiveEditorRefs.current)) {
                         effectiveEditorRefs.current.forEach((ed, idx) => {
@@ -562,7 +768,7 @@ export function useCreateNote(
                         });
                     }
 
-                    // 2. Renderizar / actualizar el cursor en la hoja destino (pageIndex)
+                    // Renderizar / actualizar el cursor en la hoja destino (pageIndex)
                     const editor = effectiveEditorRefs.current?.[pageIndex];
                     if (editor) {
                         const cursorData = JSON.stringify({
@@ -590,7 +796,6 @@ export function useCreateNote(
                         delete next[payload.senderClientId];
                         return next;
                     });
-                    // Limpiar el cursor de este colaborador en todas las hojas para asegurar que no queden fantasmas
                     if (effectiveEditorRefs.current && Array.isArray(effectiveEditorRefs.current)) {
                         effectiveEditorRefs.current.forEach(ed => {
                             if (ed) {
@@ -608,97 +813,78 @@ export function useCreateNote(
                             }
                         });
                     }
-                } else if (payload.changeType === 'PERMISSIONS_UPDATE') {
-                    const session = useStore.getState().session;
-                    const currentUserId = session?.user?.id;
-
-                    if (!userPermissionRef.current.isOwner && payload.revoked && (!payload.memberId || payload.memberId === currentUserId)) {
-                        const revokedPerm = {
-                            isOwner: false,
-                            role: 'viewer' as CollabRole,
-                            canEdit: false,
-                            hasAccess: false,
-                            isRevoked: true,
-                        };
-                        setUserPermission(revokedPerm);
-                        userPermissionRef.current = revokedPerm;
-                        const activeId = id && id !== 'create' ? id : noteIdRef.current;
-                        if (activeId) {
-                            useNotesStore.getState().markNoteRevoked(activeId, true).catch(() => {});
-                        }
-                        return;
-                    }
-
-                    if (!userPermissionRef.current.isOwner && (!payload.memberId || payload.memberId === currentUserId)) {
-                        if (payload.role) {
-                            const isViewerRole = payload.role === 'viewer';
-                            const next = {
-                                isOwner: false,
-                                role: payload.role as CollabRole,
-                                canEdit: !isViewerRole,
-                                hasAccess: true,
-                                isRevoked: false,
-                            };
-                            setUserPermission(next);
-                            userPermissionRef.current = next;
-
-                            const activeId = id && id !== 'create' ? id : noteIdRef.current;
-                            if (activeId) {
-                                useNotesStore.getState().setNoteRole(activeId, payload.role).catch(() => {});
-                            }
-
-                            if (isViewerRole) {
-                                effectiveEditorRefs.current.forEach(ed => {
-                                    try {
-                                        ed?.blurContentEditor?.();
-                                        ed?.injectJavaScript?.(`
-                                            (function() {
-                                                var ed = document.querySelector('.pell-content') || document.getElementById('content') || document.getElementById('editor') || document.body;
-                                                if (ed) {
-                                                    ed.setAttribute('contenteditable', 'false');
-                                                    ed.blur();
-                                                }
-                                                if (document.activeElement && document.activeElement.blur) {
-                                                    document.activeElement.blur();
-                                                }
-                                            })();
-                                            true;
-                                        `);
-                                    } catch (e) {}
-                                });
-                            }
-                        }
-                    }
                 }
-
-                // 400ms: da tiempo al rAF del WebView + bridge round-trip para restaurar cursor
-                // antes de que updatePageContent pueda volver a emitir cambios
-                setTimeout(() => {
-                    isApplyingRemoteBroadcastRef.current = false;
-                }, 400);
             })
-            .subscribe();
+            .subscribe((status, err) => {
+                logCollabEvent('CHANNEL_STATUS', {
+                    noteId: activeId,
+                    action: cursorChannelName,
+                    status,
+                    extra: err ? { error: (err as any).message || String(err) } : undefined,
+                });
+                if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+                    console.warn(`[useCreateNote] Error en suscripción a canal de cursores (${status}):`, err);
+                }
+            });
 
-        liveChannelRef.current = channel;
+        liveCursorChannelRef.current = cursorChannel;
 
         return () => {
-            supabase.removeChannel(channel).catch(() => {});
-            if (liveChannelRef.current === channel) {
-                liveChannelRef.current = null;
+            logCollabEvent('CHANNEL_SUB', {
+                noteId: activeId,
+                action: 'teardown',
+                status: 'REMOVING',
+            });
+            // Antes de remover canales, retirar inmediatamente el cursor remoto para evitar cursores fantasma
+            try {
+                const pageIdx = currentValuesRef.current.currentPageIndex || 0;
+                cursorChannel.send({
+                    type: 'broadcast',
+                    event: 'LIVE_NOTE_CHANGE',
+                    payload: {
+                        changeType: 'CURSOR_REMOVE',
+                        pageIndex: pageIdx,
+                        senderClientId: localClientIdRef.current,
+                        senderUserId: useStore.getState().session?.user?.id,
+                        timestamp: Date.now(),
+                    },
+                }).catch?.(() => {});
+            } catch (e) {}
+
+            supabase.removeChannel(editChannel).catch(() => {});
+            supabase.removeChannel(cursorChannel).catch(() => {});
+            if (liveEditChannelRef.current === editChannel) {
+                liveEditChannelRef.current = null;
+            }
+            if (liveCursorChannelRef.current === cursorChannel) {
+                liveCursorChannelRef.current = null;
             }
         };
-    }, [id, effectiveEditorRefs, t]);
+    }, [id, createdNoteId, effectiveEditorRefs, t]);
 
-    // Función auxiliar para emitir cambios en vivo por WebSockets
+    // Función auxiliar para emitir cambios en vivo de CONTENIDO por el canal privado de edición
     const broadcastLiveChange = useCallback((payload: Record<string, any>) => {
-        if (!liveChannelRef.current || isApplyingRemoteBroadcastRef.current) return;
-        if (!userPermissionRef.current.canEdit && (payload.changeType === 'PAGE_CONTENT' || payload.changeType === 'TITLE' || payload.changeType === 'PAGES_STRUCTURE')) return;
+        // Garantizar que solo viaja por el canal de edición y nunca transmite cursores
+        if (!liveEditChannelRef.current || isApplyingRemoteBroadcastRef.current) return;
+        if (!userPermissionRef.current.canEdit) return;
+        if (payload.changeType === 'CURSOR_MOVE' || payload.changeType === 'CURSOR_REMOVE') return;
+
+        const activeId = id && id !== 'create' ? id : (noteIdRef.current || createdNoteId);
         const session = useStore.getState().session;
         const senderUserId = session?.user?.id;
         const senderName = session?.user?.user_metadata?.full_name || session?.user?.email?.split('@')[0] || t('collaboration.collaborator', { defaultValue: 'Colaborador' });
         const userColor = getCollabColor(localClientIdRef.current);
 
-        liveChannelRef.current.send({
+        logCollabEvent('BROADCAST_SEND', {
+            noteId: activeId,
+            origin: 'realtime_send',
+            action: payload.changeType,
+            length: payload.content?.length,
+            hash: getCollabContentHash(payload.content),
+            extra: { pageIndex: payload.pageIndex },
+        });
+
+        liveEditChannelRef.current.send({
             type: 'broadcast',
             event: 'LIVE_NOTE_CHANGE',
             payload: {
@@ -709,31 +895,150 @@ export function useCreateNote(
                 userColor,
                 timestamp: Date.now(),
             },
-        }).catch?.(() => {});
-    }, [t]);
+        }).then((res: any) => {
+            if (res !== 'ok') {
+                logCollabEvent('BROADCAST_SEND', {
+                    noteId: activeId,
+                    origin: 'realtime_send',
+                    action: payload.changeType,
+                    status: res,
+                });
+            }
+        }).catch?.((err: any) => {
+            logCollabEvent('BROADCAST_SEND', {
+                noteId: activeId,
+                origin: 'realtime_send',
+                action: payload.changeType,
+                status: 'error',
+                extra: { error: err?.message || String(err) },
+            });
+        });
+    }, [id, createdNoteId, t]);
 
-    // Transmite la posición del cursor de este usuario en vivo estilo Google Docs
+    // Transmite la posición del cursor de este usuario por el canal privado de cursores
     const broadcastCursorMove = useCallback((pageIndex: number, cursor: any) => {
-        if (!liveChannelRef.current || isApplyingRemoteBroadcastRef.current) return;
-        broadcastLiveChange({
-            changeType: 'CURSOR_MOVE',
-            pageIndex,
-            cursor,
-        });
-    }, [broadcastLiveChange]);
+        if (!liveCursorChannelRef.current || isApplyingRemoteBroadcastRef.current) return;
+        if (!userPermissionRef.current.hasAccess || userPermissionRef.current.isRevoked) return;
 
-    // Transmite el retiro del cursor cuando el usuario sale del foco
-    const broadcastCursorRemove = useCallback((pageIndex: number) => {
-        if (!liveChannelRef.current) return;
-        broadcastLiveChange({
-            changeType: 'CURSOR_REMOVE',
-            pageIndex,
+        const activeId = id && id !== 'create' ? id : (noteIdRef.current || createdNoteId);
+        const session = useStore.getState().session;
+        const senderUserId = session?.user?.id;
+        const senderName = session?.user?.user_metadata?.full_name || session?.user?.email?.split('@')[0] || t('collaboration.collaborator', { defaultValue: 'Colaborador' });
+        const userColor = getCollabColor(localClientIdRef.current);
+
+        logCollabEvent('CURSOR_LIFECYCLE', {
+            noteId: activeId,
+            origin: 'local_cursor',
+            action: 'CURSOR_MOVE',
+            extra: {
+                pageIndex,
+                blockIndex: cursor?.blockIndex,
+                charOffset: cursor?.charOffset,
+                top: cursor?.top,
+                left: cursor?.left,
+            },
         });
-    }, [broadcastLiveChange]);
+
+        liveCursorChannelRef.current.send({
+            type: 'broadcast',
+            event: 'LIVE_NOTE_CHANGE',
+            payload: {
+                changeType: 'CURSOR_MOVE',
+                pageIndex,
+                cursor,
+                senderClientId: localClientIdRef.current,
+                senderUserId,
+                senderName,
+                userColor,
+                timestamp: Date.now(),
+            },
+        }).catch?.(() => {});
+    }, [id, createdNoteId, t]);
+
+    // Transmite el retiro del cursor por el canal privado de cursores
+    const broadcastCursorRemove = useCallback((pageIndex: number) => {
+        if (!liveCursorChannelRef.current) return;
+        const activeId = id && id !== 'create' ? id : (noteIdRef.current || createdNoteId);
+        const session = useStore.getState().session;
+        const senderUserId = session?.user?.id;
+
+        logCollabEvent('CURSOR_LIFECYCLE', {
+            noteId: activeId,
+            origin: 'local_cursor',
+            action: 'CURSOR_REMOVE',
+            extra: { pageIndex },
+        });
+
+        liveCursorChannelRef.current.send({
+            type: 'broadcast',
+            event: 'LIVE_NOTE_CHANGE',
+            payload: {
+                changeType: 'CURSOR_REMOVE',
+                pageIndex,
+                senderClientId: localClientIdRef.current,
+                senderUserId,
+                timestamp: Date.now(),
+            },
+        }).catch?.(() => {});
+    }, [id, createdNoteId]);
+
+    // Gestión del ciclo de vida de la presencia y cursores remotos con AppState (Problema B)
+    useEffect(() => {
+        const handleAppStateChange = (nextAppState: AppStateStatus) => {
+            const activeId = id && id !== 'create' ? id : (noteIdRef.current || createdNoteId);
+            logCollabEvent('CURSOR_LIFECYCLE', {
+                noteId: activeId,
+                action: 'APP_STATE_CHANGE',
+                status: nextAppState,
+            });
+
+            if (nextAppState === 'background' || nextAppState === 'inactive') {
+                // Cuando el usuario pulsa Home, bloquea la pantalla o cambia de app:
+                // Retirar inmediatamente el cursor y presencia en los demás dispositivos
+                const pageIdx = currentValuesRef.current.currentPageIndex || 0;
+                broadcastCursorRemove(pageIdx);
+            } else if (nextAppState === 'active') {
+                // Al volver a primer plano: restaurar presencia si los canales están conectados y el editor está en modo edición
+                if (liveCursorChannelRef.current && isEditModeRef.current) {
+                    const pageIdx = currentValuesRef.current.currentPageIndex || 0;
+                    const editor = effectiveEditorRefs.current?.[pageIdx];
+                    if (editor) {
+                        try {
+                            const restoreScript = `
+                                if (typeof reportCursor === 'function') {
+                                    reportCursor();
+                                }
+                                true;
+                            `;
+                            editor.injectJavascript?.(restoreScript);
+                            editor.injectJavaScript?.(restoreScript);
+                            editor.webviewBridge?.injectJavaScript?.(restoreScript);
+                        } catch (e) {}
+                    }
+                }
+            }
+        };
+
+        const subscription = AppState.addEventListener('change', handleAppStateChange);
+        return () => {
+            subscription.remove();
+        };
+    }, [broadcastCursorRemove, id, createdNoteId, effectiveEditorRefs]);
 
     // Establecer título con registro en historial debounced y transmisión en vivo inmediata
     const handleSetTitle = useCallback((newTitle: string) => {
         if (!userPermissionRef.current.canEdit || !userPermissionRef.current.hasAccess || userPermissionRef.current.isRevoked) return;
+        isLocallyInteractedRef.current = true;
+        lastLocalEditTimeRef.current = Date.now();
+
+        logCollabEvent('LOCAL_EDIT', {
+            noteId: id || createdNoteId,
+            origin: 'local_input',
+            action: 'TITLE',
+            length: newTitle.length,
+            hash: getCollabContentHash(newTitle),
+        });
+
         setTitle(newTitle);
         recordChange({
             title: newTitle,
@@ -752,7 +1057,7 @@ export function useCreateNote(
                 });
             }, 80);
         }
-    }, [recordChange, broadcastLiveChange]);
+    }, [id, createdNoteId, recordChange, broadcastLiveChange]);
 
     /**
      * Actualiza el contenido HTML de una página específica y transmite en vivo por WebSockets.
@@ -760,6 +1065,18 @@ export function useCreateNote(
     const updatePageContent = useCallback((index: number, newHtml: string) => {
         if (!userPermissionRef.current.canEdit || !userPermissionRef.current.hasAccess || userPermissionRef.current.isRevoked) return;
         if (isApplyingRemoteBroadcastRef.current) return;
+
+        isLocallyInteractedRef.current = true;
+        lastLocalEditTimeRef.current = Date.now();
+
+        logCollabEvent('LOCAL_EDIT', {
+            noteId: id || createdNoteId,
+            origin: 'local_input',
+            action: 'PAGE_CONTENT',
+            length: newHtml.length,
+            hash: getCollabContentHash(newHtml),
+            extra: { pageIndex: index },
+        });
 
         const lastReceived = lastRemoteBroadcastReceivedRef.current[index];
         const lastTime = lastRemoteBroadcastTimeRef.current[index] || 0;
@@ -798,13 +1115,15 @@ export function useCreateNote(
                 content: newHtml,
             });
         }, 60);
-    }, [recordChange, broadcastLiveChange]);
+    }, [id, createdNoteId, recordChange, broadcastLiveChange]);
 
     /**
      * Agrega una nueva página en blanco al final.
      */
     const addPage = useCallback(() => {
         if (!userPermissionRef.current.canEdit || !userPermissionRef.current.hasAccess || userPermissionRef.current.isRevoked) return;
+        isLocallyInteractedRef.current = true;
+        lastLocalEditTimeRef.current = Date.now();
         setPages(prev => {
             const next = [...prev, createPage('')];
             const nextIndex = next.length - 1;
@@ -832,6 +1151,8 @@ export function useCreateNote(
      */
     const deletePage = useCallback((index: number) => {
         if (!userPermissionRef.current.canEdit || !userPermissionRef.current.hasAccess || userPermissionRef.current.isRevoked) return;
+        isLocallyInteractedRef.current = true;
+        lastLocalEditTimeRef.current = Date.now();
         setPages(prev => {
             if (prev.length <= 1) return prev;
             const next = prev.filter((_, i) => i !== index);
@@ -860,6 +1181,8 @@ export function useCreateNote(
      */
     const duplicatePage = useCallback((index: number) => {
         if (!userPermissionRef.current.canEdit || !userPermissionRef.current.hasAccess || userPermissionRef.current.isRevoked) return;
+        isLocallyInteractedRef.current = true;
+        lastLocalEditTimeRef.current = Date.now();
         setPages(prev => {
             if (index < 0 || index >= prev.length) return prev;
             const source = prev[index];
@@ -891,6 +1214,9 @@ export function useCreateNote(
      * Inserta una nueva hoja en blanco inmediatamente después del índice especificado.
      */
     const insertPageAfter = useCallback((index: number) => {
+        if (!userPermissionRef.current.canEdit || !userPermissionRef.current.hasAccess || userPermissionRef.current.isRevoked) return;
+        isLocallyInteractedRef.current = true;
+        lastLocalEditTimeRef.current = Date.now();
         setPages(prev => {
             const next = [...prev];
             const insertAt = Math.max(0, Math.min(next.length, index + 1));
@@ -919,6 +1245,8 @@ export function useCreateNote(
      */
     const renamePage = useCallback((index: number, newTitle: string) => {
         if (!userPermissionRef.current.canEdit || !userPermissionRef.current.hasAccess || userPermissionRef.current.isRevoked) return;
+        isLocallyInteractedRef.current = true;
+        lastLocalEditTimeRef.current = Date.now();
         setPages(prev => {
             if (index < 0 || index >= prev.length) return prev;
             const next = [...prev];
@@ -947,6 +1275,8 @@ export function useCreateNote(
      */
     const reorderPages = useCallback((fromIndex: number, toIndex: number) => {
         if (!userPermissionRef.current.canEdit || !userPermissionRef.current.hasAccess || userPermissionRef.current.isRevoked) return;
+        isLocallyInteractedRef.current = true;
+        lastLocalEditTimeRef.current = Date.now();
         setPages(prev => {
             if (
                 fromIndex < 0 ||
@@ -992,6 +1322,8 @@ export function useCreateNote(
     }, [reorderPages]);
 
     const handleSetScrollLayout = useCallback((newLayout: PageLayoutMode) => {
+        isLocallyInteractedRef.current = true;
+        lastLocalEditTimeRef.current = Date.now();
         setScrollLayout(newLayout);
         if (!isApplyingRemoteBroadcastRef.current) {
             broadcastLiveChange({
@@ -1017,6 +1349,12 @@ export function useCreateNote(
         if (!userPermissionRef.current.canEdit || !userPermissionRef.current.hasAccess || userPermissionRef.current.isRevoked) {
             return;
         }
+
+        // El modo edición por sí solo NO debe habilitar el autoguardado; se requiere modificación local real
+        if (!isLocallyInteractedRef.current) {
+            return;
+        }
+
         flushPendingDebounce();
         const {
             title: currentTitle,
@@ -1054,6 +1392,16 @@ export function useCreateNote(
 
         if (isSavingRef.current) return;
         isSavingRef.current = true;
+        lastLocalSaveTimeRef.current = Date.now();
+
+        const activeId = noteIdRef.current || createdNoteId;
+        logCollabEvent('SAVE_START', {
+            noteId: activeId,
+            origin: 'local_save',
+            action: 'save_silently',
+            length: serializedContent.length,
+            hash: getCollabContentHash(serializedContent),
+        });
 
         try {
             const attsJsonToSave = currentAtts.length > 0 ? currentAttsJson : undefined;
@@ -1071,6 +1419,7 @@ export function useCreateNote(
                 const created = await addNote(currentTitle, serializedContent, attsJsonToSave, undefined, currentPinned, currentFolderId, currentEventId, currentFontFamily);
                 if (created?.id) {
                     noteIdRef.current = created.id;
+                    setCreatedNoteId(created.id);
                 }
             }
 
@@ -1083,6 +1432,14 @@ export function useCreateNote(
                 eventId: currentEventId,
                 fontFamily: currentFontFamily,
             };
+
+            logCollabEvent('SAVE_DONE', {
+                noteId: noteIdRef.current || createdNoteId,
+                origin: 'local_save',
+                action: 'save_silently',
+                length: serializedContent.length,
+                hash: getCollabContentHash(serializedContent),
+            });
         } catch (error) {
             console.error('Error in saveSilently:', error);
         } finally {
@@ -1101,6 +1458,7 @@ export function useCreateNote(
 
     // Guardado explícito (con callback opcional)
     const handleSave = async (onSuccess?: () => void) => {
+        isLocallyInteractedRef.current = true;
         setIsLoading(true);
         try {
             await saveSilently();
@@ -1232,6 +1590,8 @@ export function useCreateNote(
                     from: uri,
                     to: newPath
                 });
+                isLocallyInteractedRef.current = true;
+                lastLocalEditTimeRef.current = Date.now();
                 setAttachments([...attachments, { uri: newPath, name }]);
             }
         } catch (error) {
@@ -1241,10 +1601,36 @@ export function useCreateNote(
     };
 
     const removeAttachment = (index: number) => {
+        isLocallyInteractedRef.current = true;
+        lastLocalEditTimeRef.current = Date.now();
         const newAtts = [...attachments];
         newAtts.splice(index, 1);
         setAttachments(newAtts);
     };
+
+    const handleSetFolderId = useCallback((newFolderId: string | null) => {
+        isLocallyInteractedRef.current = true;
+        lastLocalEditTimeRef.current = Date.now();
+        setFolderId(newFolderId);
+    }, []);
+
+    const handleSetEventId = useCallback((newEventId: string | null) => {
+        isLocallyInteractedRef.current = true;
+        lastLocalEditTimeRef.current = Date.now();
+        setEventId(newEventId);
+    }, []);
+
+    const handleSetFontFamily = useCallback((newFont: string) => {
+        isLocallyInteractedRef.current = true;
+        lastLocalEditTimeRef.current = Date.now();
+        setFontFamily(newFont);
+    }, []);
+
+    const handleSetIsPinned = useCallback((valOrFn: boolean | ((prev: boolean) => boolean)) => {
+        isLocallyInteractedRef.current = true;
+        lastLocalEditTimeRef.current = Date.now();
+        setIsPinned(valOrFn);
+    }, []);
 
     const openAttachment = async (uri: string) => {
         try {
@@ -1286,11 +1672,11 @@ export function useCreateNote(
         movePage,
         reorderPages,
         scrollLayout, setScrollLayout: handleSetScrollLayout,
-        folderId, setFolderId,
-        eventId, setEventId,
-        fontFamily, setFontFamily,
+        folderId, setFolderId: handleSetFolderId,
+        eventId, setEventId: handleSetEventId,
+        fontFamily, setFontFamily: handleSetFontFamily,
         attachments,
-        isPinned, setIsPinned,
+        isPinned, setIsPinned: handleSetIsPinned,
         isDark,
         handleSave,
         saveSilently,
@@ -1313,6 +1699,7 @@ export function useCreateNote(
         maxAttachments: isPremium ? 10 : 3,
         remoteSyncNotice,
         liveCollaborator,
+        liveSyncError,
         broadcastCursorMove,
         broadcastCursorRemove,
         userPermission,

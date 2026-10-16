@@ -19,6 +19,7 @@ import { useStore } from '../src/store/useStore';
 import { VeyraTiptapYjsEditor, VeyraTiptapEditorRef, EditorToolbarState } from '../src/poc-yjs/VeyraTiptapYjsEditor';
 import { VeyraYjsToolbar } from '../src/poc-yjs/VeyraYjsToolbar';
 import { SupabaseYjsProvider, SupabaseYjsStatus } from '../src/poc-yjs/supabaseYjsProvider';
+import { YjsRemotePersistence } from '../src/poc-yjs/yjsRemotePersistence';
 
 const USER_PROFILES = [
     { id: '1', name: 'Dispositivo Android A', color: '#8B5CF6' },
@@ -40,6 +41,21 @@ export default function PocYjsScreen() {
     const [inputRoomId, setInputRoomId] = useState('poc-note-room-1');
     const [selectedUserIndex, setSelectedUserIndex] = useState(0);
     const currentUser = USER_PROFILES[selectedUserIndex];
+
+    // Diagnóstico inicial de sesión de Supabase
+    useEffect(() => {
+        supabase.auth.getSession().then(({ data, error }) => {
+            console.log('[PoC Yjs Screen Session Check]', {
+                hasSession: Boolean(data?.session),
+                userId: data?.session?.user?.id || 'NO_AUTH_USER',
+                email: data?.session?.user?.email || null,
+                authError: error ? error.message : null,
+                storeUserId: authUserId,
+            });
+        }).catch((err) => {
+            console.warn('[PoC Yjs Screen Session Check Error]', err);
+        });
+    }, [authUserId]);
 
     const handleJoinRoom = useCallback(() => {
         const sanitized = inputRoomId.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '-');
@@ -159,10 +175,12 @@ export default function PocYjsScreen() {
             return;
         }
 
+        const remotePersistence = new YjsRemotePersistence(supabase);
         const provider = new SupabaseYjsProvider({
             supabase,
             documentId: roomId,
             clientId: `device-${Math.random().toString(36).substring(2, 7)}`,
+            remotePersistence,
             user: {
                 id: authUserId || undefined,
                 name: effectiveUserName,
@@ -171,7 +189,7 @@ export default function PocYjsScreen() {
             onStatusChange: (status) => {
                 setConnectionStatus(status);
                 if (status === 'CONNECTED') {
-                    // Al conectar/reconectar, solicitar al WebView generar SYNC_STEP_1 y emitir Awareness
+                    // Al conectar/reconectar, emitir awareness y solicitar al WebView preparar estado
                     editorARef.current?.requestSyncStep1();
                     editorARef.current?.broadcastAwareness();
                 }
@@ -179,8 +197,8 @@ export default function PocYjsScreen() {
             onRemoteUpdate: (base64Update) => {
                 editorARef.current?.applyRemoteUpdate(base64Update);
             },
-            onRemoteAwareness: (base64Awareness) => {
-                editorARef.current?.applyRemoteAwareness(base64Awareness);
+            onRemoteAwareness: (base64Awareness, senderClientId) => {
+                editorARef.current?.applyRemoteAwareness(base64Awareness, senderClientId);
             },
             onSyncStep1Received: (remoteSv, correlationId, isReturnHandshake) => {
                 editorARef.current?.handleSyncStep1(remoteSv, correlationId, isReturnHandshake);
@@ -198,6 +216,7 @@ export default function PocYjsScreen() {
             },
             onError: (err) => {
                 console.warn('[PoC Yjs] Error en Supabase Realtime:', err);
+                setLatestTelemetry(`Error: ${err.message || String(err)}`);
             },
         });
 
@@ -224,7 +243,15 @@ export default function PocYjsScreen() {
     // Handlers para el Editor A
     const handleYjsUpdateFromA = useCallback((base64Update: string) => {
         if (mode === 'realtime') {
-            providerRef.current?.sendUpdate(base64Update);
+            providerRef.current?.sendUpdate(base64Update).then((res) => {
+                if (res?.error) {
+                    setLatestTelemetry(`Error persistencia: ${res.error}`);
+                } else if (res?.remotePersisted) {
+                    setLatestTelemetry(`Persistido en PostgreSQL (id=${res.updateId}${res.duplicate ? ' dup' : ''})`);
+                }
+            }).catch((err) => {
+                setLatestTelemetry(`Error persistencia: ${err.message}`);
+            });
         } else if (mode === 'split' && editorBRef.current) {
             editorBRef.current.applyRemoteUpdate(base64Update);
             setSyncMetrics((prev) => ({ ...prev, sent: prev.sent + 1, received: prev.received + 1 }));
@@ -516,6 +543,7 @@ export default function PocYjsScreen() {
                         onAwarenessPeersChanged={setActiveRemotePeers}
                         onReady={() => {
                             if (providerRef.current) {
+                                providerRef.current.catchUpRemoteUpdates().catch(() => {});
                                 const status = providerRef.current.getStatus();
                                 if (status === 'CONNECTED' || status === 'SYNCED') {
                                     editorARef.current?.requestSyncStep1();

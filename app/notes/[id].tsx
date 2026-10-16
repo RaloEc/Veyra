@@ -622,48 +622,47 @@ export default function NoteDetailAndEditScreen() {
                                 )}
 
                                 <View style={styles.pageSheetContent}>
-                                    {!isEditMode && !hasPageContent ? (
-                                        <Text style={[styles.emptyContentText, { color: colors.textMuted }]}>
+                                    {!isEditMode && !hasPageContent && (
+                                        <Text style={[styles.emptyContentText, { color: colors.textMuted, position: 'absolute', top: 6, left: 4, zIndex: 10, pointerEvents: 'none' }]}>
                                             {t('notes.empty_page', { defaultValue: 'Hoja en blanco' })}
                                         </Text>
-                                    ) : (
-                                        <RichTextEditorSection
-                                            description={pageContent}
-                                            setDescription={html => updatePageContent(index, html)}
-                                            readOnly={!isEditMode || !canEdit}
-                                            isDark={isDark}
-                                            fontFamily={fontFamily}
-                                            editorRef={{
-                                                get current() {
-                                                    return editorRefs.current[index];
-                                                },
-                                                set current(val) {
-                                                    editorRefs.current[index] = val;
-                                                },
-                                            }}
-                                            onFocus={() => {
-                                                setCurrentPageIndex(index);
-                                                setIsNotesFocused(true);
-                                            }}
-                                            onBlur={() => {
-                                                setIsNotesFocused(false);
-                                                broadcastCursorRemove(index);
-                                            }}
-                                            flat={true}
-                                            onUndo={undo}
-                                            onRedo={redo}
-                                            onCropImage={uri => {
-                                                setIsEditingExistingImage(true);
-                                                setCropperUri(uri);
-                                                setIsCropperVisible(true);
-                                            }}
-                                            onDragStateChange={setIsDraggingImage}
-                                            onAutoScroll={handleAutoScroll}
-                                            onCursorPosition={(offsetY) => handleCursorPosition(index, offsetY)}
-                                            onCursorActivity={(cursor) => broadcastCursorMove(index, cursor)}
-                                            onCursorRemove={() => broadcastCursorRemove(index)}
-                                        />
                                     )}
+                                    <RichTextEditorSection
+                                        description={pageContent}
+                                        setDescription={html => updatePageContent(index, html)}
+                                        readOnly={!isEditMode || !canEdit}
+                                        isDark={isDark}
+                                        fontFamily={fontFamily}
+                                        editorRef={{
+                                            get current() {
+                                                return editorRefs.current[index];
+                                            },
+                                            set current(val) {
+                                                editorRefs.current[index] = val;
+                                            },
+                                        }}
+                                        onFocus={() => {
+                                            setCurrentPageIndex(index);
+                                            setIsNotesFocused(true);
+                                        }}
+                                        onBlur={() => {
+                                            setIsNotesFocused(false);
+                                            broadcastCursorRemove(index);
+                                        }}
+                                        flat={true}
+                                        onUndo={undo}
+                                        onRedo={redo}
+                                        onCropImage={uri => {
+                                            setIsEditingExistingImage(true);
+                                            setCropperUri(uri);
+                                            setIsCropperVisible(true);
+                                        }}
+                                        onDragStateChange={setIsDraggingImage}
+                                        onAutoScroll={handleAutoScroll}
+                                        onCursorPosition={(offsetY) => handleCursorPosition(index, offsetY)}
+                                        onCursorActivity={(cursor) => broadcastCursorMove(index, cursor)}
+                                        onCursorRemove={() => broadcastCursorRemove(index)}
+                                    />
                                 </View>
                             </View>
                         );
@@ -844,48 +843,47 @@ export default function NoteDetailAndEditScreen() {
                                     )}
 
                                     <View style={styles.pageSheetContent}>
-                                        {!isEditMode && !hasPageContent ? (
-                                            <Text style={[styles.emptyContentText, { color: colors.textMuted }]}>
+                                        {!isEditMode && !hasPageContent && (
+                                            <Text style={[styles.emptyContentText, { color: colors.textMuted, position: 'absolute', top: 6, left: 4, zIndex: 10, pointerEvents: 'none' }]}>
                                                 {t('notes.empty_page', { defaultValue: 'Hoja en blanco' })}
                                             </Text>
-                                        ) : (
-                                            <RichTextEditorSection
-                                                description={pageContent}
-                                                setDescription={html => updatePageContent(index, html)}
-                                                readOnly={!isEditMode || !canEdit}
-                                                isDark={isDark}
-                                                fontFamily={fontFamily}
-                                                editorRef={{
-                                                    get current() {
-                                                        return editorRefs.current[index];
-                                                    },
-                                                    set current(val) {
-                                                        editorRefs.current[index] = val;
-                                                    },
-                                                }}
-                                                onFocus={() => {
-                                                    setCurrentPageIndex(index);
-                                                    setIsNotesFocused(true);
-                                                }}
-                                                onBlur={() => {
-                                                 setIsNotesFocused(false);
-                                                 broadcastCursorRemove(index);
-                                             }}
-                                                flat={true}
-                                                onUndo={undo}
-                                                onRedo={redo}
-                                                onCropImage={uri => {
-                                                    setIsEditingExistingImage(true);
-                                                    setCropperUri(uri);
-                                                    setIsCropperVisible(true);
-                                                }}
-                                                onDragStateChange={setIsDraggingImage}
-                                                onAutoScroll={handleAutoScroll}
-                                                onCursorPosition={(offsetY) => handleCursorPosition(index, offsetY)}
-                                                onCursorActivity={(cursor) => broadcastCursorMove(index, cursor)}
-                                                onCursorRemove={() => broadcastCursorRemove(index)}
-                                            />
                                         )}
+                                        <RichTextEditorSection
+                                            description={pageContent}
+                                            setDescription={html => updatePageContent(index, html)}
+                                            readOnly={!isEditMode || !canEdit}
+                                            isDark={isDark}
+                                            fontFamily={fontFamily}
+                                            editorRef={{
+                                                get current() {
+                                                    return editorRefs.current[index];
+                                                },
+                                                set current(val) {
+                                                    editorRefs.current[index] = val;
+                                                },
+                                            }}
+                                            onFocus={() => {
+                                                setCurrentPageIndex(index);
+                                                setIsNotesFocused(true);
+                                            }}
+                                            onBlur={() => {
+                                             setIsNotesFocused(false);
+                                             broadcastCursorRemove(index);
+                                         }}
+                                            flat={true}
+                                            onUndo={undo}
+                                            onRedo={redo}
+                                            onCropImage={uri => {
+                                                setIsEditingExistingImage(true);
+                                                setCropperUri(uri);
+                                                setIsCropperVisible(true);
+                                            }}
+                                            onDragStateChange={setIsDraggingImage}
+                                            onAutoScroll={handleAutoScroll}
+                                            onCursorPosition={(offsetY) => handleCursorPosition(index, offsetY)}
+                                            onCursorActivity={(cursor) => broadcastCursorMove(index, cursor)}
+                                            onCursorRemove={() => broadcastCursorRemove(index)}
+                                        />
                                     </View>
 
                                     {/* Adjuntos en la última página */}

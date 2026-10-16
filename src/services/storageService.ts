@@ -82,16 +82,29 @@ export const StorageService = {
      *
      * Si el archivo ya existe en el servidor (misma ruta), no se vuelve a subir.
      */
+    /**
+     * Sube un archivo local a Supabase Storage.
+     * Retorna la ruta remota (no la URL) para poder generar signed URLs.
+     *
+     * Si el archivo ya existe en el servidor (misma ruta), no se vuelve a subir.
+     */
     async uploadFile(userId: string, localUri: string, fileName: string): Promise<string | null> {
         try {
             const remotePath = await this.getRemotePath(userId, localUri, fileName);
 
-            // Verificar si ya existe en el servidor (deduplicación)
-            const { data: existing } = await supabase.storage
+            // Verificar si ya existe en el servidor (deduplicación) con timeout
+            const existingListPromise = supabase.storage
                 .from(BUCKET)
                 .list(userId, {
                     search: remotePath.split('/').pop()
                 });
+
+            const { data: existing } = await Promise.race([
+                existingListPromise,
+                new Promise<{ data: null; error: any }>((_, reject) =>
+                    setTimeout(() => reject(new Error('Storage list timeout')), 5000)
+                )
+            ]).catch(() => ({ data: null, error: null }));
 
             if (existing && existing.length > 0) {
                 console.log(`[StorageService] File already exists: ${remotePath}`);
@@ -121,13 +134,20 @@ export const StorageService = {
                 bytes[i] = binaryString.charCodeAt(i);
             }
 
-            const { error } = await supabase.storage
+            const uploadPromise = supabase.storage
                 .from(BUCKET)
                 .upload(remotePath, bytes.buffer, {
                     contentType: mimeType,
                     upsert: true, // Overwrite si existe
                     cacheControl: '31536000', // Cache 1 año (reduce egress)
                 });
+
+            const { error } = await Promise.race([
+                uploadPromise,
+                new Promise<{ data: null; error: any }>((_, reject) =>
+                    setTimeout(() => reject(new Error('Storage upload timeout (10s)')), 10000)
+                )
+            ]);
 
             if (error) {
                 console.error('[StorageService] Upload failed:', error);
@@ -159,23 +179,40 @@ export const StorageService = {
                 return localPath;
             }
 
-            // Generar URL firmada con TTL de 1 año (max 1 request por archivo de por vida)
-            const { data: signedUrlData, error: signError } = await supabase.storage
+            // Generar URL firmada con TTL de 1 año (con timeout de 6s)
+            const signedUrlPromise = supabase.storage
                 .from(BUCKET)
                 .createSignedUrl(remotePath, 60 * 60 * 24 * 365); // 1 año
+
+            const { data: signedUrlData, error: signError } = await Promise.race([
+                signedUrlPromise,
+                new Promise<{ data: null; error: any }>((_, reject) =>
+                    setTimeout(() => reject(new Error('Signed URL timeout (6s)')), 6000)
+                )
+            ]).catch((e) => ({ data: null, error: e }));
 
             if (signError || !signedUrlData?.signedUrl) {
                 console.error('[StorageService] Signed URL failed:', signError);
                 return null;
             }
 
-            // Descargar y guardar en caché
-            const downloadResult = await FileSystem.downloadAsync(
+            // Descargar y guardar en caché (con timeout de 8s para no colgar el sync)
+            const downloadPromise = FileSystem.downloadAsync(
                 signedUrlData.signedUrl,
                 localPath
             );
 
-            if (downloadResult.status === 200) {
+            const downloadResult = await Promise.race([
+                downloadPromise,
+                new Promise<any>((_, reject) =>
+                    setTimeout(() => reject(new Error('DownloadAsync timeout (8s)')), 8000)
+                )
+            ]).catch((e) => {
+                console.warn('[StorageService] Download error/timeout:', e);
+                return null;
+            });
+
+            if (downloadResult && downloadResult.status === 200) {
                 console.log(`[StorageService] Downloaded and cached: ${remotePath}`);
                 return localPath;
             }

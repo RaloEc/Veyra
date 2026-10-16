@@ -64,6 +64,44 @@ export const withDB = async <T>(operation: (db: SQLite.SQLiteDatabase) => Promis
   }
 };
 
+/**
+ * Migración explícita e idempotente para la columna sync_mode en la tabla notes.
+ * Consulta PRAGMA table_info(notes) para verificar existencia previa y propaga errores reales.
+ */
+export async function migrateNotesSyncMode(db: {
+  getAllAsync: <T = any>(sql: string, params?: any[]) => Promise<T[]>;
+  execAsync: (sql: string) => Promise<any>;
+  runAsync: (sql: string, params?: any[]) => Promise<any>;
+}): Promise<{ applied: boolean; columnExists: boolean }> {
+  // 1. Consultar esquema actual de la tabla notes mediante PRAGMA
+  const columns = await db.getAllAsync<{ name: string }>('PRAGMA table_info(notes);');
+  const hasSyncMode = Array.isArray(columns) && columns.some(col => col.name === 'sync_mode');
+
+  let applied = false;
+  if (!hasSyncMode) {
+    // 2. Ejecutar ALTER TABLE únicamente si falta la columna
+    await db.execAsync("ALTER TABLE notes ADD COLUMN sync_mode TEXT NOT NULL DEFAULT 'rest';");
+    applied = true;
+
+    // 3. Comprobar formalmente el resultado de la migración
+    const verifyColumns = await db.getAllAsync<{ name: string }>('PRAGMA table_info(notes);');
+    const verified = Array.isArray(verifyColumns) && verifyColumns.some(col => col.name === 'sync_mode');
+    if (!verified) {
+      throw new Error("Fallo en la migración SQLite: la columna 'sync_mode' no se creó tras ejecutar ALTER TABLE.");
+    }
+  }
+
+  // 4. Asegurar que ninguna nota existente tenga sync_mode nulo o vacío
+  await db.runAsync(
+    `UPDATE notes SET sync_mode = 'rest' WHERE sync_mode IS NULL OR sync_mode = ''`
+  );
+
+  // 5. Crear índice para optimizar consultas de sincronización
+  await db.execAsync('CREATE INDEX IF NOT EXISTS idx_notes_sync_mode ON notes (sync_mode);');
+
+  return { applied, columnExists: true };
+}
+
 export const initDatabase = async () => {
   console.log('Starting database initialization...');
   const db = await getDB();
@@ -206,7 +244,8 @@ export const initDatabase = async () => {
       links TEXT,
       deleted INTEGER DEFAULT 0,
       last_modified_ms INTEGER,
-      font_family TEXT
+      font_family TEXT,
+      sync_mode TEXT NOT NULL DEFAULT 'rest'
     );
   `);
   console.log('Notes table checked');
@@ -239,6 +278,9 @@ export const initDatabase = async () => {
   try {
     await db.execAsync('ALTER TABLE notes ADD COLUMN collab_role TEXT DEFAULT "editor";');
   } catch (e) { }
+
+  // Migración explícita e idempotente de sync_mode mediante PRAGMA table_info
+  await migrateNotesSyncMode(db);
 
   // Set last_modified_ms for existing notes that don't have it
   await db.runAsync(
