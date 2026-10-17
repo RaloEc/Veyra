@@ -26,6 +26,19 @@ function triggerWidgetSync() {
     }).catch(() => {});
 }
 
+function triggerSearchIndex(event: CalendarEvent) {
+    import('./searchService').then(({ SearchService }) => {
+        SearchService.indexEvent(event).catch(() => {});
+    }).catch(() => {});
+}
+
+function triggerSearchRemove(id: string) {
+    import('./searchService').then(({ SearchService }) => {
+        SearchService.removeItem('event', id).catch(() => {});
+        SearchService.removeItem('schedule', id).catch(() => {});
+    }).catch(() => {});
+}
+
 /**
  * Determina si un evento ocurre en una fecha dada (soportando eventos únicos y recurrentes).
  */
@@ -144,6 +157,7 @@ export const EventService = {
         }
 
         triggerWidgetSync();
+        triggerSearchIndex(newEvent);
         return newEvent;
     },
 
@@ -190,6 +204,7 @@ export const EventService = {
             }
         }
         triggerWidgetSync();
+        this.getEventById(id).then(e => e && triggerSearchIndex(e)).catch(() => {});
     },
 
     async deleteEvent(id: string): Promise<void> {
@@ -205,6 +220,7 @@ export const EventService = {
             [now, now, id]
         );
         triggerWidgetSync();
+        triggerSearchRemove(id);
     },
 
     async deleteEventOccurrence(id: string, occurrenceDate: Date, mode: 'this' | 'following' | 'all'): Promise<void> {
@@ -247,6 +263,7 @@ export const EventService = {
         await db.runAsync(`DELETE FROM events WHERE id = ?`, [id]);
         await db.runAsync(`UPDATE notes SET event_id = NULL WHERE event_id = ?`, [id]);
         triggerWidgetSync();
+        triggerSearchRemove(id);
     },
 
     async getAllEvents(includeDeleted: boolean = false): Promise<CalendarEvent[]> {

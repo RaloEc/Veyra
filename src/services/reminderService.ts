@@ -10,6 +10,18 @@ function triggerWidgetSync() {
     WidgetService.syncSchedule().catch(() => {});
 }
 
+function triggerSearchIndex(reminder: Reminder) {
+    import('./searchService').then(({ SearchService }) => {
+        SearchService.indexReminder(reminder).catch(() => {});
+    }).catch(() => {});
+}
+
+function triggerSearchRemove(id: string) {
+    import('./searchService').then(({ SearchService }) => {
+        SearchService.removeItem('reminder', id).catch(() => {});
+    }).catch(() => {});
+}
+
 export const ReminderService = {
     async createReminder(
         title: string,
@@ -57,6 +69,7 @@ export const ReminderService = {
         );
 
         triggerWidgetSync();
+        triggerSearchIndex(newReminder);
 
         return newReminder;
     },
@@ -101,6 +114,7 @@ export const ReminderService = {
             [now, id]
         );
         triggerWidgetSync();
+        this.getReminderById(id).then(r => r && triggerSearchIndex(r)).catch(() => {});
         // TODO: Add Compliance Event
     },
 
@@ -132,6 +146,7 @@ export const ReminderService = {
             params
         );
         triggerWidgetSync();
+        this.getReminderById(id).then(r => r && triggerSearchIndex(r)).catch(() => {});
     },
 
     async deleteReminder(id: string): Promise<void> {
@@ -142,6 +157,7 @@ export const ReminderService = {
             [now, now, id]
         );
         triggerWidgetSync();
+        triggerSearchRemove(id);
     },
 
     async restoreReminder(id: string): Promise<void> {
@@ -152,6 +168,7 @@ export const ReminderService = {
             [now, id]
         );
         triggerWidgetSync();
+        this.getReminderById(id).then(r => r && triggerSearchIndex(r)).catch(() => {});
     },
 
     async restoreReminders(ids: string[]): Promise<void> {
@@ -190,6 +207,7 @@ export const ReminderService = {
     async deleteForever(id: string): Promise<void> {
         const db = await getDB();
         await db.runAsync(`DELETE FROM reminders WHERE id = ?`, [id]);
+        triggerSearchRemove(id);
     },
 
     async deleteRemindersForever(ids: string[]): Promise<void> {

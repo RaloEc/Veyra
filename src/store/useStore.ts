@@ -106,6 +106,8 @@ interface AppState {
     setWidgetTextScale: (scale: number) => void;
     widgetHighContrast: boolean;
     setWidgetHighContrast: (enabled: boolean) => void;
+    vibrationEnabled: boolean;
+    setVibrationEnabled: (enabled: boolean) => void;
 }
 
 let currentSyncStartTime = 0;
@@ -714,7 +716,7 @@ export const useStore = create<AppState>()(
             })),
             isPremium: false,
             setPremium: (status: boolean) => {
-                const authEmail = get().session?.user?.email;
+                const authEmail = get().session?.user?.email || get().userEmail;
                 const isOwner = isWhitelistedPremiumEmail(authEmail);
                 set({ isPremium: isOwner ? true : status });
             },
@@ -747,14 +749,15 @@ export const useStore = create<AppState>()(
                 const state = get();
                 if (!state.session?.user?.id) return;
 
-                const SYNC_TIMEOUT_MS = 25000;
-                // Si ya está sincronizando, verificar si la sincronización previa lleva más del tiempo límite (watchdog de 25s)
+                // Timeout adaptativo: 45s para primer inicio de sesión (descarga masiva), 35s para uso cotidiano
+                const SYNC_TIMEOUT_MS = isInitialLogin ? 45000 : 35000;
+                // Si ya está sincronizando, verificar si la sincronización previa lleva más del tiempo límite (watchdog adaptativo)
                 if (state.isSyncing) {
                     const elapsedSinceStart = Date.now() - currentSyncStartTime;
                     if (currentSyncStartTime > 0 && elapsedSinceStart < SYNC_TIMEOUT_MS) {
                         return;
                     }
-                    console.warn('[Sync] Previous sync exceeded 25s watchdog or was stuck; releasing sync lock.');
+                    console.warn(`[Sync] Previous sync exceeded ${SYNC_TIMEOUT_MS}ms watchdog or was stuck; releasing sync lock.`);
                 }
 
                 // Cooldown inteligente para aperturas automáticas y reanudación desde segundo plano:
@@ -774,15 +777,25 @@ export const useStore = create<AppState>()(
                 try {
                     const { SyncService } = await import('../services/syncService');
                     
-                    // Promise.race con timeout estricto de 25s para que NUNCA se congele la interfaz
+                    // Promise.race con timeout adaptativo para que nunca se congele la interfaz
                     const syncPromise = SyncService.syncAll(state.session.user.id, isInitialLogin);
                     const timeoutPromise = new Promise<{ success: boolean; errors: string[] }>((_, reject) =>
-                        setTimeout(() => reject(new Error('La sincronización tardó demasiado (timeout 25s)')), SYNC_TIMEOUT_MS)
+                        setTimeout(() => reject(new Error(`La sincronización tardó demasiado (timeout ${SYNC_TIMEOUT_MS / 1000}s)`)), SYNC_TIMEOUT_MS)
                     );
 
                     const result = await Promise.race([syncPromise, timeoutPromise]);
 
-                    // Recargar datos locales inmediatamente para que todo lo descargado se refleje en la UI de forma resiliente
+                    if (result.success) {
+                        set({ lastSyncTime: Date.now(), syncError: null });
+                    } else {
+                        set({ syncError: result.errors.join(', ') });
+                    }
+                } catch (e: any) {
+                    console.error('[Sync] Sync failed or timed out:', e);
+                    set({ syncError: e?.message || 'Error de sincronización' });
+                } finally {
+                    // Recargar datos locales de forma resiliente tanto si tuvo éxito como si hubo error parcial/timeout,
+                    // garantizando que la UI muestre cualquier dato descargado en SQLite.
                     await Promise.allSettled([
                         get().loadReminders().catch(() => {}),
                         get().loadHistory().catch(() => {}),
@@ -801,15 +814,6 @@ export const useStore = create<AppState>()(
                         })().catch(() => {}),
                     ]);
 
-                    if (result.success) {
-                        set({ lastSyncTime: Date.now(), syncError: null });
-                    } else {
-                        set({ syncError: result.errors.join(', ') });
-                    }
-                } catch (e: any) {
-                    console.error('[Sync] Sync failed or timed out:', e);
-                    set({ syncError: e?.message || 'Error de sincronización' });
-                } finally {
                     // GARANTÍA ABSOLUTA: isSyncing NUNCA puede quedarse en true
                     currentSyncStartTime = 0;
                     set({ isSyncing: false });
@@ -840,6 +844,10 @@ export const useStore = create<AppState>()(
                 set({ widgetHighContrast: enabled });
                 WidgetService.setHighContrast(enabled).catch(() => {});
             },
+            vibrationEnabled: true,
+            setVibrationEnabled: (enabled: boolean) => {
+                set({ vibrationEnabled: enabled });
+            },
         }),
         {
             name: 'app-storage',
@@ -861,18 +869,18 @@ export const useStore = create<AppState>()(
                 homeViewMode: state.homeViewMode,
                 widgetTextScale: state.widgetTextScale,
                 widgetHighContrast: state.widgetHighContrast,
+                vibrationEnabled: state.vibrationEnabled ?? true,
             }),
             onRehydrateStorage: () => (state) => {
                 currentSyncStartTime = 0;
                 const sessionEmail = state?.session?.user?.email;
-                // Si no hay sesión o el email guardado es el del propietario sin sesión activa, limpiarlo
-                const effectiveEmail = sessionEmail || (state?.userEmail && !isWhitelistedPremiumEmail(state.userEmail) ? state.userEmail : null);
-                const isOwner = isWhitelistedPremiumEmail(sessionEmail);
+                const effectiveEmail = sessionEmail || state?.userEmail || null;
+                const isOwner = isWhitelistedPremiumEmail(sessionEmail || state?.userEmail);
                 useStore.setState({
                     isHydrated: true,
                     isSyncing: false,
                     userEmail: effectiveEmail,
-                    isPremium: isOwner ? true : (sessionEmail ? Boolean(state?.isPremium) : false),
+                    isPremium: isOwner ? true : Boolean(state?.isPremium),
                 });
             },
         }

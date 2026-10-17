@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo, useRef } from 'react';
+import React, { useEffect, useState, useMemo, useRef, useCallback } from 'react';
 import {
     View,
     Text,
@@ -11,6 +11,9 @@ import {
     Modal,
     Linking,
     LayoutAnimation,
+    BackHandler,
+    Alert,
+    Vibration,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -99,6 +102,7 @@ export default function ConfirmScreen() {
         toggleSubtask,
         streak,
         language,
+        vibrationEnabled,
     } = useStore();
     const { colors, typography, isDark } = useVeyraTheme();
     const locale = language === 'es' ? es : enUS;
@@ -219,6 +223,22 @@ export default function ConfirmScreen() {
         if (!reminder) return;
         const soundId = soundSettings[reminder.control_level] || 'alarma_fuego.mp3';
 
+        // Iniciar patrón de vibración según nivel si la vibración está activada
+        if (vibrationEnabled ?? true) {
+            try {
+                const vibrationPattern = isCritical
+                    ? [0, 800, 300, 800, 300, 800, 300, 1000]
+                    : isStrict
+                        ? [0, 600, 300, 600, 300, 600]
+                        : [0, 300, 200, 300];
+
+                // Bucle continuo para crítico y estricto, una vez para normal
+                Vibration.vibrate(vibrationPattern, isCritical || isStrict);
+            } catch (vibErr) {
+                console.warn('[ConfirmScreen] Error iniciando vibración:', vibErr);
+            }
+        }
+
         const audioMap: Record<string, any> = {
             'ping_brillante.wav': require('../../assets/sounds/ping_brillante.wav'),
             'campana_electro.mp3': require('../../assets/sounds/campana_electro.mp3'),
@@ -264,6 +284,9 @@ export default function ConfirmScreen() {
 
         return () => {
             isCancelled = true;
+            try {
+                Vibration.cancel();
+            } catch (_) {}
             if (activePlayer) {
                 try {
                     activePlayer.pause();
@@ -272,9 +295,12 @@ export default function ConfirmScreen() {
             }
             playerRef.current = null;
         };
-    }, [reminder?.id, reminder?.control_level]);
+    }, [reminder?.id, reminder?.control_level, isCritical, isStrict]);
 
-    const stopAlarmSound = async () => {
+    const stopAlarmSound = useCallback(async () => {
+        try {
+            Vibration.cancel();
+        } catch (_) {}
         if (playerRef.current) {
             try {
                 playerRef.current.pause();
@@ -283,7 +309,43 @@ export default function ConfirmScreen() {
             playerRef.current = null;
         }
         setIsMuted(true);
-    };
+    }, []);
+
+    const exitConfirmScreen = useCallback(async () => {
+        try {
+            await VeyraAlarm.dismissAlarmScreen();
+        } finally {
+            router.replace('/');
+        }
+    }, [router]);
+
+    const handleDone = useCallback(async () => {
+        await stopAlarmSound();
+        if (id) {
+            await NotificationService.cancelNotificationsForReminder(id);
+            await markAsCompleted(id);
+        }
+        await exitConfirmScreen();
+    }, [id, stopAlarmSound, markAsCompleted, exitConfirmScreen]);
+
+    const handleSnoozeMinutes = useCallback(async (minutes: number) => {
+        await stopAlarmSound();
+        if (id) {
+            await NotificationService.cancelNotificationsForReminder(id);
+            if (!isTest || reminders.some(r => r.id === id)) {
+                await snoozeReminder(String(id), minutes);
+            }
+        }
+        await exitConfirmScreen();
+    }, [id, isTest, reminders, stopAlarmSound, snoozeReminder, exitConfirmScreen]);
+
+    const handleDismiss = useCallback(async () => {
+        await stopAlarmSound();
+        if (id) {
+            await NotificationService.cancelNotificationsForReminder(id);
+        }
+        await exitConfirmScreen();
+    }, [id, stopAlarmSound, exitConfirmScreen]);
 
     // Subtasks handling
     const parsedSubtasks = useMemo(() => {
@@ -303,7 +365,7 @@ export default function ConfirmScreen() {
 
     const completedSubtasksCount = localSubtasks.filter((st: any) => st.completed).length;
 
-    const handleToggleLocalSubtask = async (subtaskId: string) => {
+    const handleToggleLocalSubtask = useCallback(async (subtaskId: string) => {
         LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
         setLocalSubtasks(prev =>
             prev.map((st: any) => (st.id === subtaskId ? { ...st, completed: !st.completed } : st))
@@ -311,7 +373,7 @@ export default function ConfirmScreen() {
         if (reminder?.id && !isPreview) {
             await toggleSubtask(reminder.id, subtaskId);
         }
-    };
+    }, [reminder?.id, isPreview, toggleSubtask]);
 
     // Attachments handling
     const parsedAttachments = useMemo(() => {
@@ -369,11 +431,66 @@ export default function ConfirmScreen() {
         return language === 'es' ? `Venció hace ${overdueMinutes} min` : `Overdue ${overdueMinutes} min`;
     }, [overdueMinutes, reminder, language]);
 
+    // Bloquear el botón de atrás en pantalla bloqueada para que no permita acceder a otras partes de la app
+    useEffect(() => {
+        const onBackPress = () => {
+            stopAlarmSound();
+            if (isPreview || isTest) {
+                router.replace('/');
+                return true;
+            }
+            // En alarma real, posponer 5 minutos y replegar la app a la pantalla de bloqueo
+            handleSnoozeMinutes(5).catch(() => {});
+            return true;
+        };
+
+        const subscription = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+        return () => subscription.remove();
+    }, [isPreview, isTest, id, stopAlarmSound, handleSnoozeMinutes, router]);
+
+    const handleOpenFile = useCallback(async (uri: string) => {
+        try {
+            const isLocked = await VeyraAlarm.isKeyguardLocked();
+            if (isLocked) {
+                Alert.alert(
+                    language === 'es' ? 'Dispositivo bloqueado' : 'Device Locked',
+                    language === 'es'
+                        ? 'Desbloquea tu dispositivo para abrir este archivo adjunto.'
+                        : 'Please unlock your device to open this attachment.'
+                );
+                return;
+            }
+            Linking.openURL(uri).catch(() => {});
+        } catch {
+            Linking.openURL(uri).catch(() => {});
+        }
+    }, [language]);
+
+    const handleOpenLink = useCallback(async (url: string) => {
+        try {
+            const isLocked = await VeyraAlarm.isKeyguardLocked();
+            if (isLocked) {
+                Alert.alert(
+                    language === 'es' ? 'Dispositivo bloqueado' : 'Device Locked',
+                    language === 'es'
+                        ? 'Desbloquea tu dispositivo para abrir este enlace.'
+                        : 'Please unlock your device to open this link.'
+                );
+                return;
+            }
+            Linking.openURL(url).catch(() => {});
+        } catch {
+            Linking.openURL(url).catch(() => {});
+        }
+    }, [language]);
+
+    const themeColor = isCritical ? '#E11D48' : isStrict ? '#F59E0B' : '#3B82F6';
+
     if (!reminder) {
         if (isLoadingDb) {
             return (
                 <SafeAreaView style={[styles.screen, { backgroundColor: colors.bg, justifyContent: 'center', alignItems: 'center' }]}>
-                    <ActivityIndicator size="large" color={isCritical ? '#E11D48' : '#3B82F6'} />
+                    <ActivityIndicator size="large" color={themeColor} />
                     <Text style={{ marginTop: 16, color: colors.textSecondary, fontSize: typography.body.fontSize }}>
                         {t('common.loading', 'Cargando recordatorio...')}
                     </Text>
@@ -393,8 +510,7 @@ export default function ConfirmScreen() {
                             if (id) {
                                 await NotificationService.cancelNotificationsForReminder(id).catch(() => {});
                             }
-                            await VeyraAlarm.clearLockScreenFlags().catch(() => {});
-                            router.replace('/');
+                            await exitConfirmScreen();
                         }}
                     >
                         <Text style={{ color: colors.textPrimary, fontWeight: '700' }}>
@@ -405,39 +521,6 @@ export default function ConfirmScreen() {
             </SafeAreaView>
         );
     }
-
-    const themeColor = isCritical ? '#E11D48' : isStrict ? '#F59E0B' : '#3B82F6';
-
-    const handleDone = async () => {
-        await stopAlarmSound();
-        if (id) {
-            await NotificationService.cancelNotificationsForReminder(id);
-            await markAsCompleted(id);
-        }
-        await VeyraAlarm.clearLockScreenFlags().catch(() => {});
-        router.replace('/');
-    };
-
-    const handleSnoozeMinutes = async (minutes: number) => {
-        await stopAlarmSound();
-        if (id) {
-            await NotificationService.cancelNotificationsForReminder(id);
-            if (!isTest || reminders.some(r => r.id === id)) {
-                await snoozeReminder(String(id), minutes);
-            }
-        }
-        await VeyraAlarm.clearLockScreenFlags().catch(() => {});
-        router.replace('/');
-    };
-
-    const handleDismiss = async () => {
-        await stopAlarmSound();
-        if (id) {
-            await NotificationService.cancelNotificationsForReminder(id);
-        }
-        await VeyraAlarm.clearLockScreenFlags().catch(() => {});
-        router.replace('/');
-    };
 
     const plainDescription = reminder.description ? extractPlainTextFromPages(reminder.description) : '';
 
@@ -664,7 +747,7 @@ export default function ConfirmScreen() {
                                     <TouchableOpacity
                                         key={idx}
                                         activeOpacity={0.7}
-                                        onPress={() => Linking.openURL(file.uri).catch(() => {})}
+                                        onPress={() => handleOpenFile(file.uri)}
                                         style={[
                                             styles.fileRow,
                                             {
@@ -698,7 +781,7 @@ export default function ConfirmScreen() {
                                 <TouchableOpacity
                                     key={idx}
                                     activeOpacity={0.7}
-                                    onPress={() => Linking.openURL(url).catch(() => {})}
+                                    onPress={() => handleOpenLink(url)}
                                     style={[
                                         styles.linkBtn,
                                         {

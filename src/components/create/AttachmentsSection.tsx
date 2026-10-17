@@ -17,7 +17,8 @@ interface AttachmentsSectionProps {
     flat?: boolean;
 }
 
-const isImageUri = (uri: string) => {
+const isImageUri = (uri?: string) => {
+    if (!uri || typeof uri !== 'string') return false;
     const lower = uri.toLowerCase();
     return (
         lower.includes('imagepicker') ||

@@ -71,9 +71,18 @@ export const useCreateReminder = (id?: string, initialDateMs?: number | string) 
         if (!cachedReminder?.attachments) return [];
         try {
             const raw = JSON.parse(cachedReminder.attachments);
-            return Array.isArray(raw)
-                ? raw.map((att: any) => (typeof att === 'string' ? { uri: att, name: att.split('/').pop() || 'Archivo' } : att))
-                : [];
+            if (!Array.isArray(raw)) return [];
+            return raw
+                .filter(Boolean)
+                .map((att: any) => {
+                    if (typeof att === 'string') {
+                        return { uri: att, name: att.split('/').pop() || 'Archivo' };
+                    }
+                    const uri = att?.uri || att?.url || '';
+                    const name = att?.name || (typeof uri === 'string' ? uri.split('/').pop() : '') || 'Archivo';
+                    return { uri, name };
+                })
+                .filter((att: any) => Boolean(att.uri && typeof att.uri === 'string'));
         } catch {
             return [];
         }

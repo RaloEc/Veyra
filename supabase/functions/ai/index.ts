@@ -63,6 +63,7 @@ serve(async (req: Request) => {
     // Permitir tanto usuarios logueados con JWT como llamadas legítimas desde la app con la anon key
     let userId = req.headers.get('x-forwarded-for') || 'client_session';
     const token = authHeader.replace(/^Bearer\s+/i, '').trim();
+    let isOwnerUser = false;
 
     if (token && token !== supabaseAnonKey) {
       try {
@@ -72,14 +73,17 @@ serve(async (req: Request) => {
         const { data: { user } } = await supabase.auth.getUser();
         if (user) {
           userId = user.id;
+          if (user.email?.toLowerCase().trim() === 'ricardo.lopez.18.ralo@gmail.com') {
+            isOwnerUser = true;
+          }
         }
       } catch {
         // En caso de que el token esté expirado o no sea usuario, continúa con userId de IP/session
       }
     }
 
-    // 2. Control de uso y rate limiting
-    if (!checkRateLimit(userId)) {
+    // 2. Control de uso y rate limiting (Owner sin restricciones de cuota)
+    if (!isOwnerUser && !checkRateLimit(userId)) {
       return new Response(JSON.stringify({ error: 'Rate limit exceeded. Please wait a minute.' }), {
         status: 429,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },

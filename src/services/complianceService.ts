@@ -243,8 +243,8 @@ export const ComplianceService = {
             }
         });
 
-        const avgResponseMinutes = responseCount > 0 ? totalResponseMinutes / responseCount : 0;
-        const snoozeRate = total > 0 ? (totalSnoozed / (total + totalSnoozed)) * 100 : 0;
+        const avgResponseMinutes = responseCount > 0 ? Math.round(totalResponseMinutes / responseCount) : 0;
+        const snoozeRate = total > 0 ? Math.round((totalSnoozed / (total + totalSnoozed)) * 100) : 0;
 
         // Average snoozes per reminder
         const snoozePerReminder = await db.getFirstAsync<{ avg_snoozes: number }>(

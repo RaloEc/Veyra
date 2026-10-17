@@ -9,10 +9,10 @@ import {
     Animated,
     Image,
     Easing,
+    useWindowDimensions,
 } from 'react-native';
 import { useRouter, usePathname } from 'expo-router';
 import { useTranslation } from 'react-i18next';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
     Settings,
     BarChart3,
@@ -23,28 +23,48 @@ import {
     Cloud,
     RefreshCw,
     Users,
-    Radio,
 } from '@tamagui/lucide-icons';
 
 import { useStore } from '../../store/useStore';
 import { useVeyraTheme } from '../../theme/useVeyraTheme';
+import { useScreenInsets } from '../../hooks/useScreenInsets';
 
 interface UserProfileDropdownProps {
     isVisible: boolean;
     onClose: () => void;
+    anchor?: 'top' | 'bottom';
+    dockWidth?: number;
+    dockBottomOffset?: number;
 }
 
 /**
- * UserProfileDropdown — Menú flotante accesible y compacto estilo macOS / Apple HIG.
- * Diseñado con zonas táctiles amplias (44px), tipografía clara (14px).
- * El encabezado es la vía de acceso a Mi Perfil.
+ * UserProfileDropdown — Menú de usuario One UI anclado que emerge fluidamente
+ * desde la barra inferior con su mismo ancho y reposa justo por encima sin taparla.
  */
-export function UserProfileDropdown({ isVisible, onClose }: UserProfileDropdownProps) {
+export function UserProfileDropdown({
+    isVisible,
+    onClose,
+    anchor = 'bottom',
+    dockWidth,
+    dockBottomOffset,
+}: UserProfileDropdownProps) {
     const router = useRouter();
     const pathname = usePathname();
-    const insets = useSafeAreaInsets();
-    const { t } = useTranslation();
+    const { width: windowWidth } = useWindowDimensions();
+    const { bottom: bottomInset, top: topInset } = useScreenInsets();
     const { colors, accent, isDark } = useVeyraTheme();
+    const { t } = useTranslation();
+
+    const isBottom = anchor === 'bottom';
+    // Comienza 60px abajo (a la altura del dock) para emerger deslizándose hacia arriba
+    const initialTranslateY = isBottom ? 60 : -30;
+
+    // Dimensiones idénticas y sincronizadas con la barra inferior
+    const resolvedDockWidth = dockWidth || Math.min(windowWidth * 0.94, 380);
+    const resolvedDockBottomOffset = dockBottomOffset ?? Math.max(bottomInset + 20, 32);
+    const dockHeight = 56;
+    // Reposa 10px justo arriba del dock, sin taparlo en ningún momento
+    const cardBottom = resolvedDockBottomOffset + dockHeight + 10;
 
     const session = useStore(state => state.session);
     const userName = useStore(state => state.userName);
@@ -58,8 +78,8 @@ export function UserProfileDropdown({ isVisible, onClose }: UserProfileDropdownP
 
     const [renderModal, setRenderModal] = React.useState(isVisible);
     const fadeAnim = useRef(new Animated.Value(0)).current;
-    const scaleAnim = useRef(new Animated.Value(0.92)).current;
-    const translateYAnim = useRef(new Animated.Value(-6)).current;
+    const scaleAnim = useRef(new Animated.Value(0.96)).current;
+    const translateYAnim = useRef(new Animated.Value(initialTranslateY)).current;
     const spinAnim = useRef(new Animated.Value(0)).current;
 
     useEffect(() => {
@@ -91,22 +111,27 @@ export function UserProfileDropdown({ isVisible, onClose }: UserProfileDropdownP
     useEffect(() => {
         if (isVisible) {
             setRenderModal(true);
+            fadeAnim.setValue(0);
+            scaleAnim.setValue(0.96);
+            translateYAnim.setValue(initialTranslateY);
+
             Animated.parallel([
                 Animated.timing(fadeAnim, {
                     toValue: 1,
-                    duration: 140,
-                    useNativeDriver: true,
-                }),
-                Animated.spring(scaleAnim, {
-                    toValue: 1,
-                    tension: 100,
-                    friction: 8,
+                    duration: 200,
+                    easing: Easing.out(Easing.cubic),
                     useNativeDriver: true,
                 }),
                 Animated.spring(translateYAnim, {
                     toValue: 0,
-                    tension: 100,
-                    friction: 8,
+                    tension: 110,
+                    friction: 8.5,
+                    useNativeDriver: true,
+                }),
+                Animated.timing(scaleAnim, {
+                    toValue: 1,
+                    duration: 200,
+                    easing: Easing.out(Easing.cubic),
                     useNativeDriver: true,
                 }),
             ]).start();
@@ -114,24 +139,27 @@ export function UserProfileDropdown({ isVisible, onClose }: UserProfileDropdownP
             Animated.parallel([
                 Animated.timing(fadeAnim, {
                     toValue: 0,
-                    duration: 100,
+                    duration: 140,
+                    easing: Easing.in(Easing.cubic),
                     useNativeDriver: true,
                 }),
                 Animated.timing(scaleAnim, {
-                    toValue: 0.94,
-                    duration: 100,
+                    toValue: 0.96,
+                    duration: 140,
+                    easing: Easing.in(Easing.cubic),
                     useNativeDriver: true,
                 }),
                 Animated.timing(translateYAnim, {
-                    toValue: -6,
-                    duration: 100,
+                    toValue: initialTranslateY,
+                    duration: 140,
+                    easing: Easing.in(Easing.cubic),
                     useNativeDriver: true,
                 }),
             ]).start(() => {
                 setRenderModal(false);
             });
         }
-    }, [isVisible]);
+    }, [isVisible, initialTranslateY]);
 
     const cleanUserName = useMemo(() => {
         const rawName = userName || session?.user?.user_metadata?.full_name || session?.user?.user_metadata?.name;
@@ -174,13 +202,6 @@ export function UserProfileDropdown({ isVisible, onClose }: UserProfileDropdownP
             bg: isDark ? 'rgba(139, 92, 246, 0.16)' : 'rgba(139, 92, 246, 0.12)',
         },
         {
-            icon: Radio,
-            label: 'PoC Colaboración Yjs',
-            route: '/poc-yjs',
-            color: '#10B981',
-            bg: isDark ? 'rgba(16, 185, 129, 0.16)' : 'rgba(16, 185, 129, 0.12)',
-        },
-        {
             icon: BarChart3,
             label: t('menu.stats', { defaultValue: 'Estadísticas' }),
             route: '/stats',
@@ -198,7 +219,13 @@ export function UserProfileDropdown({ isVisible, onClose }: UserProfileDropdownP
 
     if (!renderModal) return null;
 
-    const topPosition = Math.max(insets.top, 12) + 44;
+    const cardVerticalPosition = isBottom
+        ? { bottom: cardBottom }
+        : { top: Math.max(topInset, 12) + 44 };
+
+    // Mismo material cromático y textura que el Dock One UI
+    const cardBg = isDark ? '#202227' : '#FFFFFF';
+    const cardBorder = isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.06)';
 
     return (
         <Modal
@@ -209,25 +236,31 @@ export function UserProfileDropdown({ isVisible, onClose }: UserProfileDropdownP
             statusBarTranslucent
         >
             <View style={styles.modalRoot}>
-                {/* Backdrop sutil para capturar toque fuera */}
+                {/* Backdrop: pulsación fuera cierra el menú. El dimming cubre suavemente la app sin tapar la barra inferior */}
                 <TouchableWithoutFeedback onPress={onClose}>
-                    <View
-                        style={[
-                            styles.backdrop,
-                            { backgroundColor: isDark ? 'rgba(0, 0, 0, 0.35)' : 'rgba(0, 0, 0, 0.10)' },
-                        ]}
-                    />
+                    <View style={StyleSheet.absoluteFill}>
+                        <Animated.View
+                            style={[
+                                styles.backdropFill,
+                                {
+                                    opacity: fadeAnim,
+                                    bottom: isBottom ? resolvedDockBottomOffset - 4 : 0,
+                                    backgroundColor: isDark ? 'rgba(0, 0, 0, 0.38)' : 'rgba(0, 0, 0, 0.14)',
+                                },
+                            ]}
+                        />
+                    </View>
                 </TouchableWithoutFeedback>
 
-                {/* Dropdown Card anclada bajo el avatar */}
+                {/* Dropdown Card con ancho exacto de la barra inferior, deslizándose hacia arriba sobre ella */}
                 <Animated.View
                     style={[
                         styles.dropdownCard,
+                        cardVerticalPosition,
                         {
-                            top: topPosition,
-                            backgroundColor: colors.bg,
-                            borderColor: colors.borderMedium,
-                            shadowOpacity: isDark ? 0.35 : 0.12,
+                            width: resolvedDockWidth,
+                            backgroundColor: cardBg,
+                            borderColor: cardBorder,
                             opacity: fadeAnim,
                             transform: [
                                 { translateY: translateYAnim },
@@ -236,7 +269,7 @@ export function UserProfileDropdown({ isVisible, onClose }: UserProfileDropdownP
                         },
                     ]}
                 >
-                    {/* 1. Header de perfil de usuario (Al tocarlo navega a /profile) */}
+                    {/* 1. Header de perfil de usuario */}
                     <TouchableOpacity
                         activeOpacity={0.7}
                         onPress={() => handleNavigate('/profile')}
@@ -290,9 +323,9 @@ export function UserProfileDropdown({ isVisible, onClose }: UserProfileDropdownP
                         <ChevronRight size={16} color={colors.textMuted as any} />
                     </TouchableOpacity>
 
-                    <View style={[styles.divider, { backgroundColor: colors.borderSubtle }]} />
+                    <View style={[styles.divider, { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.06)' : 'rgba(0, 0, 0, 0.05)' }]} />
 
-                    {/* Indicador compacto de Sincronización */}
+                    {/* Indicador de Sincronización si hay sesión activa */}
                     {session ? (
                         <>
                             <View style={[styles.syncCompactRow, { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.04)' : 'rgba(0, 0, 0, 0.025)' }]}>
@@ -329,11 +362,11 @@ export function UserProfileDropdown({ isVisible, onClose }: UserProfileDropdownP
                                     </Animated.View>
                                 </TouchableOpacity>
                             </View>
-                            <View style={[styles.divider, { backgroundColor: colors.borderSubtle }]} />
+                            <View style={[styles.divider, { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.06)' : 'rgba(0, 0, 0, 0.05)' }]} />
                         </>
                     ) : null}
 
-                    {/* 2. Lista de acciones principales (altura ergonómica de 44px) */}
+                    {/* 2. Lista de acciones principales con botones de altura One UI */}
                     <View style={styles.menuList}>
                         {menuItems.map((item) => {
                             const Icon = item.icon;
@@ -377,7 +410,7 @@ export function UserProfileDropdown({ isVisible, onClose }: UserProfileDropdownP
                         })}
                     </View>
 
-                    <View style={[styles.divider, { backgroundColor: colors.borderSubtle }]} />
+                    <View style={[styles.divider, { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.06)' : 'rgba(0, 0, 0, 0.05)' }]} />
 
                     {/* 3. Pie de sesión (Cerrar sesión / Iniciar sesión) */}
                     {session ? (
@@ -445,26 +478,23 @@ export function UserProfileDropdown({ isVisible, onClose }: UserProfileDropdownP
 const styles = StyleSheet.create({
     modalRoot: {
         flex: 1,
+        alignItems: 'center',
     },
-    backdrop: {
+    backdropFill: {
         position: 'absolute',
         top: 0,
         left: 0,
         right: 0,
-        bottom: 0,
-        backgroundColor: 'rgba(0, 0, 0, 0.10)',
     },
     dropdownCard: {
         position: 'absolute',
-        right: 16,
-        width: 254,
-        borderRadius: 16,
+        borderRadius: 24,
         borderWidth: 1,
-        padding: 7,
+        padding: 8,
         shadowColor: '#000000',
-        shadowOffset: { width: 0, height: 8 },
+        shadowOffset: { width: 0, height: 10 },
         shadowOpacity: 0.22,
-        shadowRadius: 18,
+        shadowRadius: 22,
         elevation: 14,
     },
     profileHeaderRow: {
@@ -472,13 +502,13 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         paddingVertical: 8,
         paddingHorizontal: 8,
-        gap: 11,
-        borderRadius: 12,
+        gap: 12,
+        borderRadius: 14,
     },
     avatarMini: {
-        width: 38,
-        height: 38,
-        borderRadius: 19,
+        width: 40,
+        height: 40,
+        borderRadius: 20,
         alignItems: 'center',
         justifyContent: 'center',
         overflow: 'hidden',
@@ -502,7 +532,7 @@ const styles = StyleSheet.create({
         gap: 6,
     },
     profileNameText: {
-        fontSize: 14.5,
+        fontSize: 15,
         fontWeight: '700',
         letterSpacing: -0.2,
     },
@@ -526,18 +556,13 @@ const styles = StyleSheet.create({
         gap: 5,
     },
     profileEmailText: {
-        fontSize: 11.5,
+        fontSize: 12,
         fontWeight: '500',
-        maxWidth: 140,
-    },
-    syncMiniDot: {
-        width: 6,
-        height: 6,
-        borderRadius: 3,
+        maxWidth: 220,
     },
     divider: {
         height: 1,
-        marginVertical: 5,
+        marginVertical: 4,
         marginHorizontal: 4,
     },
     menuList: {
@@ -548,8 +573,8 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         justifyContent: 'space-between',
         paddingVertical: 9,
-        paddingHorizontal: 8,
-        borderRadius: 10,
+        paddingHorizontal: 9,
+        borderRadius: 12,
         minHeight: 44,
     },
     itemLeft: {
@@ -559,14 +584,14 @@ const styles = StyleSheet.create({
         flex: 1,
     },
     iconBox: {
-        width: 30,
-        height: 30,
-        borderRadius: 8,
+        width: 32,
+        height: 32,
+        borderRadius: 9,
         alignItems: 'center',
         justifyContent: 'center',
     },
     itemLabel: {
-        fontSize: 14,
+        fontSize: 14.5,
         letterSpacing: -0.15,
     },
     logoutRow: {
@@ -580,7 +605,7 @@ const styles = StyleSheet.create({
         paddingHorizontal: 9,
         marginHorizontal: 4,
         marginVertical: 2,
-        borderRadius: 8,
+        borderRadius: 10,
     },
     syncCompactLeft: {
         flexDirection: 'row',

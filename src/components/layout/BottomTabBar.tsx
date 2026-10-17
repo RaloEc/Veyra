@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import {
     View,
     Text,
@@ -44,7 +44,7 @@ import Animated, {
     Extrapolation,
     runOnJS,
 } from 'react-native-reanimated';
-import { useRouter, usePathname } from 'expo-router';
+import { useRouter, usePathname, useFocusEffect } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import {
     Bell,
@@ -73,6 +73,8 @@ import {
     FileText,
     Trash2,
     Folder as FolderIcon,
+    User,
+    Search,
 } from '@tamagui/lucide-icons';
 
 import { useScreenInsets } from '../../hooks/useScreenInsets';
@@ -85,6 +87,7 @@ import { useVeyraTheme } from '../../theme/useVeyraTheme';
 import { useAIQuickAdd } from '../../hooks/useAIQuickAdd';
 import { AIActionProposal, ReminderIntent, EventIntent, NoteIntent } from '../../lib/ai/schemas';
 import { CustomDateTimePicker } from '../CustomDateTimePicker';
+import { UserMenuMorphCard } from './UserMenuMorphCard';
 
 /**
  * BottomTabBar — Barra de navegación inferior flotante inspirada en Samsung One UI.
@@ -186,10 +189,45 @@ function BottomTabBarComponent() {
     const language = useStore(state => state.language);
     const mainActiveTab = useStore(state => state.mainActiveTab);
     const setMainActiveTab = useStore(state => state.setMainActiveTab);
+    const session = useStore(state => state.session);
+    const userName = useStore(state => state.userName);
+    const isSyncing = useStore(state => state.isSyncing);
+    const syncError = useStore(state => state.syncError);
 
+    // Estado del menú desplegable del Avatar anclado abajo
+    const [isMenuOpen, setIsMenuOpen] = useState(false);
+
+    // Detección de rutas para las pestañas
     const isRouteNotes = pathname.startsWith('/notes');
-    const isNotesActive = mainActiveTab === 'notes' || isRouteNotes;
-    const isRemindersActive = !isNotesActive;
+    const isRouteSearch = pathname.startsWith('/search');
+    const isRouteProfileOrSettings = pathname.startsWith('/profile') || pathname.startsWith('/settings');
+
+    const isSearchActive = isRouteSearch;
+    const isAvatarActive = isMenuOpen || isRouteProfileOrSettings;
+    const isNotesActive = !isRouteSearch && !isRouteProfileOrSettings && (mainActiveTab === 'notes' || isRouteNotes);
+    const isRemindersActive = !isRouteSearch && !isRouteProfileOrSettings && !isNotesActive;
+
+    // Datos del usuario para el avatar inferior
+    const cleanUserName = useMemo(() => {
+        const rawName = userName || session?.user?.user_metadata?.full_name || session?.user?.user_metadata?.name;
+        if (!rawName) return null;
+        const trimmed = rawName.trim();
+        return trimmed ? trimmed.split(' ')[0] : null;
+    }, [userName, session]);
+
+    const displayName = cleanUserName
+        ? (userName || session?.user?.user_metadata?.full_name || session?.user?.user_metadata?.name)
+        : t('menu.profiles.default', { defaultValue: 'Usuario' });
+
+    const avatarUrl = session?.user?.user_metadata?.avatar_url;
+
+    // Dot de estado de sincronización en el avatar
+    const avatarDotColor = useMemo(() => {
+        if (!session) return colors.textMuted;
+        if (isSyncing) return '#3B82F6';
+        if (syncError) return '#EF4444';
+        return '#10B981';
+    }, [session, isSyncing, syncError, colors.textMuted]);
 
     // Detección contextual de carpeta activa en notas
     const folderStack = useFoldersStore((state) => state.folderStack);
@@ -227,6 +265,14 @@ function BottomTabBarComponent() {
     const shareEventsList = shareEventsState.events || [];
     const shareRemindersList = shareEventsState.reminders || [];
     const shareMorphProgress = useSharedValue(0);
+
+    // Estado del modo Menú de Usuario (Morph del Dock)
+    const menuMorphProgress = useSharedValue(0);
+    const isMenuOpenShared = useSharedValue(false);
+
+    useEffect(() => {
+        isMenuOpenShared.value = isMenuOpen;
+    }, [isMenuOpen]);
 
     // Estado del modo Creación (Morph del Dock)
     const [isCreating, setIsCreating] = useState(false);
@@ -362,13 +408,19 @@ function BottomTabBarComponent() {
     const backdropOpacity = useSharedValue(0);
 
     const { width: screenWidth, height: screenHeight } = useWindowDimensions();
-    const normalDockWidth = Math.min(screenWidth * 0.9, 330);
+    const normalDockWidth = Math.min(screenWidth * 0.94, 380);
     const morphedDockWidth = Math.min(screenWidth - 20, 440);
     const maxDockHeight = Math.min(screenHeight - bottomOffset - 36, screenHeight * 0.82);
 
     const bellScale = useSharedValue(1);
+    const searchScale = useSharedValue(1);
     const notesScale = useSharedValue(1);
-    const activeTabProgress = useSharedValue(isNotesActive ? 1 : 0);
+    const avatarScale = useSharedValue(1);
+
+    const remindersActiveProgress = useSharedValue(isRemindersActive ? 1 : 0);
+    const searchActiveProgress = useSharedValue(isSearchActive ? 1 : 0);
+    const notesActiveProgress = useSharedValue(isNotesActive ? 1 : 0);
+    const avatarActiveProgress = useSharedValue(isAvatarActive ? 1 : 0);
     const isInitialMount = useRef(true);
 
     // Sincronizar selección múltiple
@@ -483,28 +535,67 @@ function BottomTabBarComponent() {
         };
     }, []);
 
-    // Sincronizar tab activo
+    // Resetear el desplazamiento del teclado si la pantalla recupera el foco o se navega fuera
+    const resetKeyboardOffset = useCallback((immediate = false) => {
+        isKeyboardVisibleRef.current = false;
+        if (immediate) {
+            keyboardOffset.value = 0;
+        } else {
+            keyboardOffset.value = withTiming(0, {
+                duration: 180,
+                easing: Easing.out(Easing.cubic),
+            });
+        }
+    }, [keyboardOffset]);
+
+    useFocusEffect(
+        useCallback(() => {
+            // Al volver de otra pantalla (ej. de una nota al buscador)
+            // Si el teclado nativo ya no está visible, resetear el dock al fondo de inmediato
+            const isVisible = typeof Keyboard.isVisible === 'function' ? Keyboard.isVisible() : false;
+            if (!isVisible) {
+                resetKeyboardOffset(true);
+            }
+
+            return () => {
+                // Al salir de la pantalla (blur)
+                resetKeyboardOffset(true);
+            };
+        }, [resetKeyboardOffset])
+    );
+
+    // Sincronizar tabs activos
     useEffect(() => {
         if (isInitialMount.current) {
             isInitialMount.current = false;
-            activeTabProgress.value = isNotesActive ? 1 : 0;
+            remindersActiveProgress.value = isRemindersActive ? 1 : 0;
+            searchActiveProgress.value = isSearchActive ? 1 : 0;
+            notesActiveProgress.value = isNotesActive ? 1 : 0;
+            avatarActiveProgress.value = isAvatarActive ? 1 : 0;
             return;
         }
 
-        activeTabProgress.value = withSpring(isNotesActive ? 1 : 0, {
+        remindersActiveProgress.value = withSpring(isRemindersActive ? 1 : 0, {
             damping: 18,
             stiffness: 220,
             mass: 0.8,
         });
-
-        if (isNotesActive) {
-            notesScale.value = 0.88;
-            notesScale.value = withSpring(1, { damping: 12, stiffness: 280 });
-        } else {
-            bellScale.value = 0.88;
-            bellScale.value = withSpring(1, { damping: 12, stiffness: 280 });
-        }
-    }, [isNotesActive]);
+        searchActiveProgress.value = withSpring(isSearchActive ? 1 : 0, {
+            damping: 18,
+            stiffness: 220,
+            mass: 0.8,
+        });
+        notesActiveProgress.value = withSpring(isNotesActive ? 1 : 0, {
+            damping: 18,
+            stiffness: 220,
+            mass: 0.8,
+        });
+        avatarActiveProgress.value = withSpring(isAvatarActive ? 1 : 0, {
+            damping: 18,
+            stiffness: 220,
+            mass: 0.8,
+        });
+    }, [isRemindersActive, isSearchActive, isNotesActive, isAvatarActive]);
 
     // Estilos animados
     const fabAnimatedStyle = useAnimatedStyle(() => ({
@@ -528,24 +619,50 @@ function BottomTabBarComponent() {
         transform: [{ scale: bellScale.value }],
     }));
 
+    const searchAnimatedStyle = useAnimatedStyle(() => ({
+        transform: [{ scale: searchScale.value }],
+    }));
+
     const notesAnimatedStyle = useAnimatedStyle(() => ({
         transform: [{ scale: notesScale.value }],
     }));
 
+    const avatarAnimatedStyle = useAnimatedStyle(() => ({
+        transform: [{ scale: avatarScale.value }],
+    }));
+
     const bellPillStyle = useAnimatedStyle(() => ({
-        opacity: interpolate(activeTabProgress.value, [0, 1], [1, 0], Extrapolation.CLAMP),
+        opacity: remindersActiveProgress.value,
         transform: [
             {
-                scale: interpolate(activeTabProgress.value, [0, 1], [1, 0.75], Extrapolation.CLAMP),
+                scale: interpolate(remindersActiveProgress.value, [0, 1], [0.75, 1], Extrapolation.CLAMP),
+            },
+        ],
+    }));
+
+    const searchPillStyle = useAnimatedStyle(() => ({
+        opacity: searchActiveProgress.value,
+        transform: [
+            {
+                scale: interpolate(searchActiveProgress.value, [0, 1], [0.75, 1], Extrapolation.CLAMP),
             },
         ],
     }));
 
     const notesPillStyle = useAnimatedStyle(() => ({
-        opacity: interpolate(activeTabProgress.value, [0, 1], [0, 1], Extrapolation.CLAMP),
+        opacity: notesActiveProgress.value,
         transform: [
             {
-                scale: interpolate(activeTabProgress.value, [0, 1], [0.75, 1], Extrapolation.CLAMP),
+                scale: interpolate(notesActiveProgress.value, [0, 1], [0.75, 1], Extrapolation.CLAMP),
+            },
+        ],
+    }));
+
+    const avatarPillStyle = useAnimatedStyle(() => ({
+        opacity: avatarActiveProgress.value,
+        transform: [
+            {
+                scale: interpolate(avatarActiveProgress.value, [0, 1], [0.75, 1], Extrapolation.CLAMP),
             },
         ],
     }));
@@ -601,22 +718,27 @@ function BottomTabBarComponent() {
         const pSel = morphProgress.value;
         const pCreate = createMorphProgress.value;
         const pShare = shareMorphProgress.value;
+        const pMenu = menuMorphProgress.value;
 
         // Ancho
         const widthCreate = interpolate(pCreate, [0, 1], [normalDockWidth, morphedDockWidth], Extrapolation.CLAMP);
         const widthSel = interpolate(pSel, [0, 1], [widthCreate, morphedDockWidth], Extrapolation.CLAMP);
-        const finalWidth = interpolate(pShare, [0, 1], [widthSel, morphedDockWidth], Extrapolation.CLAMP);
+        const widthShare = interpolate(pShare, [0, 1], [widthSel, morphedDockWidth], Extrapolation.CLAMP);
+        const finalWidth = interpolate(pMenu, [0, 1], [widthShare, morphedDockWidth], Extrapolation.CLAMP);
 
         // Alto
         const shareCardHeight = Math.min(screenHeight - bottomOffset - 36, 400);
+        const menuCardHeight = Math.min(screenHeight - bottomOffset - 36, session ? 334 : 310);
         const heightCreate = interpolate(pCreate, [0, 1], [56, createHeightShared.value], Extrapolation.CLAMP);
         const heightSel = interpolate(pSel, [0, 1], [heightCreate, 108], Extrapolation.CLAMP);
-        const finalHeight = interpolate(pShare, [0, 1], [heightSel, shareCardHeight], Extrapolation.CLAMP);
+        const heightShare = interpolate(pShare, [0, 1], [heightSel, shareCardHeight], Extrapolation.CLAMP);
+        const finalHeight = interpolate(pMenu, [0, 1], [heightShare, menuCardHeight], Extrapolation.CLAMP);
 
         // Radio de borde
         const radiusCreate = interpolate(pCreate, [0, 1], [28, 22], Extrapolation.CLAMP);
         const radiusSel = interpolate(pSel, [0, 1], [radiusCreate, 22], Extrapolation.CLAMP);
-        const finalRadius = interpolate(pShare, [0, 1], [radiusSel, 24], Extrapolation.CLAMP);
+        const radiusShare = interpolate(pShare, [0, 1], [radiusSel, 24], Extrapolation.CLAMP);
+        const finalRadius = interpolate(pMenu, [0, 1], [radiusShare, 24], Extrapolation.CLAMP);
 
         return {
             width: finalWidth,
@@ -627,8 +749,8 @@ function BottomTabBarComponent() {
 
     // Navegación normal (Tabs)
     const normalTabsAnimatedStyle = useAnimatedStyle(() => {
-        const p = Math.max(morphProgress.value, createMorphProgress.value, shareMorphProgress.value);
-        const shouldHide = p >= 0.35 || isCreatingShared.value || isSharingEvents;
+        const p = Math.max(morphProgress.value, createMorphProgress.value, shareMorphProgress.value, menuMorphProgress.value);
+        const shouldHide = p >= 0.35 || isCreatingShared.value || isSharingEvents || isMenuOpenShared.value;
         return {
             opacity: interpolate(p, [0, 0.35], [1, 0], Extrapolation.CLAMP),
             display: shouldHide ? 'none' : 'flex',
@@ -668,6 +790,21 @@ function BottomTabBarComponent() {
         };
     });
 
+    // Tarjeta de Menú de Usuario Morpheada
+    const menuCardAnimatedStyle = useAnimatedStyle(() => {
+        const p = menuMorphProgress.value;
+        const isVisible = p > 0.05 || isMenuOpenShared.value;
+        return {
+            opacity: interpolate(p, [0.25, 1], [0, 1], Extrapolation.CLAMP),
+            display: isVisible ? 'flex' : 'none',
+            zIndex: isVisible ? 14 : -1,
+            transform: [
+                { scale: interpolate(p, [0.25, 1], [0.93, 1], Extrapolation.CLAMP) },
+                { translateY: interpolate(p, [0.25, 1], [8, 0], Extrapolation.CLAMP) },
+            ],
+        };
+    });
+
     // Tarjeta de Creación Morpheada
     const createCardAnimatedStyle = useAnimatedStyle(() => {
         const p = createMorphProgress.value;
@@ -694,8 +831,28 @@ function BottomTabBarComponent() {
         fabScale.value = withSpring(1, { damping: 12, stiffness: 200 });
     };
 
+    const openMenu = () => {
+        if (isSelecting) return;
+        if (isCreating) closeCreate();
+        if (isSharingEvents) useShareEventsStore.getState().closeShare();
+        isMenuOpenShared.value = true;
+        setIsMenuOpen(true);
+        menuMorphProgress.value = withSpring(1, { damping: 19, stiffness: 220, mass: 0.8 });
+        backdropOpacity.value = withTiming(1, { duration: 180, easing: Easing.out(Easing.cubic) });
+    };
+
+    const closeMenu = () => {
+        isMenuOpenShared.value = false;
+        setIsMenuOpen(false);
+        menuMorphProgress.value = withSpring(0, { damping: 20, stiffness: 240, mass: 0.8 });
+        if (!isCreating && !isSharingEvents) {
+            backdropOpacity.value = withTiming(0, { duration: 160, easing: Easing.in(Easing.cubic) });
+        }
+    };
+
     const openCreate = () => {
         if (isSelecting) return;
+        if (isMenuOpen) closeMenu();
         isCreatingShared.value = true;
         setIsCreating(true);
         createMorphProgress.value = withSpring(1, { damping: 19, stiffness: 220, mass: 0.8 });
@@ -1552,32 +1709,45 @@ function BottomTabBarComponent() {
     };
 
     const handleTabReminders = () => {
+        if (isCreating) closeCreate();
+        if (isMenuOpen) closeMenu();
+        bellScale.value = 0.88;
+        bellScale.value = withSpring(1, { damping: 12, stiffness: 280 });
         if (!isRemindersActive) {
-            activeTabProgress.value = withSpring(0, {
-                damping: 20,
-                stiffness: 260,
-                mass: 0.7,
-            });
-            bellScale.value = 0.88;
-            bellScale.value = withSpring(1, { damping: 12, stiffness: 280 });
-            if (isCreating) closeCreate();
             setMainActiveTab('reminders');
             if (pathname !== '/') router.replace('/');
         }
     };
 
+    const handleTabSearch = () => {
+        if (isCreating) closeCreate();
+        if (isMenuOpen) closeMenu();
+        searchScale.value = 0.88;
+        searchScale.value = withSpring(1, { damping: 12, stiffness: 280 });
+        if (!isSearchActive) {
+            if (pathname !== '/search') router.push('/search' as any);
+        }
+    };
+
     const handleTabNotes = () => {
+        if (isCreating) closeCreate();
+        if (isMenuOpen) closeMenu();
+        notesScale.value = 0.88;
+        notesScale.value = withSpring(1, { damping: 12, stiffness: 280 });
         if (!isNotesActive) {
-            activeTabProgress.value = withSpring(1, {
-                damping: 20,
-                stiffness: 260,
-                mass: 0.7,
-            });
-            notesScale.value = 0.88;
-            notesScale.value = withSpring(1, { damping: 12, stiffness: 280 });
-            if (isCreating) closeCreate();
             setMainActiveTab('notes');
             if (pathname !== '/') router.replace('/');
+        }
+    };
+
+    const handleTabAvatar = () => {
+        if (isCreating) closeCreate();
+        avatarScale.value = 0.88;
+        avatarScale.value = withSpring(1, { damping: 12, stiffness: 280 });
+        if (isMenuOpen) {
+            closeMenu();
+        } else {
+            openMenu();
         }
     };
 
@@ -2369,13 +2539,15 @@ function BottomTabBarComponent() {
     return (
         <>
             {/* Backdrop oscuro translúcido para cerrar al pulsar fuera */}
-            {(isCreating || isSharingEvents) && (
+            {(isCreating || isSharingEvents || isMenuOpen) && (
                 <TouchableWithoutFeedback
                     onPress={() => {
                         if (isSharingEvents) {
                             useShareEventsStore.getState().closeShare();
                         } else if (isCreating && !isLoading) {
                             closeCreate();
+                        } else if (isMenuOpen) {
+                            closeMenu();
                         }
                     }}
                 >
@@ -2412,16 +2584,16 @@ function BottomTabBarComponent() {
                         style={[
                             styles.normalNavRow,
                             normalTabsAnimatedStyle,
-                            (isCreating || Boolean(proposal)) && styles.normalNavRowHidden,
+                            (isCreating || Boolean(proposal) || isMenuOpen) && styles.normalNavRowHidden,
                         ]}
-                        pointerEvents={isSelecting || isCreating || Boolean(proposal) ? 'none' : 'auto'}
+                        pointerEvents={isSelecting || isCreating || Boolean(proposal) || isMenuOpen ? 'none' : 'auto'}
                     >
-                        {/* Tab Recordatorios */}
+                        {/* 1. Tab Recordatorios */}
                         <TouchableOpacity
                             activeOpacity={0.75}
                             onPress={handleTabReminders}
                             style={styles.tabButton}
-                            hitSlop={{ top: 8, bottom: 8, left: 10, right: 10 }}
+                            hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
                         >
                             <View style={styles.iconContainer}>
                                 <Animated.View
@@ -2453,7 +2625,44 @@ function BottomTabBarComponent() {
                             </Text>
                         </TouchableOpacity>
 
-                        {/* Botón Central Hero (+) */}
+                        {/* 2. Tab Búsqueda Global */}
+                        <TouchableOpacity
+                            activeOpacity={0.75}
+                            onPress={handleTabSearch}
+                            style={styles.tabButton}
+                            hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+                        >
+                            <View style={styles.iconContainer}>
+                                <Animated.View
+                                    style={[
+                                        styles.tabActivePill,
+                                        { backgroundColor: activePillBg },
+                                        searchPillStyle,
+                                    ]}
+                                />
+                                <Animated.View style={searchAnimatedStyle}>
+                                    <Search
+                                        size={19}
+                                        color={isSearchActive ? (accent.primary as any) : (colors.textMuted as any)}
+                                        strokeWidth={isSearchActive ? 2.5 : 2}
+                                    />
+                                </Animated.View>
+                            </View>
+                            <Text
+                                style={[
+                                    styles.tabLabel,
+                                    {
+                                        color: isSearchActive ? colors.textPrimary : colors.textMuted,
+                                        fontWeight: isSearchActive ? '700' : '500',
+                                    },
+                                ]}
+                                numberOfLines={1}
+                            >
+                                {language === 'es' ? 'Buscar' : 'Search'}
+                            </Text>
+                        </TouchableOpacity>
+
+                        {/* 3. Botón Central Hero (+) */}
                         <Animated.View style={fabAnimatedStyle}>
                             <TouchableOpacity
                                 activeOpacity={0.85}
@@ -2462,7 +2671,7 @@ function BottomTabBarComponent() {
                                 onPressIn={handleFabPressIn}
                                 onPressOut={handleFabPressOut}
                                 style={styles.centerButton}
-                                hitSlop={{ top: 10, bottom: 8, left: 12, right: 12 }}
+                                hitSlop={{ top: 10, bottom: 8, left: 10, right: 10 }}
                             >
                                 <View
                                     style={[
@@ -2498,12 +2707,12 @@ function BottomTabBarComponent() {
                             </TouchableOpacity>
                         </Animated.View>
 
-                        {/* Tab Notas */}
+                        {/* 4. Tab Notas */}
                         <TouchableOpacity
                             activeOpacity={0.75}
                             onPress={handleTabNotes}
                             style={styles.tabButton}
-                            hitSlop={{ top: 8, bottom: 8, left: 10, right: 10 }}
+                            hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
                         >
                             <View style={styles.iconContainer}>
                                 <Animated.View
@@ -2532,6 +2741,82 @@ function BottomTabBarComponent() {
                                 numberOfLines={1}
                             >
                                 {language === 'es' ? 'Notas' : 'Notes'}
+                            </Text>
+                        </TouchableOpacity>
+
+                        {/* 5. Tab Perfil / Avatar */}
+                        <TouchableOpacity
+                            activeOpacity={0.75}
+                            onPress={handleTabAvatar}
+                            style={styles.tabButton}
+                            hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+                        >
+                            <View style={styles.iconContainer}>
+                                <Animated.View
+                                    style={[
+                                        styles.tabActivePill,
+                                        { backgroundColor: activePillBg },
+                                        avatarPillStyle,
+                                    ]}
+                                />
+                                <Animated.View style={avatarAnimatedStyle}>
+                                    <View style={styles.tabAvatarWrap}>
+                                        {avatarUrl ? (
+                                            <RNImage source={{ uri: avatarUrl }} style={styles.tabAvatarImg} />
+                                        ) : (
+                                            <View
+                                                style={[
+                                                    styles.tabAvatarFallback,
+                                                    {
+                                                        backgroundColor: isAvatarActive
+                                                            ? accent.primary
+                                                            : (isDark ? 'rgba(255, 255, 255, 0.12)' : 'rgba(0, 0, 0, 0.08)'),
+                                                    },
+                                                ]}
+                                            >
+                                                {cleanUserName ? (
+                                                    <Text
+                                                        style={[
+                                                            styles.tabAvatarInitial,
+                                                            { color: isAvatarActive ? '#FFFFFF' : colors.textPrimary },
+                                                        ]}
+                                                    >
+                                                        {cleanUserName.charAt(0).toUpperCase()}
+                                                    </Text>
+                                                ) : (
+                                                    <User
+                                                        size={13}
+                                                        color={isAvatarActive ? '#FFFFFF' : (colors.textSecondary as any)}
+                                                        strokeWidth={2.4}
+                                                    />
+                                                )}
+                                            </View>
+                                        )}
+
+                                        {/* Dot indicador de sincronización en vivo */}
+                                        <View
+                                            style={[
+                                                styles.tabAvatarStatusDot,
+                                                {
+                                                    backgroundColor: avatarDotColor,
+                                                    borderColor: dockBg,
+                                                },
+                                            ]}
+                                        />
+                                    </View>
+                                </Animated.View>
+                            </View>
+                            <Text
+                                style={[
+                                    styles.tabLabel,
+                                    {
+                                        color: isAvatarActive ? colors.textPrimary : colors.textMuted,
+                                        fontWeight: isAvatarActive ? '700' : '500',
+                                    },
+                                ]}
+                                numberOfLines={1}
+                            >
+                                {language === 'es' ? 'Perfil' : 'Profile'}
                             </Text>
                         </TouchableOpacity>
                     </Animated.View>
@@ -3425,6 +3710,16 @@ function BottomTabBarComponent() {
                             onSuccess={() => useShareEventsStore.getState().notifySuccess()}
                         />
                     </Animated.View>
+
+                    {/* Capa 5: Tarjeta de Menú de Usuario Morpheada */}
+                    <Animated.View
+                        style={[StyleSheet.absoluteFill, styles.userMenuContentContainer, menuCardAnimatedStyle]}
+                        pointerEvents={isMenuOpen ? 'auto' : 'none'}
+                    >
+                        <UserMenuMorphCard
+                            onClose={closeMenu}
+                        />
+                    </Animated.View>
                 </Animated.View>
             </Animated.View>
 
@@ -3475,7 +3770,7 @@ const styles = StyleSheet.create({
         justifyContent: 'space-between',
         width: '100%',
         height: 56,
-        paddingHorizontal: 14,
+        paddingHorizontal: 8,
     },
     normalNavRowHidden: {
         opacity: 0,
@@ -3483,11 +3778,13 @@ const styles = StyleSheet.create({
         pointerEvents: 'none',
     },
     tabButton: {
+        flex: 1,
         alignItems: 'center',
         justifyContent: 'center',
         gap: 2,
         paddingVertical: 2,
-        minWidth: 74,
+        minWidth: 48,
+        maxWidth: 72,
     },
     iconContainer: {
         position: 'relative',
@@ -3502,12 +3799,45 @@ const styles = StyleSheet.create({
         height: 24,
         borderRadius: 12,
     },
+    tabAvatarWrap: {
+        width: 24,
+        height: 24,
+        position: 'relative',
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    tabAvatarImg: {
+        width: 24,
+        height: 24,
+        borderRadius: 12,
+    },
+    tabAvatarFallback: {
+        width: 24,
+        height: 24,
+        borderRadius: 12,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    tabAvatarInitial: {
+        fontSize: 11,
+        fontWeight: '800',
+    },
+    tabAvatarStatusDot: {
+        position: 'absolute',
+        top: -2,
+        right: -2,
+        width: 7,
+        height: 7,
+        borderRadius: 3.5,
+        borderWidth: 1.5,
+    },
     centerButton: {
         alignItems: 'center',
         justifyContent: 'center',
         gap: 2,
         marginTop: -16,
-        minWidth: 54,
+        minWidth: 52,
+        paddingHorizontal: 2,
     },
     centerIconContainer: {
         width: 48,
@@ -3524,7 +3854,7 @@ const styles = StyleSheet.create({
     },
     tabLabel: {
         fontSize: 9.5,
-        letterSpacing: 0.1,
+        letterSpacing: -0.1,
     },
     // Contenedor de Creación Morpheada
     createContentContainer: {
@@ -4319,6 +4649,10 @@ const styles = StyleSheet.create({
     },
     shareCardContentContainer: {
         borderRadius: 22,
+        overflow: 'hidden',
+    },
+    userMenuContentContainer: {
+        borderRadius: 24,
         overflow: 'hidden',
     },
 });

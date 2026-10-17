@@ -1,44 +1,45 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useEffect, useMemo } from 'react';
 import {
     View,
     Text,
     TouchableOpacity,
     StyleSheet,
-    Image,
 } from 'react-native';
 import { useRouter, usePathname } from 'expo-router';
 import { useTranslation } from 'react-i18next';
-import { Flame } from '@tamagui/lucide-icons';
+import { Flame, MoreVertical, History, Share2 } from '@tamagui/lucide-icons';
 
 import { useStore } from '../store/useStore';
 import { useVeyraTheme } from '../theme/useVeyraTheme';
 import { VeyraSurface } from './ui/VeyraSurface';
-import { UserProfileDropdown } from './layout/UserProfileDropdown';
-import { SyncProgressBar } from './sync/SyncProgressBar';
 
 interface TopBarProps {
     title?: string;
+    onHistoryPress?: () => void;
+    onSharePress?: () => void;
+    onOptionsPress?: () => void;
 }
 
 /**
- * TopBar — Barra de navegación superior con saludo contextual, contador de racha,
- * indicador de sincronización en tiempo real y disparador del menú compacto de usuario.
+ * TopBar — Barra de navegación superior con saludo contextual, contador de racha
+ * e indicador de progreso de sincronización en tiempo real.
  */
-export const TopBar = React.memo(function TopBar({ title }: TopBarProps) {
+export const TopBar = React.memo(function TopBar({
+    title,
+    onHistoryPress,
+    onSharePress,
+    onOptionsPress,
+}: TopBarProps) {
     const router = useRouter();
     const pathname = usePathname();
     const { t } = useTranslation();
-    const { colors, typography, accent } = useVeyraTheme();
+    const { colors, typography, isDark } = useVeyraTheme();
 
     const userName = useStore(state => state.userName);
     const session = useStore(state => state.session);
     const language = useStore(state => state.language);
     const streak = useStore(state => state.streak);
     const loadStreak = useStore(state => state.loadStreak);
-    const isSyncing = useStore(state => state.isSyncing);
-    const syncError = useStore(state => state.syncError);
-
-    const [isMenuOpen, setIsMenuOpen] = useState(false);
 
     useEffect(() => {
         loadStreak();
@@ -75,20 +76,6 @@ export const TopBar = React.memo(function TopBar({ title }: TopBarProps) {
         }
         return timeGreeting;
     }, [session, cleanUserName, timeGreeting, t]);
-
-    const displayName = cleanUserName
-        ? (userName || session?.user?.user_metadata?.full_name || session?.user?.user_metadata?.name)
-        : t('menu.profiles.default', { defaultValue: 'Usuario' });
-
-    const avatarUrl = session?.user?.user_metadata?.avatar_url;
-
-    // Color del indicador de estado en el avatar
-    const avatarDotColor = useMemo(() => {
-        if (!session) return colors.textMuted;
-        if (isSyncing) return '#3B82F6';
-        if (syncError) return '#EF4444';
-        return '#10B981';
-    }, [session, isSyncing, syncError, colors.textMuted]);
 
     // Mensaje motivacional/contextual según la hora del día
     const contextualMessage = useMemo(() => {
@@ -134,9 +121,8 @@ export const TopBar = React.memo(function TopBar({ title }: TopBarProps) {
                 </Text>
             </TouchableOpacity>
 
-            {/* Derecha: Acciones (Badge de racha, Indicador de Sync y Avatar) */}
+            {/* Derecha: Acciones (Badge de racha + Botón de 3 puntos) */}
             <View style={styles.actionsRow}>
-                {/* Badge de racha */}
                 {streak > 0 && (
                     <TouchableOpacity
                         activeOpacity={0.7}
@@ -157,54 +143,57 @@ export const TopBar = React.memo(function TopBar({ title }: TopBarProps) {
                     </TouchableOpacity>
                 )}
 
-
-                {/* Avatar Button con Indicador de Estado */}
-                <View style={styles.avatarWrapper}>
+                {onHistoryPress && (
                     <TouchableOpacity
-                        activeOpacity={0.8}
-                        onPress={() => setIsMenuOpen(true)}
+                        activeOpacity={0.7}
+                        onPress={onHistoryPress}
+                        hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
                         style={[
-                            styles.avatarButton,
+                            styles.actionIconButton,
                             {
-                                borderColor: isMenuOpen
-                                    ? accent.primary
-                                    : isSyncing
-                                    ? `${accent.primary}80`
-                                    : colors.borderSubtle,
-                                backgroundColor: accent.primary,
+                                backgroundColor: isDark ? 'rgba(255, 255, 255, 0.06)' : 'rgba(0, 0, 0, 0.04)',
+                                borderColor: colors.borderSubtle,
                             },
                         ]}
                     >
-                        {avatarUrl ? (
-                            <Image source={{ uri: avatarUrl }} style={styles.avatarImage} />
-                        ) : (
-                            <Text style={styles.avatarInitial}>
-                                {displayName.charAt(0).toUpperCase()}
-                            </Text>
-                        )}
+                        <History size={16} color={colors.textSecondary as any} strokeWidth={2.2} />
                     </TouchableOpacity>
+                )}
 
-                    {/* Dot indicador sobre el avatar */}
-                    <View
+                {onSharePress && (
+                    <TouchableOpacity
+                        activeOpacity={0.7}
+                        onPress={onSharePress}
+                        hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
                         style={[
-                            styles.avatarStatusDot,
+                            styles.actionIconButton,
                             {
-                                backgroundColor: avatarDotColor,
-                                borderColor: colors.bg,
+                                backgroundColor: isDark ? 'rgba(255, 255, 255, 0.06)' : 'rgba(0, 0, 0, 0.04)',
+                                borderColor: colors.borderSubtle,
                             },
                         ]}
-                    />
-                </View>
+                    >
+                        <Share2 size={16} color={colors.textSecondary as any} strokeWidth={2.2} />
+                    </TouchableOpacity>
+                )}
+
+                {onOptionsPress && (
+                    <TouchableOpacity
+                        activeOpacity={0.7}
+                        onPress={onOptionsPress}
+                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                        style={[
+                            styles.actionIconButton,
+                            {
+                                backgroundColor: isDark ? 'rgba(255, 255, 255, 0.06)' : 'rgba(0, 0, 0, 0.04)',
+                                borderColor: colors.borderSubtle,
+                            },
+                        ]}
+                    >
+                        <MoreVertical size={16} color={colors.textSecondary as any} strokeWidth={2.4} />
+                    </TouchableOpacity>
+                )}
             </View>
-
-            {/* Menú Flotante Compacto (Dropdown) */}
-            <UserProfileDropdown
-                isVisible={isMenuOpen}
-                onClose={() => setIsMenuOpen(false)}
-            />
-
-            {/* Barra de progreso de sincronización activa */}
-            <SyncProgressBar isSyncing={isSyncing} />
         </View>
     );
 });
@@ -247,34 +236,21 @@ const styles = StyleSheet.create({
     streakText: {
         fontWeight: '800',
     },
-    avatarButton: {
-        width: 36,
-        height: 36,
-        borderRadius: 18,
+    actionIconButton: {
+        width: 32,
+        height: 32,
+        borderRadius: 16,
+        borderWidth: 1,
         alignItems: 'center',
         justifyContent: 'center',
-        borderWidth: 1.5,
-        overflow: 'hidden',
     },
-    avatarImage: {
-        width: '100%',
-        height: '100%',
-    },
-    avatarInitial: {
-        color: '#FFFFFF',
-        fontWeight: '800',
-        fontSize: 14,
-    },
-    avatarWrapper: {
-        position: 'relative',
-    },
-    avatarStatusDot: {
-        position: 'absolute',
-        bottom: -1,
-        right: -1,
-        width: 10,
-        height: 10,
-        borderRadius: 5,
-        borderWidth: 2,
+    optionsButton: {
+        width: 32,
+        height: 32,
+        borderRadius: 16,
+        borderWidth: 1,
+        alignItems: 'center',
+        justifyContent: 'center',
     },
 });
+

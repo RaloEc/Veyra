@@ -339,7 +339,9 @@ export default function ReminderDetailScreen() {
     }, [reminder?.attachments]);
 
     const imageAttachments = parsedAttachments.filter(item => {
-        const uri = item.uri.toLowerCase();
+        const rawUri = item?.uri || (typeof item === 'string' ? item : '');
+        if (!rawUri || typeof rawUri !== 'string') return false;
+        const uri = rawUri.toLowerCase();
         return (
             uri.includes('imagepicker') ||
             uri.endsWith('.jpg') ||
@@ -351,7 +353,12 @@ export default function ReminderDetailScreen() {
         );
     });
 
-    const otherAttachments = parsedAttachments.filter(item => !imageAttachments.includes(item));
+    const otherAttachments = parsedAttachments.filter(item => {
+        if (!item) return false;
+        const rawUri = item?.uri || (typeof item === 'string' ? item : '');
+        if (!rawUri) return false;
+        return !imageAttachments.includes(item);
+    });
 
     // Subtasks parser (Hook must be called unconditionally)
     const parsedSubtasks: Subtask[] = useMemo(() => {

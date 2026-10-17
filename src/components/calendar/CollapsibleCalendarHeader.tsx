@@ -236,42 +236,6 @@ export function CollapsibleCalendarHeader({
                         <ChevronDown size={14} color={colors.textSecondary} />
                     </Animated.View>
                 </TouchableOpacity>
-
-                {/* Acciones derecha: Mini-píldora unificada */}
-                <View
-                    style={[
-                        styles.actionsPill,
-                        {
-                            backgroundColor: isDark ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.035)',
-                            borderColor: colors.borderSubtle,
-                        },
-                    ]}
-                >
-                    {onPressSearch && (
-                        <TouchableOpacity
-                            onPress={onPressSearch}
-                            activeOpacity={0.7}
-                            hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-                            style={styles.pillActionBtn}
-                        >
-                            <Search size={15} color={colors.textSecondary} />
-                        </TouchableOpacity>
-                    )}
-
-                    {(onPressHistory || onPressShare) && (
-                        <>
-                            <View style={[styles.pillDivider, { backgroundColor: colors.borderSubtle }]} />
-                            <TouchableOpacity
-                                onPress={() => setIsMenuVisible(true)}
-                                activeOpacity={0.7}
-                                hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-                                style={styles.pillActionBtn}
-                            >
-                                <MoreVertical size={15} color={colors.textSecondary} />
-                            </TouchableOpacity>
-                        </>
-                    )}
-                </View>
             </View>
 
             {/* ─── PANEL DEL CALENDARIO (animado en UI thread con Reanimated) ─── */}
@@ -450,70 +414,6 @@ export function CollapsibleCalendarHeader({
                 </VeyraSurface>
                 </Animated.View>
             </Animated.View>
-
-            {/* Menú contextual de 3 puntos (Historial / Compartir) */}
-            <Modal
-                transparent
-                visible={isMenuVisible}
-                animationType="fade"
-                onRequestClose={() => setIsMenuVisible(false)}
-            >
-                <TouchableOpacity
-                    style={styles.menuModalBackdrop}
-                    activeOpacity={1}
-                    onPress={() => setIsMenuVisible(false)}
-                >
-                    <View style={[styles.menuModalCardWrap, { top: insets.top + 92 }]}>
-                        <VeyraSurface
-                            level={2}
-                            radius="lg"
-                            style={[
-                                styles.menuModalCard,
-                                {
-                                    borderColor: colors.borderSubtle,
-                                    shadowColor: '#000',
-                                    shadowOffset: { width: 0, height: 6 },
-                                    shadowOpacity: isDark ? 0.35 : 0.1,
-                                    shadowRadius: 14,
-                                    elevation: 10,
-                                },
-                            ]}
-                        >
-                            {onPressHistory && (
-                                <TouchableOpacity
-                                    style={styles.menuModalItem}
-                                    onPress={() => {
-                                        setIsMenuVisible(false);
-                                        onPressHistory();
-                                    }}
-                                    activeOpacity={0.7}
-                                >
-                                    <History size={16} color={colors.textSecondary} strokeWidth={2} />
-                                    <Text style={[styles.menuModalItemText, { color: colors.textPrimary }]}>
-                                        {language === 'es' ? 'Historial de recordatorios' : 'Reminder history'}
-                                    </Text>
-                                </TouchableOpacity>
-                            )}
-
-                            {onPressShare && (
-                                <TouchableOpacity
-                                    style={styles.menuModalItem}
-                                    onPress={() => {
-                                        setIsMenuVisible(false);
-                                        onPressShare();
-                                    }}
-                                    activeOpacity={0.7}
-                                >
-                                    <Share2 size={16} color={colors.textSecondary} strokeWidth={2} />
-                                    <Text style={[styles.menuModalItemText, { color: colors.textPrimary }]}>
-                                        {language === 'es' ? 'Compartir agenda' : 'Share agenda'}
-                                    </Text>
-                                </TouchableOpacity>
-                            )}
-                        </VeyraSurface>
-                    </View>
-                </TouchableOpacity>
-            </Modal>
         </View>
     );
 }

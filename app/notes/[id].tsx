@@ -81,7 +81,7 @@ import { actions } from 'react-native-pell-rich-editor';
 export default function NoteDetailAndEditScreen() {
     const { t } = useTranslation();
     const router = useRouter();
-    const { id } = useLocalSearchParams<{ id: string }>();
+    const { id, pageIndex } = useLocalSearchParams<{ id: string; pageIndex?: string }>();
     const insets = useSafeAreaInsets();
     const { width: windowWidth, height: windowHeight } = useWindowDimensions();
     const { colors, typography, radii, accent, isDark } = useVeyraTheme();
@@ -205,6 +205,16 @@ export default function NoteDetailAndEditScreen() {
     } = useCreateNote(id, undefined, undefined, undefined, undefined, { isEditMode });
 
     const isOwner = userPermission.isOwner;
+
+    // Saltar a la página especificada en los parámetros de navegación (ej: desde búsqueda global)
+    useEffect(() => {
+        if (pageIndex !== undefined && pageIndex !== null) {
+            const pIdx = parseInt(pageIndex, 10);
+            if (!isNaN(pIdx) && pIdx >= 0 && pIdx < pages.length) {
+                setCurrentPageIndex(pIdx);
+            }
+        }
+    }, [pageIndex, pages.length, setCurrentPageIndex]);
 
     // Si el acceso a la nota fue revocado por el propietario
     useEffect(() => {
@@ -453,7 +463,9 @@ export default function NoteDetailAndEditScreen() {
     }, []);
 
     const imageAttachments = attachments.filter(item => {
-        const uri = item.uri.toLowerCase();
+        const rawUri = item?.uri || (typeof item === 'string' ? item : '');
+        if (!rawUri || typeof rawUri !== 'string') return false;
+        const uri = rawUri.toLowerCase();
         return (
             uri.includes('imagepicker') ||
             uri.endsWith('.jpg') ||
@@ -464,7 +476,12 @@ export default function NoteDetailAndEditScreen() {
         );
     });
 
-    const otherAttachments = attachments.filter(item => !imageAttachments.includes(item));
+    const otherAttachments = attachments.filter(item => {
+        if (!item) return false;
+        const rawUri = item?.uri || (typeof item === 'string' ? item : '');
+        if (!rawUri) return false;
+        return !imageAttachments.includes(item);
+    });
     const pageLayoutsRef = useRef<{ [index: number]: number }>({});
     const lastCursorY = useRef<number>(0);
 

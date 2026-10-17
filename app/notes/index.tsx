@@ -663,7 +663,8 @@ function NotesScreenComponent({ hideBars = false }: { hideBars?: boolean } = {})
     const svOriginH = useSharedValue(34);
 
     // Folder options menu popover state
-    const [isFolderMenuVisible, setIsFolderMenuVisible] = useState(false);
+    const isFolderMenuVisible = useFoldersStore(state => state.isFolderMenuVisible);
+    const setIsFolderMenuVisible = useFoldersStore(state => state.setIsFolderMenuVisible);
 
     // Reset search & menu when active folder changes
     useEffect(() => {
@@ -1519,6 +1520,13 @@ function NotesScreenComponent({ hideBars = false }: { hideBars?: boolean } = {})
         } catch (e) {}
     };
 
+    useEffect(() => {
+        useFoldersStore.getState().setOnShareNotesRequest(handleShareNotesMenu);
+        return () => {
+            useFoldersStore.getState().setOnShareNotesRequest(undefined);
+        };
+    }, [handleShareNotesMenu]);
+
     // Color de la carpeta activa actual
     const activeFolderColor = useMemo(() => {
         if (currentTargetFolderId && currentTargetFolderId !== 'all' && currentTargetFolderId !== 'pinned' && currentTargetFolderId !== 'unassigned') {
@@ -2247,40 +2255,6 @@ function NotesScreenComponent({ hideBars = false }: { hideBars?: boolean } = {})
                                 </TouchableOpacity>
                             </ScrollView>
                         </View>
-
-                        {/* Botones de Acción a la Derecha: Mini-píldora unificada */}
-                        <View
-                            style={[
-                                styles.actionsPill,
-                                {
-                                    backgroundColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.035)',
-                                    borderColor: colors.borderSubtle,
-                                },
-                            ]}
-                        >
-                            <TouchableOpacity
-                                style={styles.pillActionBtn}
-                                onPress={() => {
-                                    LayoutAnimation.configureNext(smoothLayoutAnimation);
-                                    setIsSearching(true);
-                                }}
-                                hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-                                activeOpacity={0.7}
-                            >
-                                <Search size={15} color={colors.textSecondary as any} />
-                            </TouchableOpacity>
-
-                            <View style={[styles.pillDivider, { backgroundColor: colors.borderSubtle }]} />
-
-                            <TouchableOpacity
-                                style={styles.pillActionBtn}
-                                onPress={() => setIsFolderMenuVisible(true)}
-                                hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-                                activeOpacity={0.7}
-                            >
-                                <MoreVertical size={15} color={colors.textSecondary as any} />
-                            </TouchableOpacity>
-                        </View>
                     </View>
                 )}
             </Animated.View>
@@ -2511,48 +2485,15 @@ function NotesScreenComponent({ hideBars = false }: { hideBars?: boolean } = {})
                                     </View>
 
                                     {/* Lado Derecho: Colaboradores + Acciones de Carpeta */}
-                                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                                        {activeFolderObj && (
+                                    {activeFolderObj ? (
+                                        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                                             <CollaboratorsAvatars
                                                 targetType="folder"
                                                 targetId={activeFolderObj.id}
                                                 onPress={() => setIsFolderShareModalVisible(true)}
                                             />
-                                        )}
-                                        <Animated.View
-                                            style={[
-                                                styles.actionsPill,
-                                                morphActionsStyle,
-                                                {
-                                                    backgroundColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.035)',
-                                                    borderColor: colors.borderSubtle,
-                                                },
-                                            ]}
-                                        >
-                                        <TouchableOpacity
-                                            style={styles.pillActionBtn}
-                                            onPress={() => {
-                                                LayoutAnimation.configureNext(smoothLayoutAnimation);
-                                                setIsSearching(true);
-                                            }}
-                                            hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-                                            activeOpacity={0.7}
-                                        >
-                                            <Search size={15} color={colors.textSecondary as any} />
-                                        </TouchableOpacity>
-
-                                        <View style={[styles.pillDivider, { backgroundColor: colors.borderSubtle }]} />
-
-                                        <TouchableOpacity
-                                            style={styles.pillActionBtn}
-                                            onPress={() => setIsFolderMenuVisible(true)}
-                                            hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-                                            activeOpacity={0.7}
-                                        >
-                                            <MoreVertical size={15} color={colors.textSecondary as any} />
-                                        </TouchableOpacity>
-                                    </Animated.View>
-                                    </View>
+                                        </View>
+                                    ) : null}
                                 </View>
                             )}
                         </Animated.View>
@@ -2697,7 +2638,7 @@ function NotesScreenComponent({ hideBars = false }: { hideBars?: boolean } = {})
                     activeOpacity={1}
                     onPress={() => setIsFolderMenuVisible(false)}
                 >
-                    <View style={[styles.menuModalCardWrap, { top: insets.top + 92 }]}>
+                    <View style={[styles.menuModalCardWrap, { top: insets.top + 50 }]}>
                         <VeyraSurface
                             level={2}
                             radius="lg"

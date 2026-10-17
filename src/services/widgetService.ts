@@ -1,7 +1,7 @@
 import { NativeModules, Platform } from 'react-native';
-import { Reminder, CalendarEvent, Note } from '../types/db';
+import { Reminder, CalendarEvent, Note, Folder } from '../types/db';
 import { getDB } from '../db';
-import { EventService } from './eventService';
+import { EventService, isEventOccurringOnDate } from './eventService';
 import { extractPlainTextFromPages } from '../utils/pageUtils';
 
 const { VeyraWidgetModule } = NativeModules;
@@ -50,6 +50,7 @@ export interface WidgetNoteItem {
     updatedAtMs: number;
     isPinned: boolean;
     color?: string;
+    folder_id?: string | null;
 }
 
 export interface WidgetScheduleItem {
@@ -105,6 +106,23 @@ export function createTextSnippet(htmlOrText?: string, maxLength: number = 140):
     return clean;
 }
 
+// Control de ráfagas para sincronización ultrarrápida (coalescing debouncers)
+let agendaDebounceTimer: any = null;
+let pendingAgendaResolvers: Array<(val: boolean) => void> = [];
+let pendingAgendaRejecters: Array<(err: any) => void> = [];
+let cachedRemindersForSync: Reminder[] | undefined = undefined;
+let cachedEventsForSync: CalendarEvent[] | undefined = undefined;
+
+let notesDebounceTimer: any = null;
+let pendingNotesResolvers: Array<(val: boolean) => void> = [];
+let pendingNotesRejecters: Array<(err: any) => void> = [];
+let cachedNotesForSync: Note[] | undefined = undefined;
+
+let scheduleDebounceTimer: any = null;
+let pendingScheduleResolvers: Array<(val: boolean) => void> = [];
+let pendingScheduleRejecters: Array<(err: any) => void> = [];
+let cachedScheduleForSync: WidgetScheduleItem[] | undefined = undefined;
+
 export const WidgetService = {
     /**
      * Comprueba si el módulo nativo del widget está disponible (Android nativo)
@@ -115,49 +133,167 @@ export const WidgetService = {
 
     /**
      * Sincroniza la Agenda (Recordatorios + Eventos de calendario) con el widget "Hoy"
+     * Coalesce ráfagas consecutivas (50ms) para garantizar actualización instantánea sin bloqueos
      */
-    async syncAgenda(reminders?: Reminder[], events?: CalendarEvent[]): Promise<boolean> {
+    syncAgenda(reminders?: Reminder[], events?: CalendarEvent[]): Promise<boolean> {
+        if (!this.isAvailable()) {
+            return Promise.resolve(false);
+        }
+
+        if (reminders && reminders.length > 0) {
+            cachedRemindersForSync = reminders;
+        }
+        if (events && events.length > 0) {
+            cachedEventsForSync = events;
+        }
+
+        return new Promise<boolean>((resolve, reject) => {
+            pendingAgendaResolvers.push(resolve);
+            pendingAgendaRejecters.push(reject);
+
+            if (agendaDebounceTimer) {
+                clearTimeout(agendaDebounceTimer);
+            }
+
+            agendaDebounceTimer = setTimeout(async () => {
+                agendaDebounceTimer = null;
+                const rList = cachedRemindersForSync;
+                const eList = cachedEventsForSync;
+                cachedRemindersForSync = undefined;
+                cachedEventsForSync = undefined;
+
+                const resolvers = [...pendingAgendaResolvers];
+                const rejecters = [...pendingAgendaRejecters];
+                pendingAgendaResolvers = [];
+                pendingAgendaRejecters = [];
+
+                try {
+                    const result = await this.executeSyncAgenda(rList, eList);
+                    resolvers.forEach(res => res(result));
+                } catch (err) {
+                    rejecters.forEach(rej => rej(err));
+                }
+            }, 50);
+        });
+    },
+
+    /**
+     * Ejecuta inmediatamente la sincronización de agenda sin pasar por el debounce
+     */
+    async executeSyncAgenda(reminders?: Reminder[], events?: CalendarEvent[]): Promise<boolean> {
         if (!this.isAvailable()) {
             return false;
         }
 
         try {
             let reminderList: Reminder[];
-            if (reminders) {
+            if (reminders && reminders.length > 0) {
                 reminderList = reminders;
             } else {
-                const db = await getDB();
-                reminderList = await db.getAllAsync<Reminder>(
-                    `SELECT id, title, due_date_ms, control_level, status, priority, deleted
-                     FROM reminders 
-                     WHERE (status = 'pending' OR status = 'snoozed') AND deleted = 0 
-                     ORDER BY due_date_ms ASC 
-                     LIMIT 20`
-                );
+                try {
+                    const { useStore } = await import('../store/useStore');
+                    const storeReminders = useStore.getState().reminders;
+                    if (storeReminders && storeReminders.length > 0) {
+                        reminderList = storeReminders;
+                    } else {
+                        const db = await getDB();
+                        reminderList = await db.getAllAsync<Reminder>(
+                            `SELECT id, title, due_date_ms, control_level, status, priority, deleted
+                             FROM reminders 
+                             WHERE (status = 'pending' OR status = 'snoozed') AND deleted = 0 
+                             ORDER BY due_date_ms ASC 
+                             LIMIT 50`
+                        );
+                    }
+                } catch {
+                    const db = await getDB();
+                    reminderList = await db.getAllAsync<Reminder>(
+                        `SELECT id, title, due_date_ms, control_level, status, priority, deleted
+                         FROM reminders 
+                         WHERE (status = 'pending' OR status = 'snoozed') AND deleted = 0 
+                         ORDER BY due_date_ms ASC 
+                         LIMIT 50`
+                    );
+                }
             }
 
-            let eventList: CalendarEvent[];
-            const nowMs = Date.now();
-            const sevenDaysLater = nowMs + 7 * 24 * 60 * 60 * 1000;
-
-            const isEventActive = (e: CalendarEvent): boolean => {
-                if (e.deleted) return false;
-                const end = (e.end_time_ms && e.end_time_ms > e.start_time_ms)
-                    ? e.end_time_ms
-                    : (e.start_time_ms + 60 * 60 * 1000);
-                // Excluir eventos que ya pasaron (terminados antes de ahora)
-                return end >= nowMs && e.start_time_ms <= sevenDaysLater;
-            };
-
-            if (events) {
-                eventList = events.filter(isEventActive);
+            let allRawEvents: CalendarEvent[];
+            if (events && events.length > 0) {
+                allRawEvents = events;
             } else {
                 try {
-                    const allEvents = await EventService.getAllEvents();
-                    eventList = allEvents.filter(isEventActive);
+                    const { useEventsStore } = await import('../store/useEventsStore');
+                    const storeEvents = useEventsStore.getState().events;
+                    if (storeEvents && storeEvents.length > 0) {
+                        allRawEvents = storeEvents;
+                    } else {
+                        allRawEvents = await EventService.getAllEvents(false);
+                    }
                 } catch {
-                    const todayEvents = await EventService.getEventsForDate(new Date());
-                    eventList = todayEvents.filter(isEventActive);
+                    try {
+                        allRawEvents = await EventService.getAllEvents(false);
+                    } catch {
+                        allRawEvents = [];
+                    }
+                }
+            }
+
+            const nowMs = Date.now();
+            const today = new Date(nowMs);
+            const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
+            const sevenDaysLater = nowMs + 7 * 24 * 60 * 60 * 1000;
+
+            const eventItems: WidgetAgendaItem[] = [];
+            const seenEventOccurrences = new Set<string>();
+
+            // Expandir ocurrencias reales para los siguientes 7 días (incluyendo eventos recurrentes)
+            for (let dayOffset = 0; dayOffset < 7; dayOffset++) {
+                const targetDay = new Date(startOfToday + dayOffset * 24 * 60 * 60 * 1000);
+
+                for (const event of allRawEvents) {
+                    if (event.deleted) continue;
+
+                    if (isEventOccurringOnDate(event, targetDay)) {
+                        const origStart = new Date(event.start_time_ms);
+                        const origEnd = new Date(
+                            event.end_time_ms && event.end_time_ms > event.start_time_ms
+                                ? event.end_time_ms
+                                : event.start_time_ms + 60 * 60 * 1000
+                        );
+                        const durationMs = origEnd.getTime() - origStart.getTime();
+
+                        // Construir el timestamp exacto para el día objetivo con la hora del evento
+                        const occurrenceStart = new Date(
+                            targetDay.getFullYear(),
+                            targetDay.getMonth(),
+                            targetDay.getDate(),
+                            origStart.getHours(),
+                            origStart.getMinutes(),
+                            origStart.getSeconds()
+                        );
+                        const occurrenceStartMs = occurrenceStart.getTime();
+                        const occurrenceEndMs = occurrenceStartMs + durationMs;
+
+                        // Clave de unicidad por ocurrencia
+                        const occurrenceKey = `${event.id}_${targetDay.getFullYear()}-${targetDay.getMonth()}-${targetDay.getDate()}`;
+                        if (seenEventOccurrences.has(occurrenceKey)) continue;
+
+                        // Incluir si el evento no ha concluido (en curso o en los próximos 7 días)
+                        if (occurrenceEndMs >= nowMs && occurrenceStartMs <= sevenDaysLater) {
+                            seenEventOccurrences.add(occurrenceKey);
+                            eventItems.push({
+                                id: event.id,
+                                type: 'event' as const,
+                                title: event.title,
+                                timeMs: occurrenceStartMs,
+                                endTimeMs: occurrenceEndMs,
+                                color: event.color || '',
+                                location: event.location || '',
+                                status: 'confirmed',
+                                dayLabel: formatDayLabel(occurrenceStartMs),
+                            });
+                        }
+                    }
                 }
             }
 
@@ -174,20 +310,6 @@ export const WidgetService = {
                     dayLabel: formatDayLabel(r.due_date_ms),
                 }));
 
-            const eventItems: WidgetAgendaItem[] = eventList
-                .filter(e => !e.deleted)
-                .map(e => ({
-                    id: e.id,
-                    type: 'event' as const,
-                    title: e.title,
-                    timeMs: e.start_time_ms,
-                    endTimeMs: e.end_time_ms,
-                    color: e.color || '',
-                    location: e.location || '',
-                    status: 'confirmed',
-                    dayLabel: formatDayLabel(e.start_time_ms),
-                }));
-
             // Determinar si un evento está cursando (en curso ahora mismo)
             const isOngoing = (item: WidgetAgendaItem): boolean => {
                 if (item.type !== 'event') return false;
@@ -197,24 +319,20 @@ export const WidgetService = {
                 return nowMs >= item.timeMs && nowMs <= end;
             };
 
-            // Combinar y ordenar: primero los cursando (en curso), luego el resto cronológicamente
+            // Combinar y ordenar inteligentemente
             const combinedAgenda: WidgetAgendaItem[] = [...reminderItems, ...eventItems].sort((a, b) => {
                 const aOngoing = isOngoing(a) ? 0 : 1;
                 const bOngoing = isOngoing(b) ? 0 : 1;
                 if (aOngoing !== bOngoing) return aOngoing - bOngoing;
+
+                const aOverdue = (a.type === 'reminder' && a.timeMs > 0 && a.timeMs < nowMs) ? 0 : 1;
+                const bOverdue = (b.type === 'reminder' && b.timeMs > 0 && b.timeMs < nowMs) ? 0 : 1;
+                if (aOverdue !== bOverdue) return aOverdue - bOverdue;
+
                 return a.timeMs - b.timeMs;
-            }).slice(0, 25);
+            }).slice(0, 30);
 
             await VeyraWidgetModule.syncAgendaData(combinedAgenda);
-
-            try {
-                const { useStore } = await import('../store/useStore');
-                const store = useStore.getState();
-                const currentTheme = store.theme || 'system';
-                const currentAccent = store.accentTheme || 'blue';
-                await this.syncTheme(currentTheme, currentAccent);
-            } catch {}
-
             return true;
         } catch (error) {
             console.warn('[WidgetService] Error sincronizando agenda con el widget:', error);
@@ -225,36 +343,93 @@ export const WidgetService = {
     /**
      * Sincroniza las notas recientes y ancladas con el widget de Notas
      */
-    async syncNotes(notes?: Note[]): Promise<boolean> {
+    syncNotes(notes?: Note[]): Promise<boolean> {
+        if (!this.isAvailable()) {
+            return Promise.resolve(false);
+        }
+
+        if (notes && notes.length > 0) {
+            cachedNotesForSync = notes;
+        }
+
+        return new Promise<boolean>((resolve, reject) => {
+            pendingNotesResolvers.push(resolve);
+            pendingNotesRejecters.push(reject);
+
+            if (notesDebounceTimer) {
+                clearTimeout(notesDebounceTimer);
+            }
+
+            notesDebounceTimer = setTimeout(async () => {
+                notesDebounceTimer = null;
+                const nList = cachedNotesForSync;
+                cachedNotesForSync = undefined;
+
+                const resolvers = [...pendingNotesResolvers];
+                const rejecters = [...pendingNotesRejecters];
+                pendingNotesResolvers = [];
+                pendingNotesRejecters = [];
+
+                try {
+                    const result = await this.executeSyncNotes(nList);
+                    resolvers.forEach(res => res(result));
+                } catch (err) {
+                    rejecters.forEach(rej => rej(err));
+                }
+            }, 50);
+        });
+    },
+
+    /**
+     * Ejecución directa sin debounce para sincronización de notas
+     */
+    async executeSyncNotes(notes?: Note[]): Promise<boolean> {
         if (!this.isAvailable()) {
             return false;
         }
 
         try {
             let noteList: Note[];
-            if (notes) {
+            if (notes && notes.length > 0) {
                 noteList = notes;
             } else {
-                const db = await getDB();
-                noteList = await db.getAllAsync<Note>(
-                    `SELECT id, title, content, attachments, updated_at_ms, is_pinned
-                     FROM notes 
-                     WHERE deleted = 0 
-                     ORDER BY is_pinned DESC, updated_at_ms DESC 
-                     LIMIT 15`
-                );
+                try {
+                    const { useNotesStore } = await import('../store/useNotesStore');
+                    const storeNotes = useNotesStore.getState().notes;
+                    if (storeNotes && storeNotes.length > 0) {
+                        noteList = storeNotes;
+                    } else {
+                        const db = await getDB();
+                        noteList = await db.getAllAsync<Note>(
+                            `SELECT id, title, content, attachments, updated_at_ms, is_pinned, folder_id 
+                             FROM notes 
+                             WHERE deleted = 0 
+                             ORDER BY is_pinned DESC, updated_at_ms DESC 
+                             LIMIT 25`
+                        );
+                    }
+                } catch {
+                    const db = await getDB();
+                    noteList = await db.getAllAsync<Note>(
+                        `SELECT id, title, content, attachments, updated_at_ms, is_pinned, folder_id 
+                         FROM notes 
+                         WHERE deleted = 0 
+                         ORDER BY is_pinned DESC, updated_at_ms DESC 
+                         LIMIT 25`
+                    );
+                }
             }
 
             const payload: WidgetNoteItem[] = noteList
                 .filter(n => !n.deleted)
-                .slice(0, 12)
+                .slice(0, 25)
                 .map(n => {
                     let snippet = createTextSnippet(n.content, 140);
                     if (!snippet && n.attachments) {
                         try {
                             const att = JSON.parse(n.attachments);
                             if (Array.isArray(att) && att.length > 0) {
-                                snippet = `📎 ${att.length} archivo${att.length > 1 ? 's' : ''}`;
+                                snippet = `Archivos adjuntos: ${att.length}`;
                             }
                         } catch {}
                     }
@@ -265,6 +440,7 @@ export const WidgetService = {
                         updatedAtMs: n.updated_at_ms || Date.now(),
                         isPinned: Boolean(n.is_pinned),
                         color: '',
+                        folder_id: n.folder_id || null,
                     };
                 });
 
@@ -280,15 +456,39 @@ export const WidgetService = {
     },
 
     /**
-     * Sincroniza todo (Agenda + Notas + Horario)
+     * Sincroniza carpetas con los widgets nativos
+     */
+    async syncFolders(folders?: Folder[]): Promise<boolean> {
+        if (!this.isAvailable()) return false;
+        try {
+            let folderList = folders;
+            if (!folderList) {
+                const db = await getDB();
+                folderList = await db.getAllAsync<Folder>(
+                    `SELECT id, name, color, icon FROM folders WHERE deleted = 0 ORDER BY name ASC`
+                );
+            }
+            if (typeof VeyraWidgetModule.syncFoldersData === 'function') {
+                return await VeyraWidgetModule.syncFoldersData(folderList || []);
+            }
+            return false;
+        } catch (error) {
+            console.warn('[WidgetService] Error sincronizando carpetas:', error);
+            return false;
+        }
+    },
+
+    /**
+     * Sincroniza todo (Agenda + Notas + Horario + Carpetas) de forma inmediata
      */
     async syncAll(): Promise<boolean> {
-        const [agendaOk, notesOk, scheduleOk] = await Promise.all([
-            this.syncAgenda(),
-            this.syncNotes(),
-            this.syncSchedule()
+        const [agendaOk, notesOk, scheduleOk, foldersOk] = await Promise.all([
+            this.executeSyncAgenda(),
+            this.executeSyncNotes(),
+            this.executeSyncSchedule(),
+            this.syncFolders()
         ]);
-        return agendaOk && notesOk && scheduleOk;
+        return agendaOk && notesOk && scheduleOk && foldersOk;
     },
 
     /**
@@ -299,16 +499,18 @@ export const WidgetService = {
     },
 
     /**
-     * Procesa las acciones realizadas desde el widget (por ej. completar tareas con el check ✓)
+     * Procesa las acciones realizadas desde el widget (por ej. completar tareas con el check ✓ o posponer)
      * mientras la app estaba cerrada o en segundo plano, actualizando la base de datos y cancelando alarmas.
      */
     async processPendingActions(): Promise<void> {
         if (!this.isAvailable()) return;
         try {
+            const { useStore } = await import('../store/useStore');
+
+            // 1. Completados pendientes
             if (typeof VeyraWidgetModule.getPendingCompletions === 'function') {
                 const pendingIds: string[] = await VeyraWidgetModule.getPendingCompletions();
                 if (pendingIds && pendingIds.length > 0) {
-                    const { useStore } = await import('../store/useStore');
                     for (const id of pendingIds) {
                         try {
                             await useStore.getState().markAsCompleted(id);
@@ -321,8 +523,51 @@ export const WidgetService = {
                     }
                 }
             }
+
+            // 2. Pospuestos pendientes
+            if (typeof VeyraWidgetModule.getPendingSnoozes === 'function') {
+                const pendingSnoozes: { id: string; minutes: number }[] = await VeyraWidgetModule.getPendingSnoozes();
+                if (pendingSnoozes && pendingSnoozes.length > 0) {
+                    for (const item of pendingSnoozes) {
+                        try {
+                            await useStore.getState().snoozeReminder(item.id, item.minutes || 30);
+                        } catch (err) {
+                            console.warn('[WidgetService] Error posponiendo recordatorio pendiente del widget:', item, err);
+                        }
+                    }
+                    if (typeof VeyraWidgetModule.clearPendingSnoozes === 'function') {
+                        await VeyraWidgetModule.clearPendingSnoozes();
+                    }
+                }
+            }
         } catch (error) {
             console.warn('[WidgetService] Error procesando acciones pendientes del widget:', error);
+        }
+    },
+
+    /**
+     * Establece el filtro del widget de notas ('all', 'pinned', 'folder', 'note')
+     */
+    async setNotesWidgetFilter(filter: { mode?: 'all' | 'pinned' | 'folder' | 'note'; folderId?: string | null; noteId?: string | null }): Promise<boolean> {
+        if (!this.isAvailable() || typeof VeyraWidgetModule.setNotesWidgetFilter !== 'function') return false;
+        try {
+            return await VeyraWidgetModule.setNotesWidgetFilter(filter);
+        } catch (e) {
+            console.warn('[WidgetService] Error estableciendo filtro de notas:', e);
+            return false;
+        }
+    },
+
+    /**
+     * Obtiene el filtro actual del widget de notas
+     */
+    async getNotesWidgetFilter(): Promise<{ mode: string; folderId?: string; noteId?: string } | null> {
+        if (!this.isAvailable() || typeof VeyraWidgetModule.getNotesWidgetFilter !== 'function') return null;
+        try {
+            return await VeyraWidgetModule.getNotesWidgetFilter();
+        } catch (e) {
+            console.warn('[WidgetService] Error obteniendo filtro de notas:', e);
+            return null;
         }
     },
 
@@ -536,7 +781,47 @@ export const WidgetService = {
     /**
      * Sincroniza el horario de clases con el widget de Horario
      */
-    async syncSchedule(items?: WidgetScheduleItem[]): Promise<boolean> {
+    syncSchedule(items?: WidgetScheduleItem[]): Promise<boolean> {
+        if (!this.isAvailable()) {
+            return Promise.resolve(false);
+        }
+
+        if (items && items.length > 0) {
+            cachedScheduleForSync = items;
+        }
+
+        return new Promise<boolean>((resolve, reject) => {
+            pendingScheduleResolvers.push(resolve);
+            pendingScheduleRejecters.push(reject);
+
+            if (scheduleDebounceTimer) {
+                clearTimeout(scheduleDebounceTimer);
+            }
+
+            scheduleDebounceTimer = setTimeout(async () => {
+                scheduleDebounceTimer = null;
+                const sList = cachedScheduleForSync;
+                cachedScheduleForSync = undefined;
+
+                const resolvers = [...pendingScheduleResolvers];
+                const rejecters = [...pendingScheduleRejecters];
+                pendingScheduleResolvers = [];
+                pendingScheduleRejecters = [];
+
+                try {
+                    const result = await this.executeSyncSchedule(sList);
+                    resolvers.forEach(res => res(result));
+                } catch (err) {
+                    rejecters.forEach(rej => rej(err));
+                }
+            }, 50);
+        });
+    },
+
+    /**
+     * Ejecuta inmediatamente la sincronización del horario
+     */
+    async executeSyncSchedule(items?: WidgetScheduleItem[]): Promise<boolean> {
         if (!this.isAvailable()) {
             return false;
         }

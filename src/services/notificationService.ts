@@ -24,7 +24,7 @@ const stripExtension = (filename: string): string => {
     return lastDot !== -1 ? filename.substring(0, lastDot) : filename;
 };
 
-export const CURRENT_CHANNEL_VERSION = 'v6';
+export const CURRENT_CHANNEL_VERSION = 'v7';
 
 export const NotificationService = {
     async setup() {
@@ -63,20 +63,20 @@ export const NotificationService = {
 
             let channelName = 'Normal';
             let importance = Notifications.AndroidImportance.HIGH;
-            let vibrationPattern = [0, 250, 250, 250];
+            let vibrationPattern = [0, 300, 200, 300];
             let lightColor = '#3b82f6';
             let bypassDnd = false;
 
             if (level === 'strict') {
                 channelName = `Estricto (${soundLabel})`;
                 importance = Notifications.AndroidImportance.MAX;
-                vibrationPattern = [0, 500, 250, 500];
+                vibrationPattern = [0, 600, 300, 600, 300, 600];
                 lightColor = '#f59e0b';
                 bypassDnd = true;
             } else if (level === 'critical') {
                 channelName = `Crítico (${soundLabel})`;
                 importance = Notifications.AndroidImportance.MAX;
-                vibrationPattern = [0, 500, 500, 500, 500, 500];
+                vibrationPattern = [0, 800, 300, 800, 300, 800, 300, 1000];
                 lightColor = '#ef4444';
                 bypassDnd = true;
             } else {
@@ -297,10 +297,10 @@ export const NotificationService = {
         const isPersistent = reminder.control_level === 'strict' || reminder.control_level === 'critical';
 
         const vibrationPattern = reminder.control_level === 'critical'
-            ? [0, 500, 500, 500, 500, 500]
+            ? [0, 800, 300, 800, 300, 800, 300, 1000]
             : reminder.control_level === 'strict'
-            ? [0, 500, 250, 500]
-            : [0, 250, 250, 250];
+            ? [0, 600, 300, 600, 300, 600]
+            : [0, 300, 200, 300];
 
         const baseContent = {
             title: reminder.title,
@@ -463,10 +463,10 @@ export const NotificationService = {
         const isPersistent = reminder.control_level === 'strict' || reminder.control_level === 'critical';
 
         const vibrationPattern = reminder.control_level === 'critical'
-            ? [0, 500, 500, 500, 500, 500]
+            ? [0, 800, 300, 800, 300, 800, 300, 1000]
             : reminder.control_level === 'strict'
-            ? [0, 500, 250, 500]
-            : [0, 250, 250, 250];
+            ? [0, 600, 300, 600, 300, 600]
+            : [0, 300, 200, 300];
 
         await Notifications.scheduleNotificationAsync({
             content: {

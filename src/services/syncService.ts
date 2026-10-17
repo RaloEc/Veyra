@@ -55,44 +55,40 @@ export const SyncService = {
 
     async claimOrphanLocalData(userId: string): Promise<void> {
         const db = await getDB();
+
+        // Verificación rápida: si no hay registros con 'local_user' o user_id nulo, omitir updates
+        const check = await db.getFirstAsync<{ count: number }>(
+            `SELECT (
+                (SELECT count(*) FROM reminders WHERE (user_id IS NULL OR user_id = 'local_user') AND (is_shared IS NULL OR is_shared = 0) LIMIT 1) +
+                (SELECT count(*) FROM events WHERE (user_id IS NULL OR user_id = 'local_user') AND (is_shared IS NULL OR is_shared = 0) LIMIT 1) +
+                (SELECT count(*) FROM notes WHERE (user_id IS NULL OR user_id = 'local_user') AND (is_shared IS NULL OR is_shared = 0) LIMIT 1) +
+                (SELECT count(*) FROM folders WHERE (user_id IS NULL OR user_id = 'local_user') AND (is_shared IS NULL OR is_shared = 0) LIMIT 1)
+             ) as count`
+        );
+
+        if (!check || check.count === 0) {
+            return;
+        }
+
         const now = Date.now();
-
-        // Transferir cualquier ítem local no compartido (creado sin cuenta o restaurado por Google Drive con un user_id antiguo) al nuevo userId
-        await db.runAsync(
-            `UPDATE reminders 
-             SET user_id = ?, last_modified_ms = ? 
-             WHERE (user_id IS NULL OR user_id = 'local_user' OR user_id != ?) 
-               AND (is_shared IS NULL OR is_shared = 0) 
-               AND (shared_owner_id IS NULL)`,
-            [userId, now, userId]
-        );
-
-        await db.runAsync(
-            `UPDATE events 
-             SET user_id = ?, last_modified_ms = ? 
-             WHERE (user_id IS NULL OR user_id = 'local_user' OR user_id != ?) 
-               AND (is_shared IS NULL OR is_shared = 0) 
-               AND (shared_owner_id IS NULL)`,
-            [userId, now, userId]
-        );
-
-        await db.runAsync(
-            `UPDATE notes 
-             SET user_id = ?, last_modified_ms = ? 
-             WHERE (user_id IS NULL OR user_id = 'local_user' OR user_id != ?) 
-               AND (is_shared IS NULL OR is_shared = 0) 
-               AND (shared_owner_id IS NULL)`,
-            [userId, now, userId]
-        );
-
-        await db.runAsync(
-            `UPDATE folders 
-             SET user_id = ?, last_modified_ms = ? 
-             WHERE (user_id IS NULL OR user_id = 'local_user' OR user_id != ?) 
-               AND (is_shared IS NULL OR is_shared = 0) 
-               AND (shared_owner_id IS NULL)`,
-            [userId, now, userId]
-        );
+        await db.withTransactionAsync(async () => {
+            await db.runAsync(
+                `UPDATE reminders SET user_id = ?, last_modified_ms = ? WHERE (user_id IS NULL OR user_id = 'local_user') AND (is_shared IS NULL OR is_shared = 0) AND (shared_owner_id IS NULL)`,
+                [userId, now]
+            );
+            await db.runAsync(
+                `UPDATE events SET user_id = ?, last_modified_ms = ? WHERE (user_id IS NULL OR user_id = 'local_user') AND (is_shared IS NULL OR is_shared = 0) AND (shared_owner_id IS NULL)`,
+                [userId, now]
+            );
+            await db.runAsync(
+                `UPDATE notes SET user_id = ?, last_modified_ms = ? WHERE (user_id IS NULL OR user_id = 'local_user') AND (is_shared IS NULL OR is_shared = 0) AND (shared_owner_id IS NULL)`,
+                [userId, now]
+            );
+            await db.runAsync(
+                `UPDATE folders SET user_id = ?, last_modified_ms = ? WHERE (user_id IS NULL OR user_id = 'local_user') AND (is_shared IS NULL OR is_shared = 0) AND (shared_owner_id IS NULL)`,
+                [userId, now]
+            );
+        });
     },
 
     // ─── Full Sync ──────────────────────────────────────────────────
@@ -108,54 +104,62 @@ export const SyncService = {
             console.warn('[Sync] Could not claim orphan local data:', claimErr);
         }
 
+        // 1. Sincronización de perfil y ajustes hacia/desde Supabase
         try {
-            await withTimeout(this.syncProfile(userId, isInitialLogin), 8000, 'syncProfile timeout (8s)');
+            await withTimeout(this.syncProfile(userId, isInitialLogin), 15000, 'syncProfile timeout (15s)');
         } catch (e: any) {
             console.error('Sync profile/settings failed:', e);
             errors.push(`Profile: ${e.message}`);
         }
 
+        // 2. Sincronización secuencial y ordenada de entidades locales con SQLite.
+        // NOTA DE ARQUITECTURA: SQLite es un motor de base de datos embebido de ESCRITOR ÚNICO.
+        // Si ejecutamos syncReminders, syncFolders, syncNotes, syncEvents y syncCompliance en paralelo con Promise.all,
+        // todas las promesas compiten por el bloqueo de escritura de SQLite y por el pool de conexiones de red,
+        // provocando esperas en busy_timeout (5s) y fallos por timeout (6s-8s).
+        // Al ejecutarse de forma secuencial aislada con try/catch:
+        // - Cada entidad se sincroniza limpiamente en ~200-500ms sin contención de locks ni errores de base de datos bloqueada.
+        // - Si una entidad particular falla por red o timeout, las demás continúan sin verse afectadas.
+
         try {
-            await withTimeout(this.syncReminders(userId, isInitialLogin), 12000, 'syncReminders timeout (12s)');
+            await withTimeout(this.syncReminders(userId, isInitialLogin), 15000, 'syncReminders timeout (15s)');
         } catch (e: any) {
             console.error('Sync reminders failed:', e);
             errors.push(`Reminders: ${e.message}`);
         }
 
         try {
-            await withTimeout(this.syncFolders(userId, isInitialLogin), 8000, 'syncFolders timeout (8s)');
+            await withTimeout(this.syncFolders(userId, isInitialLogin), 15000, 'syncFolders timeout (15s)');
         } catch (e: any) {
             console.error('Sync folders failed:', e);
             errors.push(`Folders: ${e.message}`);
         }
 
         try {
-            await withTimeout(this.syncNotes(userId, isInitialLogin), 12000, 'syncNotes timeout (12s)');
+            await withTimeout(this.syncNotes(userId, isInitialLogin), 15000, 'syncNotes timeout (15s)');
         } catch (e: any) {
             console.error('Sync notes failed:', e);
             errors.push(`Notes: ${e.message}`);
         }
 
         try {
-            await withTimeout(this.syncEvents(userId, isInitialLogin), 10000, 'syncEvents timeout (10s)');
+            await withTimeout(this.syncEvents(userId, isInitialLogin), 15000, 'syncEvents timeout (15s)');
         } catch (e: any) {
             console.error('Sync events failed:', e);
             errors.push(`Events: ${e.message}`);
         }
 
         try {
-            await withTimeout(this.syncComplianceEvents(userId), 8000, 'syncCompliance timeout (8s)');
+            await withTimeout(this.syncComplianceEvents(userId), 15000, 'syncCompliance timeout (15s)');
         } catch (e: any) {
             console.error('Sync compliance failed:', e);
             errors.push(`Compliance: ${e.message}`);
         }
 
-        // Sync de archivos multimedia (después de datos) con timeout y sin bloquear éxito global
-        try {
-            await withTimeout(this.syncAttachmentFiles(userId), 10000, 'syncFiles timeout (10s)');
-        } catch (e: any) {
-            console.warn('[Sync] Sync files notice:', e.message);
-        }
+        // 3. Sync de archivos multimedia en segundo plano (fire-and-forget para no demorar el sync de datos)
+        this.syncAttachmentFiles(userId).catch((e: any) => {
+            console.warn('[Sync] Sync files notice:', e?.message || e);
+        });
 
         if (errors.length === 0) {
             await this.setLastSyncTime(`${userId}_last_full_sync`, syncStart);
@@ -169,9 +173,9 @@ export const SyncService = {
 
     async syncProfile(userId: string, isInitialLogin = false): Promise<void> {
         // 1. Obtener perfil remoto de la tabla profiles con timeout
-        const { data: remoteProfile, error } = await withTimeout(
-            supabase.from('profiles').select('*').eq('id', userId).single(),
-            6000,
+        const { data: remoteProfile, error } = await withTimeout<any>(
+            Promise.resolve(supabase.from('profiles').select('*').eq('id', userId).single()),
+            8000,
             'Profiles select timeout'
         ).catch(() => ({ data: null, error: null }));
 
@@ -264,35 +268,43 @@ export const SyncService = {
             updated_at: new Date().toISOString(),
         };
 
-        await withTimeout(
-            supabase.from('profiles').upsert(profilePayload, { onConflict: 'id' }),
-            6000,
+        await withTimeout<any>(
+            Promise.resolve(supabase.from('profiles').upsert(profilePayload, { onConflict: 'id' })),
+            8000,
             'Profiles upsert timeout'
         ).catch((err) => console.warn('[Sync] Profile upsert warning:', err));
 
-        // 4. Guardar en user_metadata de Auth y actualizar identidades en segundo plano (no bloqueante)
+        // 4. Guardar en user_metadata de Auth y actualizar identidades en segundo plano solo si cambiaron
         (async () => {
             try {
-                await withTimeout(
-                    supabase.auth.updateUser({
-                        data: {
-                            full_name: currentStore.userName || undefined,
-                            name: currentStore.userName || undefined,
-                            settings: {
-                                theme: currentStore.theme,
-                                accentTheme: currentStore.accentTheme,
-                                language: currentStore.language,
-                                soundSettings: currentStore.soundSettings,
-                                defaultControlLevel: currentStore.defaultControlLevel,
-                                userName: currentStore.userName,
-                                userProfile: currentStore.userProfile,
-                                homeViewMode: currentStore.homeViewMode,
+                const currentSettings = {
+                    theme: currentStore.theme,
+                    accentTheme: currentStore.accentTheme,
+                    language: currentStore.language,
+                    soundSettings: currentStore.soundSettings,
+                    defaultControlLevel: currentStore.defaultControlLevel,
+                    userName: currentStore.userName,
+                    userProfile: currentStore.userProfile,
+                    homeViewMode: currentStore.homeViewMode,
+                };
+
+                const remoteSettings = userData?.user_metadata?.settings;
+                const hasSettingsDiff = !remoteSettings || JSON.stringify(remoteSettings) !== JSON.stringify(currentSettings);
+                const hasNameDiff = Boolean(currentStore.userName && userData?.user_metadata?.name !== currentStore.userName);
+
+                if (hasSettingsDiff || hasNameDiff) {
+                    await withTimeout(
+                        supabase.auth.updateUser({
+                            data: {
+                                full_name: currentStore.userName || undefined,
+                                name: currentStore.userName || undefined,
+                                settings: currentSettings,
                             }
-                        }
-                    }),
-                    5000,
-                    'auth.updateUser timeout'
-                );
+                        }),
+                        8000,
+                        'auth.updateUser timeout'
+                    );
+                }
 
                 if (currentStore.userName) {
                     await supabase
@@ -400,32 +412,35 @@ export const SyncService = {
                 }
             });
 
-            // Programar notificaciones y alarmas en el dispositivo para los recordatorios pendientes descargados
-            try {
-                const { NotificationService } = await import('./notificationService');
-                const { useStore } = await import('../store/useStore');
-                const soundSettings = useStore.getState().soundSettings;
-                const now = Date.now();
+            // Programar notificaciones y alarmas en el dispositivo para los recordatorios pendientes descargados.
+            // Se ejecuta de manera asíncrona en segundo plano para no demorar la transacción crítica de sincronización.
+            (async () => {
+                try {
+                    const { NotificationService } = await import('./notificationService');
+                    const { useStore } = await import('../store/useStore');
+                    const soundSettings = useStore.getState().soundSettings;
+                    const now = Date.now();
 
-                for (const remote of toUpsertLocal) {
-                    if (remote.status === 'pending' && remote.due_date_ms > now && !remote.deleted) {
-                        const localItem = await db.getFirstAsync<Reminder>(
-                            `SELECT * FROM reminders WHERE id = ?`, [remote.id]
-                        );
-                        if (localItem) {
-                            const notifIds = await NotificationService.scheduleReminderNotification(localItem, soundSettings);
-                            if (notifIds.length > 0) {
-                                await db.runAsync(
-                                    `UPDATE reminders SET notification_ids = ? WHERE id = ?`,
-                                    [JSON.stringify(notifIds), remote.id]
-                                );
+                    for (const remote of toUpsertLocal) {
+                        if (remote.status === 'pending' && remote.due_date_ms > now && !remote.deleted) {
+                            const localItem = await db.getFirstAsync<Reminder>(
+                                `SELECT * FROM reminders WHERE id = ?`, [remote.id]
+                            );
+                            if (localItem) {
+                                const notifIds = await NotificationService.scheduleReminderNotification(localItem, soundSettings);
+                                if (notifIds.length > 0) {
+                                    await db.runAsync(
+                                        `UPDATE reminders SET notification_ids = ? WHERE id = ?`,
+                                        [JSON.stringify(notifIds), remote.id]
+                                    );
+                                }
                             }
                         }
                     }
+                } catch (notifErr) {
+                    console.warn('[Sync] Error scheduling notifications for downloaded reminders:', notifErr);
                 }
-            } catch (notifErr) {
-                console.warn('[Sync] Error scheduling notifications for downloaded reminders:', notifErr);
-            }
+            })();
         }
 
         // 5. Subir cambios locales al servidor
@@ -479,13 +494,15 @@ export const SyncService = {
 
         await this.setLastSyncTime(`${userId}_reminders_sync`, Date.now());
 
-        // Actualizar datos del widget de Android
-        try {
-            const { WidgetService } = await import('./widgetService');
-            await WidgetService.syncAll();
-        } catch (widgetErr) {
-            console.warn('[Sync] Error sincronizando con el widget de Android:', widgetErr);
-        }
+        // Actualizar datos del widget de Android en segundo plano (fire-and-forget para no bloquear el sync)
+        (async () => {
+            try {
+                const { WidgetService } = await import('./widgetService');
+                await WidgetService.syncAll();
+            } catch (widgetErr) {
+                console.warn('[Sync] Error sincronizando con el widget de Android:', widgetErr);
+            }
+        })();
     },
 
     localReminderToRemote(local: Reminder, userId: string): any {
@@ -1340,8 +1357,8 @@ export const SyncService = {
             createdAtMs,
             updatedAtMs,
             resolvedIsPinned,
-            remote.attachments ? JSON.stringify(remote.attachments) : null,
-            remote.links ? JSON.stringify(remote.links) : null,
+            remote.attachments ? (typeof remote.attachments === 'string' ? remote.attachments : JSON.stringify(remote.attachments)) : null,
+            remote.links ? (typeof remote.links === 'string' ? remote.links : JSON.stringify(remote.links)) : null,
             remote.deleted ? 1 : 0,
             lastModifiedMs,
             isShared,
@@ -1441,15 +1458,23 @@ export const SyncService = {
 
         // 1. Procesar attachments de reminders
         const remindersWithAttachments = await db.getAllAsync<{ id: string; attachments: string }>(
-            `SELECT id, attachments FROM reminders WHERE attachments IS NOT NULL AND attachments != '[]' AND user_id = ?`,
+            `SELECT id, attachments FROM reminders WHERE attachments IS NOT NULL AND attachments != '[]' AND attachments != '"[]"' AND user_id = ?`,
             [userId]
         );
 
         for (const row of remindersWithAttachments) {
             try {
-                const atts = JSON.parse(row.attachments);
+                let atts: any;
+                try {
+                    atts = JSON.parse(row.attachments);
+                    if (typeof atts === 'string') atts = JSON.parse(atts);
+                } catch {
+                    continue;
+                }
+                if (!Array.isArray(atts) || atts.length === 0) continue;
+
                 const hasLocalFiles = atts.some((a: any) =>
-                    a.uri && (a.uri.startsWith('file://') || a.uri.startsWith('/')) && !a.remotePath
+                    a && a.uri && typeof a.uri === 'string' && (a.uri.startsWith('file://') || a.uri.startsWith('/')) && !a.remotePath
                 );
 
                 if (hasLocalFiles) {
@@ -1473,15 +1498,23 @@ export const SyncService = {
 
         // 2. Procesar attachments de notes
         const notesWithAttachments = await db.getAllAsync<{ id: string; attachments: string }>(
-            `SELECT id, attachments FROM notes WHERE attachments IS NOT NULL AND attachments != '[]' AND (user_id = ? OR user_id IS NULL)`,
+            `SELECT id, attachments FROM notes WHERE attachments IS NOT NULL AND attachments != '[]' AND attachments != '"[]"' AND (user_id = ? OR user_id IS NULL)`,
             [userId]
         );
 
         for (const row of notesWithAttachments) {
             try {
-                const atts = JSON.parse(row.attachments);
+                let atts: any;
+                try {
+                    atts = JSON.parse(row.attachments);
+                    if (typeof atts === 'string') atts = JSON.parse(atts);
+                } catch {
+                    continue;
+                }
+                if (!Array.isArray(atts) || atts.length === 0) continue;
+
                 const hasLocalFiles = atts.some((a: any) =>
-                    a.uri && (a.uri.startsWith('file://') || a.uri.startsWith('/')) && !a.remotePath
+                    a && a.uri && typeof a.uri === 'string' && (a.uri.startsWith('file://') || a.uri.startsWith('/')) && !a.remotePath
                 );
 
                 if (hasLocalFiles) {

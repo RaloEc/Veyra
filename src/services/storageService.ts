@@ -34,27 +34,31 @@ export const StorageService = {
      * Genera la ruta remota: {userId}/{hash}_{filename}
      * El hash evita colisiones y permite deduplicación.
      */
-    async getRemotePath(userId: string, localUri: string, fileName: string): Promise<string> {
+    async getRemotePath(userId: string, localUri: string, fileName?: string): Promise<string> {
         // Leer los primeros bytes para hacer un hash rápido
         const fileInfo = await FileSystem.getInfoAsync(localUri);
+        const effectiveName = fileName || (typeof localUri === 'string' ? localUri.split('/').pop() : '') || 'file';
         // Usar tamaño + nombre como hash (rápido y suficiente)
-        const hashInput = `${(fileInfo as any).size || 0}_${fileName}_${(fileInfo as any).modificationTime || 0}`;
+        const hashInput = `${(fileInfo as any).size || 0}_${effectiveName}_${(fileInfo as any).modificationTime || 0}`;
         const hash = await Crypto.digestStringAsync(
             Crypto.CryptoDigestAlgorithm.SHA256,
             hashInput
         );
         const shortHash = hash.substring(0, 12);
         // Sanitizar nombre
-        const safeName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
+        const safeName = effectiveName.replace(/[^a-zA-Z0-9._-]/g, '_');
         return `${userId}/${shortHash}_${safeName}`;
     },
 
     /**
      * Verifica si un archivo es una imagen basándose en su extensión.
      */
-    isImage(fileName: string): boolean {
+    isImage(fileName?: string): boolean {
+        if (!fileName || typeof fileName !== 'string') return false;
         const imageExts = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.heic', '.heif'];
-        const ext = fileName.toLowerCase().substring(fileName.lastIndexOf('.'));
+        const dotIndex = fileName.lastIndexOf('.');
+        if (dotIndex === -1) return false;
+        const ext = fileName.toLowerCase().substring(dotIndex);
         return imageExts.includes(ext);
     },
 
@@ -260,11 +264,17 @@ export const StorageService = {
      */
     async uploadAttachments(
         userId: string,
-        attachments: { uri: string; name: string }[]
+        attachments: { uri: string; name?: string; remotePath?: string }[]
     ): Promise<{ uri: string; name: string; remotePath?: string }[]> {
-        const results = [];
+        const results: any[] = [];
+        if (!Array.isArray(attachments)) return results;
 
         for (const att of attachments) {
+            if (!att || !att.uri || typeof att.uri !== 'string') {
+                if (att) results.push(att);
+                continue;
+            }
+
             // Si ya tiene remotePath, es porque ya se subió antes
             if ((att as any).remotePath) {
                 results.push(att);
@@ -275,11 +285,12 @@ export const StorageService = {
             if (att.uri.startsWith('file://') || att.uri.startsWith('/')) {
                 const fileInfo = await FileSystem.getInfoAsync(att.uri);
                 if (fileInfo.exists) {
-                    const remotePath = await this.uploadFile(userId, att.uri, att.name);
+                    const fileName = att.name || att.uri.split('/').pop() || `file_${Date.now()}`;
+                    const remotePath = await this.uploadFile(userId, att.uri, fileName);
                     if (remotePath) {
-                        results.push({ ...att, remotePath });
+                        results.push({ ...att, name: fileName, remotePath });
                     } else {
-                        // Fallo la subida, mantener como local
+                        // Falló la subida, mantener como local
                         results.push(att);
                     }
                 } else {
@@ -303,13 +314,16 @@ export const StorageService = {
     async downloadAttachments(
         attachments: { uri: string; name: string; remotePath?: string }[]
     ): Promise<{ uri: string; name: string; remotePath?: string }[]> {
-        const results = [];
+        const results: any[] = [];
+        if (!Array.isArray(attachments)) return results;
 
         for (const att of attachments) {
+            if (!att || typeof att !== 'object') continue;
             if ((att as any).remotePath) {
                 // Verificar si el archivo local aún existe
-                const localExists = await FileSystem.getInfoAsync(att.uri);
-                if (!localExists.exists) {
+                const uri = att.uri && typeof att.uri === 'string' ? att.uri : '';
+                const localExists = uri ? (await FileSystem.getInfoAsync(uri)).exists : false;
+                if (!localExists) {
                     // Descargar del servidor
                     const localPath = await this.downloadFile((att as any).remotePath);
                     if (localPath) {
@@ -331,8 +345,11 @@ export const StorageService = {
     /**
      * Obtiene el MIME type basado en la extensión del archivo.
      */
-    getMimeType(fileName: string): string {
-        const ext = fileName.toLowerCase().substring(fileName.lastIndexOf('.')).replace('.', '');
+    getMimeType(fileName?: string): string {
+        if (!fileName || typeof fileName !== 'string') return 'application/octet-stream';
+        const dotIndex = fileName.lastIndexOf('.');
+        if (dotIndex === -1) return 'application/octet-stream';
+        const ext = fileName.toLowerCase().substring(dotIndex).replace('.', '');
         const mimeMap: Record<string, string> = {
             jpg: 'image/jpeg',
             jpeg: 'image/jpeg',

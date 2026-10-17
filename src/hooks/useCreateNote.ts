@@ -243,7 +243,18 @@ export function useCreateNote(
         if (!cachedNote?.attachments) return [];
         try {
             const parsed = JSON.parse(cachedNote.attachments);
-            return Array.isArray(parsed) ? parsed : [];
+            if (!Array.isArray(parsed)) return [];
+            return parsed
+                .filter(Boolean)
+                .map((item: any) => {
+                    if (typeof item === 'string') {
+                        return { uri: item, name: item.split('/').pop() || 'Archivo' };
+                    }
+                    const uri = item?.uri || item?.url || '';
+                    const name = item?.name || (typeof uri === 'string' ? uri.split('/').pop() : '') || 'Archivo';
+                    return { uri, name };
+                })
+                .filter((item: any) => Boolean(item.uri && typeof item.uri === 'string'));
         } catch {
             return [];
         }

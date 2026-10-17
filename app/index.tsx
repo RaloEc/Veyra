@@ -13,6 +13,7 @@ import {
     Easing,
     LayoutAnimation,
     TextInput,
+    Modal,
 } from 'react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { useTranslation } from 'react-i18next';
@@ -96,6 +97,7 @@ import { TopBar } from '../src/components/TopBar';
 import { BottomTabBar } from '../src/components/layout/BottomTabBar';
 import { RecurringDeleteModal } from '../src/components/events/RecurringDeleteModal';
 import { useShareEventsStore } from '../src/store/useShareEventsStore';
+import { useFoldersStore } from '../src/store/useFoldersStore';
 
 export type TimelineItem =
     | { type: 'event'; event: CalendarEvent; time_ms: number }
@@ -1441,6 +1443,27 @@ export default function HomeScreen() {
         }
     };
 
+    const handleHistoryPress = useCallback(() => {
+        if (mainActiveTab === 'notes') {
+            router.push('/notes-history');
+        } else {
+            router.push('/history');
+        }
+    }, [mainActiveTab, router]);
+
+    const handleSharePress = useCallback(() => {
+        if (mainActiveTab === 'notes') {
+            const onShareNotes = useFoldersStore.getState().onShareNotesRequest;
+            if (onShareNotes) {
+                onShareNotes();
+            } else {
+                useFoldersStore.getState().setIsFolderMenuVisible(true);
+            }
+        } else {
+            handleShareAgenda();
+        }
+    }, [mainActiveTab, handleShareAgenda]);
+
     const toggleSelection = (id: string) => {
         setSelectedReminders(prev => (prev.includes(id) ? prev.filter(rId => rId !== id) : [...prev, id]));
     };
@@ -2122,7 +2145,10 @@ export default function HomeScreen() {
     return (
         <View style={[styles.screen, { backgroundColor: colors.bg }]}>
             <View style={{ paddingTop: insets.top, backgroundColor: colors.bg, zIndex: 1000 }}>
-                <TopBar />
+                <TopBar
+                    onHistoryPress={handleHistoryPress}
+                    onSharePress={handleSharePress}
+                />
             </View>
             {/* Contenedor central persistente con Crossfade puro */}
             <View style={{ flex: 1, position: 'relative' }}>
@@ -2130,50 +2156,8 @@ export default function HomeScreen() {
                     style={[StyleSheet.absoluteFill, remindersCrossfadeStyle]}
                     pointerEvents={mainActiveTab === 'reminders' ? 'auto' : 'none'}
                 >
-                {/* ─── HEADER / BUSCADOR / CALENDARIO DESPLEGABLE ─── */}
-            {isSearching ? (
-                <View style={[styles.searchBarWrapper, { borderBottomColor: colors.borderSubtle, backgroundColor: colors.bg }]}>
-                    <VeyraSurface level={1} radius="md" style={styles.searchExpandedBar}>
-                        <Search size={16} color={accent.primary as any} />
-                        <TextInput
-                            autoFocus
-                            value={searchQuery}
-                            onChangeText={setSearchQuery}
-                            placeholder={language === 'es' ? 'Buscar recordatorios o eventos...' : 'Search reminders or events...'}
-                            placeholderTextColor={colors.textMuted}
-                            style={[
-                                styles.searchExpandedInput,
-                                { color: colors.textPrimary, fontSize: typography.body.fontSize },
-                            ]}
-                            selectionColor={accent.primary}
-                        />
-                        {searchQuery.length > 0 && (
-                            <TouchableOpacity
-                                onPress={() => setSearchQuery('')}
-                                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                                style={styles.searchIconBtn}
-                            >
-                                <X size={15} color={colors.textMuted as any} />
-                            </TouchableOpacity>
-                        )}
-                        <TouchableOpacity
-                            onPress={() => {
-                                LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-                                setIsSearching(false);
-                                setSearchQuery('');
-                            }}
-                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                            style={[
-                                styles.searchCloseBtn,
-                                { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.06)' : 'rgba(0, 0, 0, 0.05)' },
-                            ]}
-                            activeOpacity={0.7}
-                        >
-                            <X size={14} color={colors.textSecondary as any} />
-                        </TouchableOpacity>
-                    </VeyraSurface>
-                </View>
-            ) : isSelectionMode ? (
+                {/* ─── HEADER / CALENDARIO DESPLEGABLE ─── */}
+            {isSelectionMode ? (
                 <View style={[styles.viewingAreaContainer, { borderBottomColor: colors.borderSubtle }]}>
                     <View style={styles.viewingAreaSelectionRow}>
                         <View>
@@ -2205,18 +2189,12 @@ export default function HomeScreen() {
                     reminders={reminders}
                     events={events}
                     language={language}
-                    onPressSearch={() => {
-                        LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-                        setIsSearching(true);
-                    }}
-                    onPressHistory={() => router.push('/history')}
-                    onPressShare={handleShareAgenda}
                     hasTodayTasks={totalTodayTasks > 0}
                 />
             )}
 
             {/* ─── Agenda Filter Pills (Matching Notes screen chips) ─── */}
-            {!isSelectionMode && !isSearching && (
+            {!isSelectionMode && (
                 <View style={styles.filterPillsContainer}>
                     <ScrollView
                         horizontal

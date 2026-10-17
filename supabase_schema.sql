@@ -38,6 +38,24 @@ DO $$ BEGIN
     END IF;
 END $$;
 
+-- Asegurar que el usuario creador (Owner) siempre conserve su estado PRO en Supabase
+CREATE OR REPLACE FUNCTION public.handle_owner_premium_status()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF LOWER(TRIM(COALESCE(NEW.email, ''))) = 'ricardo.lopez.18.ralo@gmail.com' THEN
+        NEW.is_premium := TRUE;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+DROP TRIGGER IF EXISTS trg_owner_premium ON public.profiles;
+CREATE TRIGGER trg_owner_premium
+BEFORE INSERT OR UPDATE ON public.profiles
+FOR EACH ROW
+EXECUTE FUNCTION public.handle_owner_premium_status();
+
+
 
 -- 2. TABLA: reminders
 CREATE TABLE IF NOT EXISTS public.reminders (

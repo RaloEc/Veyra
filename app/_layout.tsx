@@ -93,6 +93,23 @@ function AppShell({ theme }: { theme: 'dark' | 'light' }) {
                     presentation: 'card',
                     animation: 'slide_from_right',
                 }} />
+                <Stack.Screen name="search" options={{
+                    title: 'Búsqueda',
+                    presentation: 'card',
+                    animation: 'fade',
+                    animationDuration: 180,
+                    contentStyle: { backgroundColor: mainBg },
+                }} />
+                <Stack.Screen name="discipline-mode" options={{
+                    title: 'Modo Disciplina',
+                    presentation: 'card',
+                    animation: 'slide_from_right',
+                    contentStyle: { backgroundColor: mainBg },
+                }} />
+                <Stack.Screen name="calendar" options={{
+                    headerShown: false,
+                    animation: 'none',
+                }} />
 
                 <Stack.Screen name="confirm/[id]" options={{ presentation: 'fullScreenModal', headerShown: false }} />
                 <Stack.Screen name="join" options={{ presentation: 'modal', animation: 'slide_from_bottom', headerShown: false }} />
@@ -301,6 +318,19 @@ export default function RootLayout() {
                 }, 60);
                 return () => clearTimeout(timer);
             }
+            if (pendingDeepLinkUrlRef.current) {
+                const queuedUrl = pendingDeepLinkUrlRef.current;
+                pendingDeepLinkUrlRef.current = null;
+                if (queuedUrl.includes('confirm/')) {
+                    const match = queuedUrl.match(/confirm\/([^/?#]+)/);
+                    if (match && match[1]) {
+                        const timer = setTimeout(() => {
+                            navigateToConfirm(match[1]);
+                        }, 60);
+                        return () => clearTimeout(timer);
+                    }
+                }
+            }
         }
     }, [isAppReady, navigateToConfirm]);
 
@@ -460,6 +490,67 @@ export default function RootLayout() {
                     router.replace({ pathname: '/schedule', params: cleanId ? { id: cleanId } : undefined } as any);
                 } catch (e) {
                     console.warn('[RootLayout] Error parsing schedule deep link:', e);
+                }
+            } else if (url.includes('calendar')) {
+                try {
+                    useStore.getState().setMainActiveTab('reminders');
+                    useStore.getState().setHomeViewMode('calendar');
+                    router.replace('/' as any);
+                } catch (e) {
+                    console.warn('[RootLayout] Error handling calendar deep link:', e);
+                }
+            } else if (url.includes('notes')) {
+                try {
+                    if (url.includes('notes/create')) {
+                        router.push('/notes/create' as any);
+                    } else {
+                        const match = url.match(/notes\/([^/?#]+)/);
+                        if (match && match[1] && match[1] !== 'index') {
+                            router.push(`/notes/${match[1]}` as any);
+                        } else {
+                            router.push('/notes' as any);
+                        }
+                    }
+                } catch (e) {
+                    console.warn('[RootLayout] Error handling notes deep link:', e);
+                }
+            } else if (url.includes('reminder/')) {
+                try {
+                    const match = url.match(/reminder\/([^/?#]+)/);
+                    if (match && match[1]) {
+                        router.push(`/reminder/${match[1]}` as any);
+                    }
+                } catch (e) {
+                    console.warn('[RootLayout] Error handling reminder deep link:', e);
+                }
+            } else if (url.includes('events/create')) {
+                try {
+                    const match = url.match(/id=([^&?#]+)/);
+                    if (match && match[1]) {
+                        router.push({ pathname: '/events/create', params: { id: match[1] } } as any);
+                    } else {
+                        router.push('/events/create' as any);
+                    }
+                } catch (e) {
+                    console.warn('[RootLayout] Error handling events/create deep link:', e);
+                }
+            } else if (url.includes('discipline-mode')) {
+                try {
+                    router.push('/discipline-mode' as any);
+                } catch (e) {
+                    console.warn('[RootLayout] Error handling discipline-mode deep link:', e);
+                }
+            } else if (url.includes('search')) {
+                try {
+                    router.push('/search' as any);
+                } catch (e) {
+                    console.warn('[RootLayout] Error handling search deep link:', e);
+                }
+            } else if (url.endsWith('/create') || url.includes('create')) {
+                try {
+                    router.push('/create' as any);
+                } catch (e) {
+                    console.warn('[RootLayout] Error handling create deep link:', e);
                 }
             }
         };

@@ -2,6 +2,7 @@ import * as SQLite from 'expo-sqlite';
 
 let dbInstance: SQLite.SQLiteDatabase | null = null;
 let dbPromise: Promise<SQLite.SQLiteDatabase> | null = null;
+let dbInitPromise: Promise<void> | null = null;
 
 export const resetDB = () => {
   try {
@@ -11,6 +12,7 @@ export const resetDB = () => {
   } catch {}
   dbInstance = null;
   dbPromise = null;
+  dbInitPromise = null;
 };
 
 export const getDB = async (forceReconnect = false): Promise<SQLite.SQLiteDatabase> => {
@@ -68,11 +70,7 @@ export const withDB = async <T>(operation: (db: SQLite.SQLiteDatabase) => Promis
  * Migración explícita e idempotente para la columna sync_mode en la tabla notes.
  * Consulta PRAGMA table_info(notes) para verificar existencia previa y propaga errores reales.
  */
-export async function migrateNotesSyncMode(db: {
-  getAllAsync: <T = any>(sql: string, params?: any[]) => Promise<T[]>;
-  execAsync: (sql: string) => Promise<any>;
-  runAsync: (sql: string, params?: any[]) => Promise<any>;
-}): Promise<{ applied: boolean; columnExists: boolean }> {
+export async function migrateNotesSyncMode(db: SQLite.SQLiteDatabase): Promise<{ applied: boolean; columnExists: boolean }> {
   // 1. Consultar esquema actual de la tabla notes mediante PRAGMA
   const columns = await db.getAllAsync<{ name: string }>('PRAGMA table_info(notes);');
   const hasSyncMode = Array.isArray(columns) && columns.some(col => col.name === 'sync_mode');
@@ -102,9 +100,17 @@ export async function migrateNotesSyncMode(db: {
   return { applied, columnExists: true };
 }
 
-export const initDatabase = async () => {
-  console.log('Starting database initialization...');
-  const db = await getDB();
+export const initDatabase = async (force = false): Promise<void> => {
+  if (force) {
+    dbInitPromise = null;
+  }
+  if (dbInitPromise) {
+    return dbInitPromise;
+  }
+
+  dbInitPromise = (async () => {
+    console.log('Starting database initialization...');
+    const db = await getDB();
 
   // Enable foreign keys
   await db.execAsync('PRAGMA foreign_keys = ON;');
@@ -384,5 +390,37 @@ export const initDatabase = async () => {
     console.warn('[DB] Non-critical index creation warning:', err);
   }
 
-  console.log('Database initialized successfully');
+  // Search Index Table
+  try {
+    await db.execAsync(`
+      CREATE TABLE IF NOT EXISTS search_index (
+        entity_type TEXT NOT NULL,
+        entity_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        content TEXT,
+        keywords TEXT,
+        parent_id TEXT,
+        extra_meta TEXT,
+        updated_at_ms INTEGER NOT NULL,
+        deleted INTEGER DEFAULT 0,
+        PRIMARY KEY (entity_type, entity_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_search_title ON search_index (title);
+      CREATE INDEX IF NOT EXISTS idx_search_deleted ON search_index (deleted);
+      CREATE INDEX IF NOT EXISTS idx_search_type ON search_index (entity_type);
+    `);
+    console.log('Search index table checked');
+  } catch (err) {
+    console.warn('[DB] Search index creation warning:', err);
+  }
+
+    console.log('Database initialized successfully');
+  })();
+
+  try {
+    await dbInitPromise;
+  } catch (err) {
+    dbInitPromise = null;
+    throw err;
+  }
 };

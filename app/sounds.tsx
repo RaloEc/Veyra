@@ -5,6 +5,7 @@ import {
     ScrollView,
     TouchableOpacity,
     StyleSheet,
+    Vibration,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
@@ -44,6 +45,9 @@ export default function SoundSelectorScreen() {
     const [playingId, setPlayingId] = useState<string | null>(null);
 
     function stopSound() {
+        try {
+            Vibration.cancel();
+        } catch (_) {}
         if (playerRef.current) {
             try {
                 playerRef.current.pause();
@@ -64,6 +68,15 @@ export default function SoundSelectorScreen() {
         setPlayingId(soundId);
 
         try {
+            const previewVibrationPattern = level === 'critical'
+                ? [0, 600, 250, 600]
+                : level === 'strict'
+                ? [0, 450, 200, 450]
+                : [0, 250, 150, 250];
+            try {
+                Vibration.vibrate(previewVibrationPattern, false);
+            } catch (_) {}
+
             await setAudioModeAsync({
                 playsInSilentMode: true,
                 interruptionMode: 'mixWithOthers',

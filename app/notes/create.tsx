@@ -162,7 +162,9 @@ export default function CreateNoteScreen() {
     };
 
     const otherAttachments = attachments.filter(item => {
-        const uri = item.uri.toLowerCase();
+        const rawUri = item?.uri || (typeof item === 'string' ? item : '');
+        if (!rawUri || typeof rawUri !== 'string') return false;
+        const uri = rawUri.toLowerCase();
         return !(
             uri.includes('imagepicker') ||
             uri.endsWith('.jpg') ||

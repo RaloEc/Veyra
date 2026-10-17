@@ -155,6 +155,35 @@ export const VeyraAlarm = {
     },
 
     /**
+     * Verifica si el dispositivo tiene actualmente la pantalla de bloqueo activa (Keyguard bloqueado)
+     */
+    async isKeyguardLocked(): Promise<boolean> {
+        if (!this.isAvailable() || typeof VeyraAlarmModule.isKeyguardLocked !== 'function') {
+            return false;
+        }
+        try {
+            return await VeyraAlarmModule.isKeyguardLocked();
+        } catch {
+            return false;
+        }
+    },
+
+    /**
+     * Limpia los flags de pantalla de bloqueo y, si el dispositivo está bloqueado,
+     * minimiza la app (moveTaskToBack) para que permanezca la pantalla de bloqueo del sistema.
+     */
+    async dismissAlarmScreen(): Promise<boolean> {
+        if (!this.isAvailable() || typeof VeyraAlarmModule.dismissAlarmScreen !== 'function') {
+            return false;
+        }
+        try {
+            return await VeyraAlarmModule.dismissAlarmScreen();
+        } catch {
+            return false;
+        }
+    },
+
+    /**
      * Verifica si la app tiene permiso para mostrarse sobre otras apps (SYSTEM_ALERT_WINDOW)
      */
     async canDrawOverlays(): Promise<boolean> {

@@ -8,6 +8,18 @@ function triggerNotesWidgetSync() {
     }).catch(() => {});
 }
 
+function triggerSearchIndex(note: Note) {
+    import('./searchService').then(({ SearchService }) => {
+        SearchService.indexNote(note).catch(() => {});
+    }).catch(() => {});
+}
+
+function triggerSearchRemove(id: string) {
+    import('./searchService').then(({ SearchService }) => {
+        SearchService.removeItem('note', id).catch(() => {});
+    }).catch(() => {});
+}
+
 export const NoteService = {
     async createNote(
         title?: string,
@@ -61,6 +73,7 @@ export const NoteService = {
             }
 
             triggerNotesWidgetSync();
+            triggerSearchIndex(newNote);
             return newNote;
         });
     },
@@ -139,6 +152,7 @@ export const NoteService = {
                 params
             );
             triggerNotesWidgetSync();
+            NoteService.getNoteById(id).then(n => n && triggerSearchIndex(n)).catch(() => {});
         });
     },
 
@@ -196,6 +210,7 @@ export const NoteService = {
                 [now, now, id]
             );
             triggerNotesWidgetSync();
+            triggerSearchRemove(id);
         });
     },
 
@@ -209,6 +224,7 @@ export const NoteService = {
                 [now, now, ...ids]
             );
             triggerNotesWidgetSync();
+            ids.forEach(triggerSearchRemove);
         });
     },
 
@@ -220,6 +236,7 @@ export const NoteService = {
                 [now, now, id]
             );
             triggerNotesWidgetSync();
+            NoteService.getNoteById(id).then(n => n && triggerSearchIndex(n)).catch(() => {});
         });
     },
 
@@ -233,6 +250,9 @@ export const NoteService = {
                 [now, now, ...ids]
             );
             triggerNotesWidgetSync();
+            ids.forEach(id => {
+                NoteService.getNoteById(id).then(n => n && triggerSearchIndex(n)).catch(() => {});
+            });
         });
     },
 
@@ -240,6 +260,7 @@ export const NoteService = {
         return withDB(async (db) => {
             await db.runAsync(`DELETE FROM notes WHERE id = ?`, [id]);
             triggerNotesWidgetSync();
+            triggerSearchRemove(id);
         });
     },
 
@@ -249,6 +270,7 @@ export const NoteService = {
             const placeholders = ids.map(() => '?').join(', ');
             await db.runAsync(`DELETE FROM notes WHERE id IN (${placeholders})`, ids);
             triggerNotesWidgetSync();
+            ids.forEach(triggerSearchRemove);
         });
     },
 

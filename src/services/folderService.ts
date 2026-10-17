@@ -2,6 +2,18 @@ import { getDB, withDB } from '../db';
 import { Folder } from '../types/db';
 import * as Crypto from 'expo-crypto';
 
+function triggerSearchIndex(folder: Folder) {
+    import('./searchService').then(({ SearchService }) => {
+        SearchService.indexFolder(folder).catch(() => {});
+    }).catch(() => {});
+}
+
+function triggerSearchRemove(id: string) {
+    import('./searchService').then(({ SearchService }) => {
+        SearchService.removeItem('folder', id).catch(() => {});
+    }).catch(() => {});
+}
+
 export const FolderService = {
     async createFolder(
         name: string,
@@ -35,6 +47,7 @@ export const FolderService = {
                 [id, userId || null, parentId || null, newFolder.name, icon, color, isPinned ? 1 : 0, now, now, now]
             );
 
+            triggerSearchIndex(newFolder);
             return newFolder;
         });
     },
@@ -114,6 +127,7 @@ export const FolderService = {
                 `UPDATE folders SET ${sets.join(', ')} WHERE id = ?`,
                 params
             );
+            FolderService.getFolderById(id).then(f => f && triggerSearchIndex(f)).catch(() => {});
         });
     },
 
@@ -163,6 +177,7 @@ export const FolderService = {
                 `UPDATE folders SET deleted = 1, updated_at_ms = ?, last_modified_ms = ? WHERE id IN (${placeholders})`,
                 [now, now, ...allTargetIds]
             );
+            allTargetIds.forEach(triggerSearchRemove);
         });
     },
 
@@ -203,6 +218,7 @@ export const FolderService = {
                 `UPDATE folders SET deleted = 0, updated_at_ms = ?, last_modified_ms = ? WHERE id = ?`,
                 [now, now, id]
             );
+            FolderService.getFolderById(id).then(f => f && triggerSearchIndex(f)).catch(() => {});
         });
     },
 
@@ -222,6 +238,7 @@ export const FolderService = {
                 `DELETE FROM folders WHERE id IN (${placeholders})`,
                 allTargetIds
             );
+            allTargetIds.forEach(triggerSearchRemove);
         });
     },
 };

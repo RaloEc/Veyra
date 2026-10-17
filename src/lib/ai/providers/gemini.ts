@@ -76,10 +76,11 @@ export class GeminiProvider implements AIProvider {
     if (Array.isArray(input.attachments)) {
       for (const att of input.attachments) {
         if (att.base64Data) {
+          const cleanData = att.base64Data.replace(/^data:[^;]+;base64,/, '');
           parts.push({
             inlineData: {
               mimeType: att.mimeType,
-              data: att.base64Data,
+              data: cleanData,
             },
           });
         }
@@ -307,6 +308,14 @@ export class GeminiProvider implements AIProvider {
     // 4. Servicio o modelo no disponible temporalmente (404)
     if (
       status === 404 ||
+      text.includes('requested function was not found') ||
+      text.includes('function was not found') ||
+      text.includes('function not found')
+    ) {
+      return 'La Edge Function de IA no está desplegada en Supabase y no se ha configurado EXPO_PUBLIC_GEMINI_API_KEY en el archivo .env. Agrega tu clave en .env (EXPO_PUBLIC_GEMINI_API_KEY=tu_api_key) para usar la IA directamente.';
+    }
+
+    if (
       text.includes('404') ||
       text.includes('not found') ||
       text.includes('not supported') ||

@@ -31,6 +31,10 @@ interface FoldersState {
     deleteFolders: (ids: string[], deleteNotes?: boolean) => Promise<void>;
     selectedFolderIds: string[];
     setSelectedFolderIds: (ids: string[]) => void;
+    isFolderMenuVisible: boolean;
+    setIsFolderMenuVisible: (visible: boolean) => void;
+    onShareNotesRequest?: () => void;
+    setOnShareNotesRequest: (fn?: () => void) => void;
 }
 
 export const useFoldersStore = create<FoldersState>((set, get) => ({
@@ -41,6 +45,10 @@ export const useFoldersStore = create<FoldersState>((set, get) => ({
     activeFolderId: 'all',
     selectedFolderIds: [],
     setSelectedFolderIds: (ids) => set({ selectedFolderIds: ids }),
+    isFolderMenuVisible: false,
+    setIsFolderMenuVisible: (visible) => set({ isFolderMenuVisible: visible }),
+    onShareNotesRequest: undefined,
+    setOnShareNotesRequest: (fn) => set({ onShareNotesRequest: fn }),
 
     // Pila de navegación
     folderStack: [],
