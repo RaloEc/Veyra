@@ -13,6 +13,7 @@ interface VeyraYjsToolbarProps {
     onRedo: () => void;
     accentColor?: string;
     isDark?: boolean;
+    isAmoled?: boolean;
 }
 
 export function VeyraYjsToolbar({
@@ -25,9 +26,10 @@ export function VeyraYjsToolbar({
     onRedo,
     accentColor = '#8B5CF6',
     isDark = true,
+    isAmoled = false,
 }: VeyraYjsToolbarProps) {
-    const bg = isDark ? '#1C1C20' : '#F4F4F5';
-    const border = isDark ? '#2E2E34' : '#E4E4E7';
+    const bg = isAmoled ? '#000000' : (isDark ? '#1C1C20' : '#F4F4F5');
+    const border = isAmoled ? 'rgba(255, 255, 255, 0.12)' : (isDark ? '#2E2E34' : '#E4E4E7');
     const iconColor = isDark ? '#A1A1AA' : '#52525B';
     const activeBg = isDark ? 'rgba(139, 92, 246, 0.2)' : 'rgba(139, 92, 246, 0.15)';
 

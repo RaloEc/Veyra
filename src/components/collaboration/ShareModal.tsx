@@ -73,6 +73,7 @@ export const ShareModal: React.FC<ShareModalProps> = ({
     const [updatingRole, setUpdatingRole] = useState(false);
     const [loading, setLoading] = useState(false);
     const [generatingLink, setGeneratingLink] = useState(false);
+    const [isConvertingToYjs, setIsConvertingToYjs] = useState(false);
     const [collaborators, setCollaborators] = useState<CollaboratorMember[]>([]);
     const [isPublicMembers, setIsPublicMembers] = useState(true);
     const [updatingVisibility, setUpdatingVisibility] = useState(false);
@@ -235,6 +236,87 @@ export const ShareModal: React.FC<ShareModalProps> = ({
         };
     }, [visible, targetId, isEvent, loadCollaborators]);
 
+    const ensureNoteYjsMode = async (noteId: string): Promise<boolean> => {
+        if (targetType !== 'note') return true;
+        try {
+            const { getDB } = await import('../../db');
+            const db = await getDB();
+            const localNote = await db.getFirstAsync<any>('SELECT * FROM notes WHERE id = ?', [noteId]);
+            if (!localNote) return true;
+
+            const currentSyncMode = localNote.sync_mode || 'rest';
+            if (currentSyncMode === 'yjs') {
+                return true;
+            }
+
+            setIsConvertingToYjs(true);
+
+            // 1. Asegurar que la nota exista sincronizada en Supabase
+            const userId = session?.user?.id;
+            if (!userId) return false;
+
+            const { SyncService } = await import('../../services/syncService');
+            const remote = SyncService.localNoteToRemote({ ...localNote, is_shared: 1 }, userId);
+            await supabase.from('notes').upsert(remote, { onConflict: 'id' });
+
+            // 2. Ejecutar supabase.rpc('activate_note_yjs_mode', { p_note_id: noteId })
+            let rpcSuccess = false;
+            try {
+                const { data: rpcData, error: rpcErr } = await supabase.rpc('activate_note_yjs_mode', {
+                    p_note_id: noteId,
+                });
+                if (!rpcErr && rpcData?.success !== false) {
+                    rpcSuccess = true;
+                }
+            } catch (_) {}
+
+            // Si la RPC simple de 1 parámetro no está disponible o requiere parámetros criptográficos (deploy-05),
+            // ejecutar executePilotActivation con verificación de hash y snapshot
+            if (!rpcSuccess) {
+                const { executePilotActivation } = await import('../../poc-yjs/pilotActivationStrategy');
+                const { YjsLocalPersistence } = await import('../../poc-yjs/yjsLocalPersistence');
+                const { withDB } = await import('../../db');
+                const targetLocalPersistence = new YjsLocalPersistence({
+                    execAsync: async (sql) => withDB(d => d.execAsync(sql)),
+                    runAsync: async (sql, params) => withDB(d => d.runAsync(sql, params)),
+                    getAllAsync: async (sql, params) => withDB(d => d.getAllAsync(sql, params)),
+                    getFirstAsync: async (sql, params) => withDB(d => d.getFirstAsync(sql, params)),
+                    withTransactionAsync: async (action) => withDB(d => d.withTransactionAsync ? d.withTransactionAsync(action) : action()),
+                });
+
+                const result = await executePilotActivation(
+                    supabase,
+                    targetLocalPersistence,
+                    { ...localNote, is_shared: 1 },
+                    userId
+                );
+                if (result.success) {
+                    rpcSuccess = true;
+                }
+            }
+
+            if (rpcSuccess) {
+                // 3. Actualizar estado local SQLite y store Zustand
+                const { NoteService } = await import('../../services/noteService');
+                await NoteService.setNoteSyncMode(noteId, 'yjs');
+                await db.runAsync('UPDATE notes SET is_shared = 1, sync_mode = ? WHERE id = ?', ['yjs', noteId]);
+                const { useNotesStore } = await import('../../store/useNotesStore');
+                await useNotesStore.getState().updateNote(noteId, { sync_mode: 'yjs', is_shared: 1 });
+                useNotesStore.setState(state => ({
+                    notes: state.notes.map(n => n.id === noteId ? { ...n, sync_mode: 'yjs', is_shared: 1 } : n)
+                }));
+                return true;
+            }
+
+            return false;
+        } catch (err) {
+            console.warn('[ShareModal] Error al convertir nota a Yjs:', err);
+            return false;
+        } finally {
+            setIsConvertingToYjs(false);
+        }
+    };
+
     const handleCreateShare = async () => {
         if (!session?.user?.id) {
             Alert.alert('Sesión requerida', 'Debes iniciar sesión para invitar a otros usuarios.');
@@ -243,6 +325,11 @@ export const ShareModal: React.FC<ShareModalProps> = ({
 
         setGeneratingLink(true);
         try {
+            // Si es una nota en modo 'rest', convertir atómicamente a 'yjs' antes de invitar
+            if (targetType === 'note') {
+                await ensureNoteYjsMode(targetId);
+            }
+
             // Asegurar que el elemento exista en Supabase antes de generar la invitación colaborativa
             try {
                 const { getDB } = await import('../../db');
@@ -336,6 +423,9 @@ export const ShareModal: React.FC<ShareModalProps> = ({
             let urlToCopy = lastInviteUrl;
             if (!urlToCopy) {
                 setGeneratingLink(true);
+                if (targetType === 'note') {
+                    await ensureNoteYjsMode(targetId);
+                }
                 const role = isEvent ? 'viewer' : selectedRole;
                 const { inviteUrl } = await CollaborationService.createInvitation(
                     targetType,
@@ -575,10 +665,15 @@ export const ShareModal: React.FC<ShareModalProps> = ({
                                             <TouchableOpacity
                                                 style={[styles.primaryShareBtn, { backgroundColor: accent.primary }]}
                                                 onPress={handleCreateShare}
-                                                disabled={generatingLink}
+                                                disabled={generatingLink || isConvertingToYjs}
                                                 activeOpacity={0.85}
                                             >
-                                                {generatingLink ? (
+                                                {isConvertingToYjs ? (
+                                                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                                                        <ActivityIndicator size="small" color="#FFFFFF" />
+                                                        <Text style={styles.primaryShareBtnText}>Preparando colaboración...</Text>
+                                                    </View>
+                                                ) : generatingLink ? (
                                                     <ActivityIndicator size="small" color="#FFFFFF" />
                                                 ) : (
                                                     <>

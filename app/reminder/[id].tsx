@@ -14,13 +14,27 @@ import {
     Share,
     useWindowDimensions,
     ActivityIndicator,
+    Keyboard,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { format, isPast, isToday, differenceInMinutes, addHours, addDays, setHours, setMinutes } from 'date-fns';
 import { es, enUS } from 'date-fns/locale';
-import RenderHTML from 'react-native-render-html';
+import RenderHTML, { HTMLElementModel, HTMLContentModel } from 'react-native-render-html';
+
+const customHtmlElementModels = {
+    bold: HTMLElementModel.fromCustomModel({
+        tagName: 'bold',
+        mixedUAStyles: { fontWeight: 'bold' },
+        contentModel: HTMLContentModel.textual,
+    }),
+    italic: HTMLElementModel.fromCustomModel({
+        tagName: 'italic',
+        mixedUAStyles: { fontStyle: 'italic' },
+        contentModel: HTMLContentModel.textual,
+    }),
+};
 import ImageViewing from 'react-native-image-viewing';
 import { Image as ExpoImage } from 'expo-image';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -117,7 +131,7 @@ function HtmlImageRenderer({ tnode }: any) {
                         setAspectRatio(imgW / imgH);
                     }
                 },
-                () => {}
+                () => { }
             );
         }
     }, [src]);
@@ -154,6 +168,8 @@ export default function ReminderDetailScreen() {
 
     const reminders = useStore(state => state.reminders);
     const history = useStore(state => state.history);
+    const itemTagsMap = useStore(state => state.itemTagsMap);
+    const loadTags = useStore(state => state.loadTags);
     const markAsCompleted = useStore(state => state.markAsCompleted);
     const markAsPending = useStore(state => state.markAsPending);
     const snoozeReminder = useStore(state => state.snoozeReminder);
@@ -276,6 +292,7 @@ export default function ReminderDetailScreen() {
             headerAnim.setValue(1);
             contentAnim.setValue(1);
             bottomBarAnim.setValue(1);
+            loadTags().catch(() => { });
 
             const onHardwareBack = () => {
                 handleBack();
@@ -283,7 +300,7 @@ export default function ReminderDetailScreen() {
             };
             const subscription = BackHandler.addEventListener('hardwareBackPress', onHardwareBack);
             return () => subscription.remove();
-        }, [])
+        }, [loadTags])
     );
 
     const navigateBack = () => {
@@ -297,6 +314,7 @@ export default function ReminderDetailScreen() {
     const handleBack = () => {
         if (isExiting.current) return;
         isExiting.current = true;
+        Keyboard.dismiss();
         navigateBack();
     };
 
@@ -441,7 +459,7 @@ export default function ReminderDetailScreen() {
             if (parsed.type && parsed.type !== 'none') {
                 repeatLabel = t(`create.recurrence_${parsed.type}`, { defaultValue: parsed.type });
             }
-        } catch {}
+        } catch { }
     }
 
     // Quick Add Subtask Handler
@@ -535,7 +553,7 @@ export default function ReminderDetailScreen() {
                         try {
                             const { CollaborationService } = await import('../../src/services/collaborationService');
                             await CollaborationService.leaveCollaboration('reminder', reminder.id);
-                        } catch {}
+                        } catch { }
                         await deleteReminder(reminder.id);
                     },
                 },
@@ -586,758 +604,779 @@ export default function ReminderDetailScreen() {
     const controlColor = getControlLevelColor(reminder.control_level);
 
     return (
-        <Reanimated.View
-            sharedTransitionTag={`reminder-card-${id}`}
-            sharedTransitionStyle={reminderSharedTransition}
+        <View
             style={[styles.screenContainer, { backgroundColor: colors.bg }]}
         >
             <SafeAreaView style={[styles.screen, { backgroundColor: colors.bg }]} edges={['top', 'left', 'right']}>
-            {/* ─── TOP BAR MINIMALISTA ─── */}
-            <Animated.View
-                style={[
-                    styles.header,
-                    {
-                        borderBottomColor: colors.borderSubtle,
-                        opacity: headerAnim,
-                    },
-                ]}
-            >
-                <VeyraIconButton
-                    variant="ghost"
-                    size="sm"
-                    icon={<ChevronLeft size={24} color={colors.textPrimary} />}
-                    onPress={handleBack}
-                />
-
-                <View style={styles.headerRightActions}>
-                    {reminder && (
-                        <CollaboratorsAvatars
-                            targetType="reminder"
-                            targetId={reminder.id}
-                            onPress={handleShareReminder}
-                        />
-                    )}
-
+                {/* ─── TOP BAR MINIMALISTA ─── */}
+                <Animated.View
+                    style={[
+                        styles.header,
+                        {
+                            borderBottomColor: colors.borderSubtle,
+                            opacity: headerAnim,
+                        },
+                    ]}
+                >
                     <VeyraIconButton
                         variant="ghost"
                         size="sm"
-                        icon={<Share2 size={19} color={colors.textSecondary} />}
-                        onPress={handleShareReminder}
+                        icon={<ChevronLeft size={24} color={colors.textPrimary} />}
+                        onPress={handleBack}
                     />
 
-                    {!isReadOnly && (
+                    <View style={styles.headerRightActions}>
+                        {reminder && (
+                            <CollaboratorsAvatars
+                                targetType="reminder"
+                                targetId={reminder.id}
+                                onPress={handleShareReminder}
+                            />
+                        )}
+
                         <VeyraIconButton
                             variant="ghost"
                             size="sm"
-                            icon={<Edit3 size={19} color={colors.textSecondary} />}
-                            onPress={() => router.push({ pathname: '/create', params: { id: reminder.id } })}
+                            icon={<Share2 size={19} color={colors.textSecondary} />}
+                            onPress={handleShareReminder}
                         />
-                    )}
 
-                    <VeyraIconButton
-                        variant="ghost"
-                        size="sm"
-                        icon={<MoreVertical size={20} color={colors.textSecondary} />}
-                        onPress={() => setIsOptionsModalVisible(true)}
-                    />
-                </View>
-            </Animated.View>
+                        {!isReadOnly && (
+                            <VeyraIconButton
+                                variant="ghost"
+                                size="sm"
+                                icon={<Edit3 size={19} color={colors.textSecondary} />}
+                                onPress={() => router.push({ pathname: '/create', params: { id: reminder.id } })}
+                            />
+                        )}
 
-            <ScrollView
-                showsVerticalScrollIndicator={false}
-                contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 110 }]}
-            >
-                <Animated.View style={{ opacity: contentAnim, gap: 20 }}>
-                    {/* ─── HERO HEADER SIN CAJAS (EDITORIAL & LIMPIO) ─── */}
-                    <View style={styles.heroSection}>
-                        {/* Meta Tags Row */}
-                        <View style={styles.metaRow}>
-                            {isReadOnly && (
-                                <View style={[styles.controlPill, { backgroundColor: isDark ? 'rgba(56, 189, 248, 0.15)' : 'rgba(2, 132, 199, 0.1)' }]}>
-                                    <Eye size={12} color={isDark ? '#38BDF8' : '#0284C7'} />
-                                    <Text style={[styles.controlPillText, { color: isDark ? '#38BDF8' : '#0284C7', fontWeight: '600' }]}>
-                                        {language === 'es' ? 'Solo lectura' : 'View only'}
-                                    </Text>
-                                </View>
-                            )}
-
-                            <View style={[styles.controlPill, { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.06)' : 'rgba(0, 0, 0, 0.05)' }]}>
-                                <View style={[styles.controlDot, { backgroundColor: controlColor.main }]} />
-                                <Text style={[styles.controlPillText, { color: colors.textSecondary }]}>
-                                    {reminder.control_level ? (language === 'es' ? (reminder.control_level === 'critical' ? 'Crítico' : reminder.control_level === 'strict' ? 'Estricto' : 'Normal') : reminder.control_level.charAt(0).toUpperCase() + reminder.control_level.slice(1)) : 'Normal'}
-                                </Text>
-                            </View>
-
-                            {(isCompleted || isCompleting) && (
-                                <View style={[styles.statusBadge, { backgroundColor: isDark ? 'rgba(52, 211, 153, 0.15)' : 'rgba(16, 185, 129, 0.12)' }]}>
-                                    <Check size={11} color={isDark ? '#34D399' : '#10B981'} strokeWidth={3} />
-                                    <Text style={[styles.statusBadgeText, { color: isDark ? '#34D399' : '#10B981' }]}>
-                                        {language === 'es' ? 'Completado' : 'Completed'}
-                                    </Text>
-                                </View>
-                            )}
-
-                            {repeatLabel && (
-                                <View style={[styles.repeatPill, { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.06)' : 'rgba(0, 0, 0, 0.05)' }]}>
-                                    <Repeat size={11} color={colors.textMuted} />
-                                    <Text style={[styles.repeatPillText, { color: colors.textSecondary }]}>
-                                        {repeatLabel}
-                                    </Text>
-                                </View>
-                            )}
-                        </View>
-
-                        {/* Title Large & Clean */}
-                        <Text
-                            style={[
-                                styles.title,
-                                { color: (isCompleted || isCompleting) ? (isDark ? '#34D399' : '#10B981') : colors.textPrimary },
-                                (isCompleted || isCompleting) && { textDecorationLine: 'line-through', opacity: 0.75 },
-                            ]}
-                        >
-                            {reminder.title}
-                        </Text>
-
-                        {/* Interactive Schedule Bar */}
-                        <TouchableOpacity
-                            activeOpacity={0.7}
-                            onPress={() => setIsRescheduleModalVisible(true)}
-                            style={[
-                                styles.dateButton,
-                                {
-                                    backgroundColor: isDark ? 'rgba(255, 255, 255, 0.04)' : 'rgba(0, 0, 0, 0.03)',
-                                    borderColor: isOverdue ? (isDark ? 'rgba(251, 113, 133, 0.3)' : 'rgba(225, 29, 72, 0.25)') : colors.borderSubtle,
-                                },
-                            ]}
-                        >
-                            <View style={styles.dateButtonLeft}>
-                                <Clock
-                                    size={15}
-                                    color={isOverdue ? (isDark ? '#FB7185' : '#E11D48') : isCompleted ? (isDark ? '#34D399' : '#10B981') : accent.primary}
-                                />
-                                <Text style={[styles.dateButtonMainText, { color: colors.textPrimary }]}>
-                                    {format(dueDate, language === 'es' ? "EEEE d 'de' MMMM, yyyy • HH:mm" : "EEEE, MMMM d, yyyy • HH:mm", { locale })}
-                                </Text>
-                                <Text
-                                    style={[
-                                        styles.dateButtonSubText,
-                                        {
-                                            color: isOverdue
-                                                ? (isDark ? '#FB7185' : '#E11D48')
-                                                : isCompleted
-                                                ? (isDark ? '#34D399' : '#10B981')
-                                                : colors.textMuted,
-                                        },
-                                    ]}
-                                >
-                                    • {statusCountdownLabel}
-                                </Text>
-                            </View>
-
-                            <ChevronRight size={15} color={colors.textMuted} />
-                        </TouchableOpacity>
+                        <VeyraIconButton
+                            variant="ghost"
+                            size="sm"
+                            icon={<MoreVertical size={20} color={colors.textSecondary} />}
+                            onPress={() => setIsOptionsModalVisible(true)}
+                        />
                     </View>
+                </Animated.View>
 
-                    <VeyraDivider style={{ opacity: 0.7 }} />
+                <ScrollView
+                    showsVerticalScrollIndicator={false}
+                    contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 110 }]}
+                >
+                    <Animated.View style={{ opacity: contentAnim, gap: 20 }}>
+                        {/* ─── HERO HEADER SIN CAJAS (EDITORIAL & LIMPIO) ─── */}
+                        <View style={styles.heroSection}>
+                            {/* Meta Tags Row */}
+                            <View style={styles.metaRow}>
+                                {isReadOnly && (
+                                    <View style={[styles.controlPill, { backgroundColor: isDark ? 'rgba(56, 189, 248, 0.15)' : 'rgba(2, 132, 199, 0.1)' }]}>
+                                        <Eye size={12} color={isDark ? '#38BDF8' : '#0284C7'} />
+                                        <Text style={[styles.controlPillText, { color: isDark ? '#38BDF8' : '#0284C7', fontWeight: '600' }]}>
+                                            {language === 'es' ? 'Solo lectura' : 'View only'}
+                                        </Text>
+                                    </View>
+                                )}
 
-                    {/* ─── DESCRIPCIÓN / NOTAS (DIRECTO EN EL LIENZO) ─── */}
-                    {reminder.description ? (
-                        <View style={styles.sectionBlock}>
-                            <Text style={[styles.sectionHeading, { color: colors.textMuted }]}>
-                                {t('create.sections.notes', { defaultValue: 'Notas' })}
+                                <View style={[styles.controlPill, { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.06)' : 'rgba(0, 0, 0, 0.05)' }]}>
+                                    <View style={[styles.controlDot, { backgroundColor: controlColor.main }]} />
+                                    <Text style={[styles.controlPillText, { color: colors.textSecondary }]}>
+                                        {reminder.control_level ? (language === 'es' ? (reminder.control_level === 'critical' ? 'Crítico' : reminder.control_level === 'strict' ? 'Estricto' : 'Normal') : reminder.control_level.charAt(0).toUpperCase() + reminder.control_level.slice(1)) : 'Normal'}
+                                    </Text>
+                                </View>
+
+                                {(isCompleted || isCompleting) && (
+                                    <View style={[styles.statusBadge, { backgroundColor: isDark ? 'rgba(52, 211, 153, 0.15)' : 'rgba(16, 185, 129, 0.12)' }]}>
+                                        <Check size={11} color={isDark ? '#34D399' : '#10B981'} strokeWidth={3} />
+                                        <Text style={[styles.statusBadgeText, { color: isDark ? '#34D399' : '#10B981' }]}>
+                                            {language === 'es' ? 'Completado' : 'Completed'}
+                                        </Text>
+                                    </View>
+                                )}
+
+                                {repeatLabel && (
+                                    <View style={[styles.repeatPill, { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.06)' : 'rgba(0, 0, 0, 0.05)' }]}>
+                                        <Repeat size={11} color={colors.textMuted} />
+                                        <Text style={[styles.repeatPillText, { color: colors.textSecondary }]}>
+                                            {repeatLabel}
+                                        </Text>
+                                    </View>
+                                )}
+
+                                {reminder?.id && (itemTagsMap[`reminder:${reminder.id}`] || []).map(tag => (
+                                    <View
+                                        key={tag.id}
+                                        style={[
+                                            styles.repeatPill,
+                                            {
+                                                backgroundColor: `${tag.color || accent.primary}1A`,
+                                                borderWidth: 1,
+                                                borderColor: `${tag.color || accent.primary}40`,
+                                            },
+                                        ]}
+                                    >
+                                        <Text style={[styles.repeatPillText, { color: tag.color || accent.primary, fontWeight: '600' }]}>
+                                            #{tag.name}
+                                        </Text>
+                                    </View>
+                                ))}
+                            </View>
+
+                            {/* Title Large & Clean */}
+                            <Text
+                                style={[
+                                    styles.title,
+                                    { color: (isCompleted || isCompleting) ? (isDark ? '#34D399' : '#10B981') : colors.textPrimary },
+                                    (isCompleted || isCompleting) && { textDecorationLine: 'line-through', opacity: 0.75 },
+                                ]}
+                            >
+                                {reminder.title}
                             </Text>
 
-                            <View style={styles.documentBody}>
-                                <RenderHTML
-                                    contentWidth={width - 48}
-                                    source={{ html: parseNotePages(reminder.description).pages.map(p => p.content).join('<hr style="border:none;height:16px;" />') }}
-                                    renderers={htmlRenderers}
-                                    baseStyle={{
-                                        color: colors.textPrimary,
-                                        fontSize: 15.5,
-                                        lineHeight: 25,
-                                    }}
-                                    classesStyles={{
-                                        'img-align-left': { alignSelf: 'flex-start' },
-                                        'img-align-center': { alignSelf: 'center' },
-                                        'img-align-right': { alignSelf: 'flex-end' },
-                                    }}
-                                    tagsStyles={{
-                                        p: { marginTop: 0, marginBottom: 12 },
-                                        h1: { fontSize: 20, fontWeight: '800', marginTop: 12, marginBottom: 6, color: colors.textPrimary },
-                                        h2: { fontSize: 17, fontWeight: '700', marginTop: 10, marginBottom: 4, color: colors.textPrimary },
-                                        ul: { marginBottom: 12, paddingLeft: 18 },
-                                        ol: { marginBottom: 12, paddingLeft: 18 },
-                                        li: { marginBottom: 5 },
-                                    }}
-                                />
-                            </View>
-                        </View>
-                    ) : null}
-
-                    {/* ─── SUBTAREAS / CHECKLIST (DESPLEGABLE & RESPIRABLE) ─── */}
-                    {parsedSubtasks.length > 0 && (
-                        <View style={styles.sectionBlock}>
+                            {/* Interactive Schedule Bar */}
                             <TouchableOpacity
                                 activeOpacity={0.7}
-                                onPress={toggleSubtasksExpand}
-                                style={styles.subtasksHeaderRow}
+                                onPress={() => setIsRescheduleModalVisible(true)}
+                                style={[
+                                    styles.dateButton,
+                                    {
+                                        backgroundColor: isDark ? 'rgba(255, 255, 255, 0.04)' : 'rgba(0, 0, 0, 0.03)',
+                                        borderColor: isOverdue ? (isDark ? 'rgba(251, 113, 133, 0.3)' : 'rgba(225, 29, 72, 0.25)') : colors.borderSubtle,
+                                    },
+                                ]}
                             >
-                                <View style={styles.subtasksHeaderLeft}>
-                                    <Text style={[styles.sectionHeading, { color: colors.textMuted }]}>
-                                        {t('create.sections.subtasks', { defaultValue: 'Subtareas' })}
+                                <View style={styles.dateButtonLeft}>
+                                    <Clock
+                                        size={15}
+                                        color={isOverdue ? (isDark ? '#FB7185' : '#E11D48') : isCompleted ? (isDark ? '#34D399' : '#10B981') : accent.primary}
+                                    />
+                                    <Text style={[styles.dateButtonMainText, { color: colors.textPrimary }]}>
+                                        {format(dueDate, language === 'es' ? "EEEE d 'de' MMMM, yyyy • HH:mm" : "EEEE, MMMM d, yyyy • HH:mm", { locale })}
                                     </Text>
-
-                                    <Text style={[styles.subtasksCountText, { color: colors.textSecondary }]}>
-                                        ({completedSubtasksCount}/{parsedSubtasks.length})
+                                    <Text
+                                        style={[
+                                            styles.dateButtonSubText,
+                                            {
+                                                color: isOverdue
+                                                    ? (isDark ? '#FB7185' : '#E11D48')
+                                                    : isCompleted
+                                                        ? (isDark ? '#34D399' : '#10B981')
+                                                        : colors.textMuted,
+                                            },
+                                        ]}
+                                    >
+                                        • {statusCountdownLabel}
                                     </Text>
                                 </View>
 
-                                <Animated.View
-                                    style={{
-                                        transform: [
-                                            {
-                                                rotate: subtasksAnim.interpolate({
-                                                    inputRange: [0, 1],
-                                                    outputRange: ['-90deg', '0deg'],
-                                                }),
-                                            },
-                                        ],
-                                    }}
-                                >
-                                    <ChevronDown size={16} color={colors.textMuted} />
-                                </Animated.View>
+                                <ChevronRight size={15} color={colors.textMuted} />
                             </TouchableOpacity>
+                        </View>
 
-                            {isSubtasksExpanded && (
-                                <View style={styles.subtasksCollapsibleContent}>
-                                    {/* Progress line */}
-                                    <View style={[styles.progressTrack, { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.06)' }]}>
-                                        <View
-                                            style={[
-                                                styles.progressFill,
-                                                {
-                                                    backgroundColor: progressPercent === 100 ? (isDark ? '#34D399' : '#10B981') : accent.primary,
-                                                    width: `${progressPercent}%`,
-                                                },
-                                            ]}
-                                        />
+                        <VeyraDivider style={{ opacity: 0.7 }} />
+
+                        {/* ─── DESCRIPCIÓN / NOTAS (DIRECTO EN EL LIENZO) ─── */}
+                        {reminder.description ? (
+                            <View style={styles.sectionBlock}>
+                                <Text style={[styles.sectionHeading, { color: colors.textMuted }]}>
+                                    {t('create.sections.notes', { defaultValue: 'Notas' })}
+                                </Text>
+
+                                <View style={styles.documentBody}>
+                                    <RenderHTML
+                                        contentWidth={width - 48}
+                                        source={{
+                                            html: parseNotePages(reminder.description).pages
+                                                .map(p => p.content.replace(/<\s*bold\b[^>]*>/gi, '<strong>').replace(/<\s*\/\s*bold\s*>/gi, '</strong>'))
+                                                .join('<hr style="border:none;height:16px;" />')
+                                        }}
+                                        renderers={htmlRenderers}
+                                        customHTMLElementModels={customHtmlElementModels}
+                                        baseStyle={{
+                                            color: colors.textPrimary,
+                                            fontSize: 15.5,
+                                            lineHeight: 25,
+                                        }}
+                                        classesStyles={{
+                                            'img-align-left': { alignSelf: 'flex-start' },
+                                            'img-align-center': { alignSelf: 'center' },
+                                            'img-align-right': { alignSelf: 'flex-end' },
+                                        }}
+                                        tagsStyles={{
+                                            p: { marginTop: 0, marginBottom: 12 },
+                                            h1: { fontSize: 20, fontWeight: '800', marginTop: 12, marginBottom: 6, color: colors.textPrimary },
+                                            h2: { fontSize: 17, fontWeight: '700', marginTop: 10, marginBottom: 4, color: colors.textPrimary },
+                                            ul: { marginBottom: 12, paddingLeft: 18 },
+                                            ol: { marginBottom: 12, paddingLeft: 18 },
+                                            li: { marginBottom: 5 },
+                                        }}
+                                    />
+                                </View>
+                            </View>
+                        ) : null}
+
+                        {/* ─── SUBTAREAS / CHECKLIST (DESPLEGABLE & RESPIRABLE) ─── */}
+                        {parsedSubtasks.length > 0 && (
+                            <View style={styles.sectionBlock}>
+                                <TouchableOpacity
+                                    activeOpacity={0.7}
+                                    onPress={toggleSubtasksExpand}
+                                    style={styles.subtasksHeaderRow}
+                                >
+                                    <View style={styles.subtasksHeaderLeft}>
+                                        <Text style={[styles.sectionHeading, { color: colors.textMuted }]}>
+                                            {t('create.sections.subtasks', { defaultValue: 'Subtareas' })}
+                                        </Text>
+
+                                        <Text style={[styles.subtasksCountText, { color: colors.textSecondary }]}>
+                                            ({completedSubtasksCount}/{parsedSubtasks.length})
+                                        </Text>
                                     </View>
 
-                                    {/* Subtasks Rows */}
-                                    <View style={styles.subtasksList}>
-                                        {parsedSubtasks.map(item => (
-                                            <TouchableOpacity
-                                                key={item.id}
+                                    <Animated.View
+                                        style={{
+                                            transform: [
+                                                {
+                                                    rotate: subtasksAnim.interpolate({
+                                                        inputRange: [0, 1],
+                                                        outputRange: ['-90deg', '0deg'],
+                                                    }),
+                                                },
+                                            ],
+                                        }}
+                                    >
+                                        <ChevronDown size={16} color={colors.textMuted} />
+                                    </Animated.View>
+                                </TouchableOpacity>
+
+                                {isSubtasksExpanded && (
+                                    <View style={styles.subtasksCollapsibleContent}>
+                                        {/* Progress line */}
+                                        <View style={[styles.progressTrack, { backgroundColor: colors.borderSubtle }]}>
+                                            <View
                                                 style={[
-                                                    styles.subtaskRow,
+                                                    styles.progressFill,
                                                     {
-                                                        borderBottomColor: colors.borderSubtle,
+                                                        backgroundColor: progressPercent === 100 ? (isDark ? '#34D399' : '#10B981') : accent.primary,
+                                                        width: `${progressPercent}%`,
                                                     },
                                                 ]}
-                                                activeOpacity={isReadOnly ? 0.9 : 0.7}
-                                                onPress={() => {
-                                                    if (isReadOnly) {
-                                                        Alert.alert(
-                                                            language === 'es' ? 'Solo lectura' : 'View only',
-                                                            language === 'es'
-                                                                ? 'Este recordatorio es compartido en modo solo lectura.'
-                                                                : 'This reminder is shared in read-only mode.'
-                                                        );
-                                                        return;
-                                                    }
-                                                    if (reminder) toggleSubtask(reminder.id, item.id);
-                                                }}
-                                            >
-                                                <View
-                                                    style={[
-                                                        styles.subtaskCheckbox,
-                                                        item.completed
-                                                            ? { backgroundColor: isDark ? '#34D399' : '#10B981', borderColor: isDark ? '#34D399' : '#10B981' }
-                                                            : { borderColor: colors.borderMedium },
-                                                    ]}
-                                                >
-                                                    {item.completed && <Check size={11} color="#FFFFFF" strokeWidth={3.5} />}
-                                                </View>
+                                            />
+                                        </View>
 
-                                                <Text
+                                        {/* Subtasks Rows */}
+                                        <View style={styles.subtasksList}>
+                                            {parsedSubtasks.map(item => (
+                                                <TouchableOpacity
+                                                    key={item.id}
                                                     style={[
-                                                        styles.subtaskTitle,
+                                                        styles.subtaskRow,
                                                         {
-                                                            color: item.completed ? colors.textMuted : colors.textPrimary,
-                                                            textDecorationLine: item.completed ? 'line-through' : 'none',
+                                                            borderBottomColor: colors.borderSubtle,
                                                         },
                                                     ]}
+                                                    activeOpacity={isReadOnly ? 0.9 : 0.7}
+                                                    onPress={() => {
+                                                        if (isReadOnly) {
+                                                            Alert.alert(
+                                                                language === 'es' ? 'Solo lectura' : 'View only',
+                                                                language === 'es'
+                                                                    ? 'Este recordatorio es compartido en modo solo lectura.'
+                                                                    : 'This reminder is shared in read-only mode.'
+                                                            );
+                                                            return;
+                                                        }
+                                                        if (reminder) toggleSubtask(reminder.id, item.id);
+                                                    }}
                                                 >
-                                                    {item.title}
-                                                </Text>
-                                            </TouchableOpacity>
-                                        ))}
-                                    </View>
+                                                    <View
+                                                        style={[
+                                                            styles.subtaskCheckbox,
+                                                            item.completed
+                                                                ? { backgroundColor: isDark ? '#34D399' : '#10B981', borderColor: isDark ? '#34D399' : '#10B981' }
+                                                                : { borderColor: colors.borderMedium },
+                                                        ]}
+                                                    >
+                                                        {item.completed && <Check size={11} color="#FFFFFF" strokeWidth={3.5} />}
+                                                    </View>
 
-                                    {/* Quick Add Subtask Input */}
-                                    {!isReadOnly && (
-                                        isAddingSubtask ? (
-                                            <View style={[styles.inlineAddBox, { borderColor: accent.primary }]}>
-                                                <TextInput
-                                                    style={[styles.inlineAddInput, { color: colors.textPrimary }]}
-                                                    placeholder={language === 'es' ? 'Nueva subtarea...' : 'New subtask...'}
-                                                    placeholderTextColor={colors.textMuted}
-                                                    value={newSubtaskTitle}
-                                                    onChangeText={setNewSubtaskTitle}
-                                                    autoFocus
-                                                    onSubmitEditing={handleAddSubtask}
-                                                />
-                                                <View style={styles.inlineAddActions}>
-                                                    <TouchableOpacity
-                                                        onPress={() => {
-                                                            setIsAddingSubtask(false);
-                                                            setNewSubtaskTitle('');
-                                                        }}
-                                                        style={styles.inlineCancelBtn}
+                                                    <Text
+                                                        style={[
+                                                            styles.subtaskTitle,
+                                                            {
+                                                                color: item.completed ? colors.textMuted : colors.textPrimary,
+                                                                textDecorationLine: item.completed ? 'line-through' : 'none',
+                                                            },
+                                                        ]}
                                                     >
-                                                        <X size={16} color={colors.textMuted} />
-                                                    </TouchableOpacity>
-                                                    <TouchableOpacity
-                                                        onPress={handleAddSubtask}
-                                                        style={[styles.inlineSubmitBtn, { backgroundColor: accent.primary }]}
-                                                    >
-                                                        <Check size={15} color="#FFFFFF" strokeWidth={3} />
-                                                    </TouchableOpacity>
+                                                        {item.title}
+                                                    </Text>
+                                                </TouchableOpacity>
+                                            ))}
+                                        </View>
+
+                                        {/* Quick Add Subtask Input */}
+                                        {!isReadOnly && (
+                                            isAddingSubtask ? (
+                                                <View style={[styles.inlineAddBox, { borderColor: accent.primary }]}>
+                                                    <TextInput
+                                                        style={[styles.inlineAddInput, { color: colors.textPrimary }]}
+                                                        placeholder={language === 'es' ? 'Nueva subtarea...' : 'New subtask...'}
+                                                        placeholderTextColor={colors.textMuted}
+                                                        value={newSubtaskTitle}
+                                                        onChangeText={setNewSubtaskTitle}
+                                                        autoFocus
+                                                        onSubmitEditing={handleAddSubtask}
+                                                    />
+                                                    <View style={styles.inlineAddActions}>
+                                                        <TouchableOpacity
+                                                            onPress={() => {
+                                                                setIsAddingSubtask(false);
+                                                                setNewSubtaskTitle('');
+                                                            }}
+                                                            style={styles.inlineCancelBtn}
+                                                        >
+                                                            <X size={16} color={colors.textMuted} />
+                                                        </TouchableOpacity>
+                                                        <TouchableOpacity
+                                                            onPress={handleAddSubtask}
+                                                            style={[styles.inlineSubmitBtn, { backgroundColor: accent.primary }]}
+                                                        >
+                                                            <Check size={15} color="#FFFFFF" strokeWidth={3} />
+                                                        </TouchableOpacity>
+                                                    </View>
                                                 </View>
-                                            </View>
-                                        ) : (
-                                            <TouchableOpacity
-                                                activeOpacity={0.6}
-                                                onPress={() => setIsAddingSubtask(true)}
-                                                style={styles.addSubtaskTextBtn}
-                                            >
-                                                <Plus size={15} color={accent.primary} />
-                                                <Text style={[styles.addSubtaskText, { color: accent.primary }]}>
-                                                    {language === 'es' ? 'Agregar subtarea' : 'Add subtask'}
-                                                </Text>
-                                            </TouchableOpacity>
-                                        )
-                                    )}
-                                </View>
-                            )}
-                        </View>
-                    )}
+                                            ) : (
+                                                <TouchableOpacity
+                                                    activeOpacity={0.6}
+                                                    onPress={() => setIsAddingSubtask(true)}
+                                                    style={styles.addSubtaskTextBtn}
+                                                >
+                                                    <Plus size={15} color={accent.primary} />
+                                                    <Text style={[styles.addSubtaskText, { color: accent.primary }]}>
+                                                        {language === 'es' ? 'Agregar subtarea' : 'Add subtask'}
+                                                    </Text>
+                                                </TouchableOpacity>
+                                            )
+                                        )}
+                                    </View>
+                                )}
+                            </View>
+                        )}
 
-                    {/* ─── ADJUNTOS (CARRETE & DOCUMENTOS) ─── */}
-                    {parsedAttachments.length > 0 && (
-                        <View style={styles.sectionBlock}>
-                            <Text style={[styles.sectionHeading, { color: colors.textMuted }]}>
-                                {t('create.sections.attachments', { defaultValue: 'Adjuntos' })} ({parsedAttachments.length})
-                            </Text>
+                        {/* ─── ADJUNTOS (CARRETE & DOCUMENTOS) ─── */}
+                        {parsedAttachments.length > 0 && (
+                            <View style={styles.sectionBlock}>
+                                <Text style={[styles.sectionHeading, { color: colors.textMuted }]}>
+                                    {t('create.sections.attachments', { defaultValue: 'Adjuntos' })} ({parsedAttachments.length})
+                                </Text>
 
-                            {/* Images Carousel */}
-                            {imageAttachments.length > 0 && (
-                                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.imageScroll}>
-                                    {imageAttachments.map((img, idx) => (
-                                        <TouchableOpacity
-                                            key={idx}
-                                            activeOpacity={0.85}
-                                            onPress={() => {
-                                                setGalleryImages(imageAttachments.map(i => ({ uri: i.uri })));
-                                                setGalleryIndex(idx);
-                                                setGalleryVisible(true);
-                                            }}
-                                            style={[styles.imageWrapper, { borderColor: colors.borderSubtle }]}
-                                        >
-                                            <Image
-                                                source={{ uri: img.uri }}
-                                                style={styles.imageItem}
-                                            />
-                                        </TouchableOpacity>
-                                    ))}
-                                </ScrollView>
-                            )}
-
-                            {/* Documents */}
-                            {otherAttachments.length > 0 && (
-                                <View style={styles.docsList}>
-                                    {otherAttachments.map((file, idx) => {
-                                        const isExcel = file.name.match(/\.(xls|xlsx|csv)$/i) || file.name.includes('excel') || file.name.includes('sheet');
-                                        const isPdf = file.name.match(/\.pdf$/i) || file.name.includes('pdf');
-
-                                        return (
+                                {/* Images Carousel */}
+                                {imageAttachments.length > 0 && (
+                                    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.imageScroll}>
+                                        {imageAttachments.map((img, idx) => (
                                             <TouchableOpacity
                                                 key={idx}
-                                                activeOpacity={0.7}
-                                                onPress={() => openAttachment(file.uri)}
-                                                style={[
-                                                    styles.docRow,
-                                                    {
-                                                        backgroundColor: isDark ? 'rgba(255, 255, 255, 0.04)' : 'rgba(0, 0, 0, 0.03)',
-                                                        borderColor: colors.borderSubtle,
-                                                    },
-                                                ]}
+                                                activeOpacity={0.85}
+                                                onPress={() => {
+                                                    setGalleryImages(imageAttachments.map(i => ({ uri: i.uri })));
+                                                    setGalleryIndex(idx);
+                                                    setGalleryVisible(true);
+                                                }}
+                                                style={[styles.imageWrapper, { borderColor: colors.borderSubtle }]}
                                             >
-                                                <View
+                                                <Image
+                                                    source={{ uri: img.uri }}
+                                                    style={styles.imageItem}
+                                                />
+                                            </TouchableOpacity>
+                                        ))}
+                                    </ScrollView>
+                                )}
+
+                                {/* Documents */}
+                                {otherAttachments.length > 0 && (
+                                    <View style={styles.docsList}>
+                                        {otherAttachments.map((file, idx) => {
+                                            const isExcel = file.name.match(/\.(xls|xlsx|csv)$/i) || file.name.includes('excel') || file.name.includes('sheet');
+                                            const isPdf = file.name.match(/\.pdf$/i) || file.name.includes('pdf');
+
+                                            return (
+                                                <TouchableOpacity
+                                                    key={idx}
+                                                    activeOpacity={0.7}
+                                                    onPress={() => openAttachment(file.uri)}
                                                     style={[
-                                                        styles.docBadge,
+                                                        styles.docRow,
                                                         {
-                                                            backgroundColor: isExcel
-                                                                ? '#107C41'
-                                                                : isPdf
-                                                                ? '#DC2626'
-                                                                : accent.primary,
+                                                            backgroundColor: isDark ? 'rgba(255, 255, 255, 0.04)' : 'rgba(0, 0, 0, 0.03)',
+                                                            borderColor: colors.borderSubtle,
                                                         },
                                                     ]}
                                                 >
-                                                    <Text style={styles.docBadgeText}>
-                                                        {isExcel ? 'XLS' : isPdf ? 'PDF' : 'DOC'}
-                                                    </Text>
-                                                </View>
+                                                    <View
+                                                        style={[
+                                                            styles.docBadge,
+                                                            {
+                                                                backgroundColor: isExcel
+                                                                    ? '#107C41'
+                                                                    : isPdf
+                                                                        ? '#DC2626'
+                                                                        : accent.primary,
+                                                            },
+                                                        ]}
+                                                    >
+                                                        <Text style={styles.docBadgeText}>
+                                                            {isExcel ? 'XLS' : isPdf ? 'PDF' : 'DOC'}
+                                                        </Text>
+                                                    </View>
 
-                                                <View style={styles.docDetails}>
-                                                    <Text style={[styles.docTitle, { color: colors.textPrimary }]} numberOfLines={1}>
-                                                        {file.name}
-                                                    </Text>
-                                                    <Text style={[styles.docActionText, { color: colors.textMuted }]}>
-                                                        {language === 'es' ? 'Tocar para abrir' : 'Tap to open'}
-                                                    </Text>
-                                                </View>
+                                                    <View style={styles.docDetails}>
+                                                        <Text style={[styles.docTitle, { color: colors.textPrimary }]} numberOfLines={1}>
+                                                            {file.name}
+                                                        </Text>
+                                                        <Text style={[styles.docActionText, { color: colors.textMuted }]}>
+                                                            {language === 'es' ? 'Tocar para abrir' : 'Tap to open'}
+                                                        </Text>
+                                                    </View>
 
-                                                <ChevronRight size={14} color={colors.textMuted} />
-                                            </TouchableOpacity>
-                                        );
-                                    })}
-                                </View>
-                            )}
+                                                    <ChevronRight size={14} color={colors.textMuted} />
+                                                </TouchableOpacity>
+                                            );
+                                        })}
+                                    </View>
+                                )}
+                            </View>
+                        )}
+                    </Animated.View>
+                </ScrollView>
+
+                {/* ─── BARRA FLOTANTE INFERIOR LIMPIA ─── */}
+                <Animated.View
+                    style={[
+                        styles.bottomBar,
+                        {
+                            backgroundColor: colors.surface,
+                            borderTopColor: colors.borderSubtle,
+                            paddingBottom: insets.bottom + 12,
+                            opacity: bottomBarAnim,
+                        },
+                    ]}
+                >
+                    {isReadOnly ? (
+                        <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 10 }}>
+                            <Eye size={18} color={isDark ? '#38BDF8' : '#0284C7'} />
+                            <Text style={{ fontSize: 14, fontWeight: '600', color: isDark ? '#38BDF8' : '#0284C7' }}>
+                                {language === 'es' ? 'Modo observador (Solo lectura)' : 'Viewer mode (Read only)'}
+                            </Text>
                         </View>
-                    )}
-                </Animated.View>
-            </ScrollView>
-
-            {/* ─── BARRA FLOTANTE INFERIOR LIMPIA ─── */}
-            <Animated.View
-                style={[
-                    styles.bottomBar,
-                    {
-                        backgroundColor: colors.surface,
-                        borderTopColor: colors.borderSubtle,
-                        paddingBottom: insets.bottom + 12,
-                        opacity: bottomBarAnim,
-                    },
-                ]}
-            >
-                {isReadOnly ? (
-                    <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 10 }}>
-                        <Eye size={18} color={isDark ? '#38BDF8' : '#0284C7'} />
-                        <Text style={{ fontSize: 14, fontWeight: '600', color: isDark ? '#38BDF8' : '#0284C7' }}>
-                            {language === 'es' ? 'Modo observador (Solo lectura)' : 'Viewer mode (Read only)'}
-                        </Text>
-                    </View>
-                ) : isCompleted ? (
-                    <>
-                        <VeyraButton
-                            variant="secondary"
-                            size="lg"
-                            style={{ flex: 1.8 }}
-                            label={language === 'es' ? 'Reabrir recordatorio' : 'Reopen reminder'}
-                            iconLeft={<RotateCcw size={17} color={accent.primary} />}
-                            onPress={async () => {
-                                handleBack();
-                                await markAsPending(reminder.id);
-                            }}
-                        />
-                        <VeyraButton
-                            variant="danger"
-                            size="lg"
-                            style={{ flex: 1.2 }}
-                            label={t('home.delete')}
-                            iconLeft={<Trash2 size={16} color={isDark ? '#FB7185' : '#E11D48'} />}
-                            onPress={handleDelete}
-                        />
-                    </>
-                ) : (
-                    <>
-                        <Animated.View style={{ flex: isOverdue ? 2.2 : 1, transform: [{ scale: completeScaleAnim }] }}>
-                            <VeyraButton
-                                variant="primary"
-                                size="lg"
-                                style={{
-                                    width: '100%',
-                                    backgroundColor: isCompleting ? (isDark ? '#059669' : '#10B981') : undefined,
-                                    borderColor: isCompleting ? '#34D399' : undefined,
-                                }}
-                                label={isCompleting ? (language === 'es' ? '¡Completado!' : 'Completed!') : t('common.done', { defaultValue: 'Completar' })}
-                                iconLeft={
-                                    <Animated.View style={{ transform: [{ scale: completeCheckScaleAnim }] }}>
-                                        <Check size={18} color="#FFFFFF" strokeWidth={isCompleting ? 3.5 : 3} />
-                                    </Animated.View>
-                                }
-                                onPress={handleComplete}
-                            />
-                        </Animated.View>
-                        {isOverdue && (
+                    ) : isCompleted ? (
+                        <>
                             <VeyraButton
                                 variant="secondary"
                                 size="lg"
-                                style={{ flex: 1.2 }}
-                                label={t('common.snooze', { defaultValue: 'Posponer' })}
-                                iconLeft={<Zap size={16} color={accent.primary} />}
-                                onPress={() => setIsSnoozeModalVisible(true)}
-                            />
-                        )}
-                    </>
-                )}
-            </Animated.View>
-
-            {/* ─── MODAL DE REAGENDADO RÁPIDO ─── */}
-            {isRescheduleModalVisible && (
-                <View style={[StyleSheet.absoluteFill, styles.modalOverlay]}>
-                    <TouchableOpacity
-                        style={[StyleSheet.absoluteFill, { backgroundColor: colors.glassBackdrop }]}
-                        activeOpacity={1}
-                        onPress={() => setIsRescheduleModalVisible(false)}
-                    />
-                    <VeyraSurface
-                        level={2}
-                        radius="lg"
-                        style={[
-                            styles.bottomSheetCard,
-                            {
-                                backgroundColor: colors.surface,
-                                borderColor: colors.borderSubtle,
-                                paddingBottom: Math.max(insets.bottom, 16),
-                            },
-                        ]}
-                    >
-                        <View style={styles.sheetHandle} />
-                        <Text style={[styles.sheetTitle, { color: colors.textPrimary }]}>
-                            {language === 'es' ? 'Reagendar recordatorio' : 'Reschedule reminder'}
-                        </Text>
-
-                        {[
-                            {
-                                label: language === 'es' ? 'En 3 horas' : 'In 3 hours',
-                                date: addHours(new Date(), 3),
-                            },
-                            {
-                                label: language === 'es' ? 'Esta noche (20:00)' : 'Tonight (8:00 PM)',
-                                date: setMinutes(setHours(new Date(), 20), 0),
-                            },
-                            {
-                                label: language === 'es' ? 'Mañana por la mañana (09:00)' : 'Tomorrow morning (9:00 AM)',
-                                date: setMinutes(setHours(addDays(new Date(), 1), 9), 0),
-                            },
-                            {
-                                label: language === 'es' ? 'Mañana por la tarde (15:00)' : 'Tomorrow afternoon (3:00 PM)',
-                                date: setMinutes(setHours(addDays(new Date(), 1), 15), 0),
-                            },
-                            {
-                                label: language === 'es' ? 'En 2 días' : 'In 2 days',
-                                date: addDays(new Date(), 2),
-                            },
-                        ].map((opt, idx) => (
-                            <TouchableOpacity
-                                key={idx}
-                                style={[styles.sheetOptionRow, { borderBottomColor: colors.borderSubtle }]}
-                                activeOpacity={0.7}
-                                onPress={() => handleReschedule(opt.date)}
-                            >
-                                <Calendar size={18} color={accent.primary} />
-                                <Text style={[styles.sheetOptionText, { color: colors.textPrimary }]}>
-                                    {opt.label}
-                                </Text>
-                            </TouchableOpacity>
-                        ))}
-
-                        <TouchableOpacity
-                            style={[styles.sheetOptionRow, { borderBottomColor: 'transparent' }]}
-                            activeOpacity={0.7}
-                            onPress={() => {
-                                setIsRescheduleModalVisible(false);
-                                router.push({ pathname: '/create', params: { id: reminder.id } });
-                            }}
-                        >
-                            <Edit3 size={18} color={accent.primary} />
-                            <Text style={[styles.sheetOptionText, { color: accent.primary, fontWeight: '700' }]}>
-                                {language === 'es' ? 'Elegir fecha personalizada...' : 'Choose custom date...'}
-                            </Text>
-                        </TouchableOpacity>
-                    </VeyraSurface>
-                </View>
-            )}
-
-            {/* ─── MODAL DE POSPONER (SNOOZE) ─── */}
-            {isSnoozeModalVisible && (
-                <View style={[StyleSheet.absoluteFill, styles.modalOverlay]}>
-                    <TouchableOpacity
-                        style={[StyleSheet.absoluteFill, { backgroundColor: colors.glassBackdrop }]}
-                        activeOpacity={1}
-                        onPress={() => setIsSnoozeModalVisible(false)}
-                    />
-                    <VeyraSurface
-                        level={2}
-                        radius="lg"
-                        style={[
-                            styles.bottomSheetCard,
-                            {
-                                backgroundColor: colors.surface,
-                                borderColor: colors.borderSubtle,
-                                paddingBottom: Math.max(insets.bottom, 16),
-                            },
-                        ]}
-                    >
-                        <View style={styles.sheetHandle} />
-                        <Text style={[styles.sheetTitle, { color: colors.textPrimary }]}>
-                            {t('reminder.snooze_for', { defaultValue: 'Posponer recordatorio' })}
-                        </Text>
-
-                        {[
-                            { label: '+5 minutos', minutes: 5 },
-                            { label: '+15 minutos', minutes: 15 },
-                            { label: '+1 hora', minutes: 60 },
-                            { label: 'Mañana (24 horas)', minutes: 1440 },
-                        ].map((opt, idx) => (
-                            <TouchableOpacity
-                                key={idx}
-                                style={[styles.sheetOptionRow, { borderBottomColor: colors.borderSubtle }]}
-                                activeOpacity={0.7}
+                                style={{ flex: 1.8 }}
+                                label={language === 'es' ? 'Reabrir recordatorio' : 'Reopen reminder'}
+                                iconLeft={<RotateCcw size={17} color={accent.primary} />}
                                 onPress={async () => {
-                                    setIsSnoozeModalVisible(false);
                                     handleBack();
-                                    await snoozeReminder(reminder.id, opt.minutes);
+                                    await markAsPending(reminder.id);
                                 }}
-                            >
-                                <Clock size={18} color={accent.primary} />
-                                <Text style={[styles.sheetOptionText, { color: colors.textPrimary }]}>
-                                    {opt.label}
-                                </Text>
-                            </TouchableOpacity>
-                        ))}
-                    </VeyraSurface>
-                </View>
-            )}
+                            />
+                            <VeyraButton
+                                variant="danger"
+                                size="lg"
+                                style={{ flex: 1.2 }}
+                                label={t('home.delete')}
+                                iconLeft={<Trash2 size={16} color={isDark ? '#FB7185' : '#E11D48'} />}
+                                onPress={handleDelete}
+                            />
+                        </>
+                    ) : (
+                        <>
+                            <Animated.View style={{ flex: isOverdue ? 2.2 : 1, transform: [{ scale: completeScaleAnim }] }}>
+                                <VeyraButton
+                                    variant="primary"
+                                    size="lg"
+                                    style={{
+                                        width: '100%',
+                                        backgroundColor: isCompleting ? (isDark ? '#059669' : '#10B981') : undefined,
+                                        borderColor: isCompleting ? '#34D399' : undefined,
+                                    }}
+                                    label={isCompleting ? (language === 'es' ? '¡Completado!' : 'Completed!') : t('common.done', { defaultValue: 'Completar' })}
+                                    iconLeft={
+                                        <Animated.View style={{ transform: [{ scale: completeCheckScaleAnim }] }}>
+                                            <Check size={18} color="#FFFFFF" strokeWidth={isCompleting ? 3.5 : 3} />
+                                        </Animated.View>
+                                    }
+                                    onPress={handleComplete}
+                                />
+                            </Animated.View>
+                            {isOverdue && (
+                                <VeyraButton
+                                    variant="secondary"
+                                    size="lg"
+                                    style={{ flex: 1.2 }}
+                                    label={t('common.snooze', { defaultValue: 'Posponer' })}
+                                    iconLeft={<Zap size={16} color={accent.primary} />}
+                                    onPress={() => setIsSnoozeModalVisible(true)}
+                                />
+                            )}
+                        </>
+                    )}
+                </Animated.View>
 
-            {/* ─── MODAL DE MÁS OPCIONES ─── */}
-            {isOptionsModalVisible && (
-                <View style={[StyleSheet.absoluteFill, styles.modalOverlay]}>
-                    <TouchableOpacity
-                        style={[StyleSheet.absoluteFill, { backgroundColor: colors.glassBackdrop }]}
-                        activeOpacity={1}
-                        onPress={() => setIsOptionsModalVisible(false)}
-                    />
-                    <VeyraSurface
-                        level={2}
-                        radius="lg"
-                        style={[
-                            styles.bottomSheetCard,
-                            {
-                                backgroundColor: colors.surface,
-                                borderColor: colors.borderSubtle,
-                                paddingBottom: Math.max(insets.bottom, 16),
-                            },
-                        ]}
-                    >
-                        <View style={styles.sheetHandle} />
-                        <Text style={[styles.sheetTitle, { color: colors.textPrimary }]}>
-                            {t('reminder.options', { defaultValue: 'Opciones' })}
-                        </Text>
+                {/* ─── MODAL DE REAGENDADO RÁPIDO ─── */}
+                {isRescheduleModalVisible && (
+                    <View style={[StyleSheet.absoluteFill, styles.modalOverlay]}>
+                        <TouchableOpacity
+                            style={[StyleSheet.absoluteFill, { backgroundColor: colors.glassBackdrop }]}
+                            activeOpacity={1}
+                            onPress={() => setIsRescheduleModalVisible(false)}
+                        />
+                        <VeyraSurface
+                            level={2}
+                            radius="lg"
+                            style={[
+                                styles.bottomSheetCard,
+                                {
+                                    backgroundColor: colors.surface,
+                                    borderColor: colors.borderSubtle,
+                                    paddingBottom: Math.max(insets.bottom, 16),
+                                },
+                            ]}
+                        >
+                            <View style={styles.sheetHandle} />
+                            <Text style={[styles.sheetTitle, { color: colors.textPrimary }]}>
+                                {language === 'es' ? 'Reagendar recordatorio' : 'Reschedule reminder'}
+                            </Text>
 
-                        {!isReadOnly && (
+                            {[
+                                {
+                                    label: language === 'es' ? 'En 3 horas' : 'In 3 hours',
+                                    date: addHours(new Date(), 3),
+                                },
+                                {
+                                    label: language === 'es' ? 'Esta noche (20:00)' : 'Tonight (8:00 PM)',
+                                    date: setMinutes(setHours(new Date(), 20), 0),
+                                },
+                                {
+                                    label: language === 'es' ? 'Mañana por la mañana (09:00)' : 'Tomorrow morning (9:00 AM)',
+                                    date: setMinutes(setHours(addDays(new Date(), 1), 9), 0),
+                                },
+                                {
+                                    label: language === 'es' ? 'Mañana por la tarde (15:00)' : 'Tomorrow afternoon (3:00 PM)',
+                                    date: setMinutes(setHours(addDays(new Date(), 1), 15), 0),
+                                },
+                                {
+                                    label: language === 'es' ? 'En 2 días' : 'In 2 days',
+                                    date: addDays(new Date(), 2),
+                                },
+                            ].map((opt, idx) => (
+                                <TouchableOpacity
+                                    key={idx}
+                                    style={[styles.sheetOptionRow, { borderBottomColor: colors.borderSubtle }]}
+                                    activeOpacity={0.7}
+                                    onPress={() => handleReschedule(opt.date)}
+                                >
+                                    <Calendar size={18} color={accent.primary} />
+                                    <Text style={[styles.sheetOptionText, { color: colors.textPrimary }]}>
+                                        {opt.label}
+                                    </Text>
+                                </TouchableOpacity>
+                            ))}
+
                             <TouchableOpacity
-                                style={[styles.sheetOptionRow, { borderBottomColor: colors.borderSubtle }]}
+                                style={[styles.sheetOptionRow, { borderBottomColor: 'transparent' }]}
                                 activeOpacity={0.7}
                                 onPress={() => {
-                                    setIsOptionsModalVisible(false);
+                                    setIsRescheduleModalVisible(false);
                                     router.push({ pathname: '/create', params: { id: reminder.id } });
                                 }}
                             >
                                 <Edit3 size={18} color={accent.primary} />
-                                <Text style={[styles.sheetOptionText, { color: colors.textPrimary }]}>
-                                    {t('common.edit', { defaultValue: 'Editar recordatorio' })}
+                                <Text style={[styles.sheetOptionText, { color: accent.primary, fontWeight: '700' }]}>
+                                    {language === 'es' ? 'Elegir fecha personalizada...' : 'Choose custom date...'}
                                 </Text>
                             </TouchableOpacity>
-                        )}
+                        </VeyraSurface>
+                    </View>
+                )}
 
+                {/* ─── MODAL DE POSPONER (SNOOZE) ─── */}
+                {isSnoozeModalVisible && (
+                    <View style={[StyleSheet.absoluteFill, styles.modalOverlay]}>
                         <TouchableOpacity
-                            style={[styles.sheetOptionRow, { borderBottomColor: colors.borderSubtle }]}
-                            activeOpacity={0.7}
-                            onPress={handleDuplicate}
+                            style={[StyleSheet.absoluteFill, { backgroundColor: colors.glassBackdrop }]}
+                            activeOpacity={1}
+                            onPress={() => setIsSnoozeModalVisible(false)}
+                        />
+                        <VeyraSurface
+                            level={2}
+                            radius="lg"
+                            style={[
+                                styles.bottomSheetCard,
+                                {
+                                    backgroundColor: colors.surface,
+                                    borderColor: colors.borderSubtle,
+                                    paddingBottom: Math.max(insets.bottom, 16),
+                                },
+                            ]}
                         >
-                            <Copy size={18} color={accent.primary} />
-                            <Text style={[styles.sheetOptionText, { color: colors.textPrimary }]}>
-                                {language === 'es' ? 'Duplicar recordatorio' : 'Duplicate reminder'}
+                            <View style={styles.sheetHandle} />
+                            <Text style={[styles.sheetTitle, { color: colors.textPrimary }]}>
+                                {t('reminder.snooze_for', { defaultValue: 'Posponer recordatorio' })}
                             </Text>
-                        </TouchableOpacity>
 
-                        {isOwner && (
+                            {[
+                                { label: '+5 minutos', minutes: 5 },
+                                { label: '+15 minutos', minutes: 15 },
+                                { label: '+1 hora', minutes: 60 },
+                                { label: 'Mañana (24 horas)', minutes: 1440 },
+                            ].map((opt, idx) => (
+                                <TouchableOpacity
+                                    key={idx}
+                                    style={[styles.sheetOptionRow, { borderBottomColor: colors.borderSubtle }]}
+                                    activeOpacity={0.7}
+                                    onPress={async () => {
+                                        setIsSnoozeModalVisible(false);
+                                        handleBack();
+                                        await snoozeReminder(reminder.id, opt.minutes);
+                                    }}
+                                >
+                                    <Clock size={18} color={accent.primary} />
+                                    <Text style={[styles.sheetOptionText, { color: colors.textPrimary }]}>
+                                        {opt.label}
+                                    </Text>
+                                </TouchableOpacity>
+                            ))}
+                        </VeyraSurface>
+                    </View>
+                )}
+
+                {/* ─── MODAL DE MÁS OPCIONES ─── */}
+                {isOptionsModalVisible && (
+                    <View style={[StyleSheet.absoluteFill, styles.modalOverlay]}>
+                        <TouchableOpacity
+                            style={[StyleSheet.absoluteFill, { backgroundColor: colors.glassBackdrop }]}
+                            activeOpacity={1}
+                            onPress={() => setIsOptionsModalVisible(false)}
+                        />
+                        <VeyraSurface
+                            level={2}
+                            radius="lg"
+                            style={[
+                                styles.bottomSheetCard,
+                                {
+                                    backgroundColor: colors.surface,
+                                    borderColor: colors.borderSubtle,
+                                    paddingBottom: Math.max(insets.bottom, 16),
+                                },
+                            ]}
+                        >
+                            <View style={styles.sheetHandle} />
+                            <Text style={[styles.sheetTitle, { color: colors.textPrimary }]}>
+                                {t('reminder.options', { defaultValue: 'Opciones' })}
+                            </Text>
+
+                            {!isReadOnly && (
+                                <TouchableOpacity
+                                    style={[styles.sheetOptionRow, { borderBottomColor: colors.borderSubtle }]}
+                                    activeOpacity={0.7}
+                                    onPress={() => {
+                                        setIsOptionsModalVisible(false);
+                                        router.push({ pathname: '/create', params: { id: reminder.id } });
+                                    }}
+                                >
+                                    <Edit3 size={18} color={accent.primary} />
+                                    <Text style={[styles.sheetOptionText, { color: colors.textPrimary }]}>
+                                        {t('common.edit', { defaultValue: 'Editar recordatorio' })}
+                                    </Text>
+                                </TouchableOpacity>
+                            )}
+
+                            <TouchableOpacity
+                                style={[styles.sheetOptionRow, { borderBottomColor: colors.borderSubtle }]}
+                                activeOpacity={0.7}
+                                onPress={handleDuplicate}
+                            >
+                                <Copy size={18} color={accent.primary} />
+                                <Text style={[styles.sheetOptionText, { color: colors.textPrimary }]}>
+                                    {language === 'es' ? 'Duplicar recordatorio' : 'Duplicate reminder'}
+                                </Text>
+                            </TouchableOpacity>
+
+                            {isOwner && (
+                                <TouchableOpacity
+                                    style={[styles.sheetOptionRow, { borderBottomColor: colors.borderSubtle }]}
+                                    activeOpacity={0.7}
+                                    onPress={() => {
+                                        setIsOptionsModalVisible(false);
+                                        handleShareReminder();
+                                    }}
+                                >
+                                    <Users size={18} color={accent.primary} />
+                                    <Text style={[styles.sheetOptionText, { color: colors.textPrimary }]}>
+                                        {language === 'es' ? 'Colaborar / Invitar personas' : 'Collaborate / Invite people'}
+                                    </Text>
+                                </TouchableOpacity>
+                            )}
+
                             <TouchableOpacity
                                 style={[styles.sheetOptionRow, { borderBottomColor: colors.borderSubtle }]}
                                 activeOpacity={0.7}
                                 onPress={() => {
                                     setIsOptionsModalVisible(false);
-                                    handleShareReminder();
+                                    handleNativeShareReminder();
                                 }}
                             >
-                                <Users size={18} color={accent.primary} />
+                                <Share2 size={18} color={accent.primary} />
                                 <Text style={[styles.sheetOptionText, { color: colors.textPrimary }]}>
-                                    {language === 'es' ? 'Colaborar / Invitar personas' : 'Collaborate / Invite people'}
+                                    {language === 'es' ? 'Exportar como texto' : 'Export as text'}
                                 </Text>
                             </TouchableOpacity>
-                        )}
 
-                        <TouchableOpacity
-                            style={[styles.sheetOptionRow, { borderBottomColor: colors.borderSubtle }]}
-                            activeOpacity={0.7}
-                            onPress={() => {
-                                setIsOptionsModalVisible(false);
-                                handleNativeShareReminder();
-                            }}
-                        >
-                            <Share2 size={18} color={accent.primary} />
-                            <Text style={[styles.sheetOptionText, { color: colors.textPrimary }]}>
-                                {language === 'es' ? 'Exportar como texto' : 'Export as text'}
-                            </Text>
-                        </TouchableOpacity>
+                            <TouchableOpacity
+                                style={[styles.sheetOptionRow, { borderBottomColor: 'transparent' }]}
+                                activeOpacity={0.7}
+                                onPress={() => {
+                                    setIsOptionsModalVisible(false);
+                                    setTimeout(handleDelete, 150);
+                                }}
+                            >
+                                <Trash2 size={18} color={isDark ? '#FB7185' : '#E11D48'} />
+                                <Text style={[styles.sheetOptionText, { color: isDark ? '#FB7185' : '#E11D48' }]}>
+                                    {isReadOnly
+                                        ? (language === 'es' ? 'Dejar de seguir recordatorio' : 'Leave reminder')
+                                        : t('home.delete', { defaultValue: 'Eliminar recordatorio' })}
+                                </Text>
+                            </TouchableOpacity>
+                        </VeyraSurface>
+                    </View>
+                )}
 
-                        <TouchableOpacity
-                            style={[styles.sheetOptionRow, { borderBottomColor: 'transparent' }]}
-                            activeOpacity={0.7}
-                            onPress={() => {
-                                setIsOptionsModalVisible(false);
-                                setTimeout(handleDelete, 150);
-                            }}
-                        >
-                            <Trash2 size={18} color={isDark ? '#FB7185' : '#E11D48'} />
-                            <Text style={[styles.sheetOptionText, { color: isDark ? '#FB7185' : '#E11D48' }]}>
-                                {isReadOnly
-                                    ? (language === 'es' ? 'Dejar de seguir recordatorio' : 'Leave reminder')
-                                    : t('home.delete', { defaultValue: 'Eliminar recordatorio' })}
-                            </Text>
-                        </TouchableOpacity>
-                    </VeyraSurface>
-                </View>
-            )}
-
-            {/* ─── VISOR DE IMÁGENES A PANTALLA COMPLETA ─── */}
-            <ImageViewing
-                images={galleryImages}
-                imageIndex={galleryIndex}
-                visible={galleryVisible}
-                onRequestClose={() => setGalleryVisible(false)}
-                swipeToCloseEnabled={true}
-                doubleTapToZoomEnabled={true}
-            />
-
-            {/* ─── MODAL DE COLABORACIÓN Y RECURSOS COMPARTIDOS ─── */}
-            {reminder && (
-                <ShareModal
-                    visible={isShareModalVisible}
-                    onClose={() => setIsShareModalVisible(false)}
-                    targetType="reminder"
-                    targetId={reminder.id}
-                    targetTitle={reminder.title}
-                    isOwner={isOwner}
+                {/* ─── VISOR DE IMÁGENES A PANTALLA COMPLETA ─── */}
+                <ImageViewing
+                    images={galleryImages}
+                    imageIndex={galleryIndex}
+                    visible={galleryVisible}
+                    onRequestClose={() => setGalleryVisible(false)}
+                    swipeToCloseEnabled={true}
+                    doubleTapToZoomEnabled={true}
                 />
-            )}
+
+                {/* ─── MODAL DE COLABORACIÓN Y RECURSOS COMPARTIDOS ─── */}
+                {reminder && (
+                    <ShareModal
+                        visible={isShareModalVisible}
+                        onClose={() => setIsShareModalVisible(false)}
+                        targetType="reminder"
+                        targetId={reminder.id}
+                        targetTitle={reminder.title}
+                        isOwner={isOwner}
+                    />
+                )}
             </SafeAreaView>
-        </Reanimated.View>
+        </View>
     );
 }
 

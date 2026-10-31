@@ -94,7 +94,7 @@ CARACTERÍSTICAS PRINCIPALES:
 • Crea tareas y anota pensamientos al instante usando tu voz sin teclear.
 
 📱 WIDGETS NATIVOS DE ÚLTIMA GENERACIÓN:
-• Widgets Glance para tu pantalla de inicio: Agenda del día, Notas rápidas, Combo dúo y Horario de clases.
+• Widgets Glance para tu pantalla de inicio: Agenda del día, Notas rápidas, Acciones rápidas y Horario de clases.
 • Personaliza el tamaño del texto y el modo de alto contraste para máxima visibilidad en exteriores.
 
 ☁️ SINCRONIZACIÓN CIFRADA:

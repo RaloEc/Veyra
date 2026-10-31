@@ -51,7 +51,7 @@ export function CustomDateTimePicker({
     const bgCard = isDark ? '#1C1D22' : '#FFFFFF';
     const textColor = isDark ? '#F3F4F6' : '#111827';
     const textMuted = isDark ? '#9CA3AF' : '#6B7280';
-    const borderColor = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)';
+    const borderColor = colors.borderSubtle;
 
     const renderCalendar = () => {
         const year = viewDate.getFullYear();
@@ -161,7 +161,7 @@ export function CustomDateTimePicker({
                             {mode === 'date' ? 'Seleccionar Fecha' : 'Seleccionar Hora'}
                         </Text>
                         <TouchableOpacity
-                            style={[styles.closeBtn, { backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)' }]}
+                            style={[styles.closeBtn, { backgroundColor: colors.borderSubtle }]}
                             onPress={onClose}
                             hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                         >

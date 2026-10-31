@@ -2,6 +2,7 @@ import * as Y from 'yjs';
 import { SupabaseClient, RealtimeChannel } from '@supabase/supabase-js';
 import { YjsLocalPersistence, base64ToBytes, bytesToBase64 } from './yjsLocalPersistence';
 import { YjsRemotePersistence } from './yjsRemotePersistence';
+import { diagLog } from './diagLog';
 
 export type SupabaseYjsStatus = 
     | 'DISCONNECTED' 
@@ -52,18 +53,20 @@ export interface SupabaseYjsProviderOptions {
         name?: string;
         color?: string;
         role?: 'owner' | 'editor' | 'viewer';
+        isEditing?: boolean;
     };
     localPersistence?: YjsLocalPersistence;
     remotePersistence?: YjsRemotePersistence;
     onStatusChange?: (status: SupabaseYjsStatus) => void;
     onDetailedStatusChange?: (status: DetailedSyncStatus) => void;
-    onRemoteUpdate?: (base64Update: string) => void;
+    onRemoteUpdate?: (base64Update: string, origin?: string) => void;
     onRemoteAwareness?: (base64Awareness: string, senderClientId?: string) => void;
     onSyncStep1Received?: (remoteSv: string, correlationId: string, isReturnHandshake?: boolean) => void;
     onPeerLeft?: (remoteClientId: string | number) => void;
     onHeartbeat?: (remoteClientId: string | number) => void;
     onError?: (err: Error) => void;
     onMetrics?: (metrics: { sent: number; received: number; lastSync: string }) => void;
+    onPageOrderChange?: (pageIds: string[]) => void;
 }
 
 /**
@@ -85,7 +88,7 @@ export class SupabaseYjsProvider {
     private supabase: SupabaseClient;
     private documentId: string;
     private clientId: string;
-    private user: { id?: string; name?: string; color?: string; role?: 'owner' | 'editor' | 'viewer' };
+    private user: { id?: string; name?: string; color?: string; role?: 'owner' | 'editor' | 'viewer'; isEditing?: boolean };
     private localPersistence?: YjsLocalPersistence;
     private remotePersistence?: YjsRemotePersistence;
 
@@ -107,17 +110,25 @@ export class SupabaseYjsProvider {
     private receivedCount = 0;
     private lastSyncTime = 'Nunca';
 
+    public doc: Y.Doc;
+    private pageOrder: Y.Array<string>;
+    private onPageOrderChange?: (pageIds: string[]) => void;
+
     private awarenessHeartbeatTimer: any = null;
     private connectionWatchdogTimer: any = null;
     private reconnectTimeout: any = null;
     private subscriptionTimeout: any = null;
     private connectingStartedAt = 0;
     private isConnecting = false;
+    private isCatchingUp = false;
+    private channelCreationTime = 0;
     private pendingWritesCount = 0;
+    private isChannelReady = false;
+    private broadcastQueue: Array<() => Promise<void>> = [];
 
     private onStatusChange?: (status: SupabaseYjsStatus) => void;
     private onDetailedStatusChange?: (status: DetailedSyncStatus) => void;
-    private onRemoteUpdate?: (base64Update: string) => void;
+    private onRemoteUpdate?: (base64Update: string, origin?: string) => void;
     private onRemoteAwareness?: (base64Awareness: string, senderClientId?: string) => void;
     private onSyncStep1Received?: (remoteSv: string, correlationId: string, isReturnHandshake?: boolean) => void;
     private onPeerLeft?: (remoteClientId: string | number) => void;
@@ -129,10 +140,12 @@ export class SupabaseYjsProvider {
         this.supabase = options.supabase;
         this.documentId = options.documentId;
         this.clientId = options.clientId || `client-${Math.random().toString(36).substring(2, 9)}`;
-        this.user = options.user || {
+        this.user = {
             name: `Usuario-${this.clientId.slice(-4)}`,
             color: '#8B5CF6',
             role: 'editor',
+            isEditing: false,
+            ...(options.user || {}),
         };
         this.localPersistence = options.localPersistence;
         this.remotePersistence = options.remotePersistence;
@@ -146,6 +159,31 @@ export class SupabaseYjsProvider {
         this.onHeartbeat = options.onHeartbeat;
         this.onError = options.onError;
         this.onMetrics = options.onMetrics;
+        this.onPageOrderChange = options.onPageOrderChange;
+
+        // Documento Yjs autoritativo del proveedor
+        this.doc = new Y.Doc();
+        this.pageOrder = this.doc.getArray<string>('pageOrder');
+
+        // Escucha reactiva en pageOrder para notificar a la UI
+        this.pageOrder.observe(() => {
+            const ids = this.getPageOrder();
+            console.log(`[PoC Yjs Provider] pageOrder.observe -> ${ids.length} páginas:`, ids);
+            this.onPageOrderChange?.(ids);
+        });
+
+        // Escucha cambios locales en this.doc (generados por addPage, removePage, movePage)
+        this.doc.on('update', (update: Uint8Array, origin: any) => {
+            if (origin === 'local' || origin === 'local-page-op') {
+                const base64Update = bytesToBase64(update);
+                // Propagar a persistencia SQLite, PostgreSQL y difusion por Realtime
+                this.sendUpdate(base64Update).catch(err => {
+                    console.warn('[PoC Yjs Provider] Error propagando cambio estructural de página:', err);
+                });
+                // Notificar al WebView editor local para que su ydoc interno reciba la mutación
+                this.onRemoteUpdate?.(base64Update, 'local-page-op');
+            }
+        });
 
         this.startConnectionWatchdog();
     }
@@ -154,8 +192,27 @@ export class SupabaseYjsProvider {
         return this.status;
     }
 
+    public getChannel(): RealtimeChannel | null {
+        return this.channel;
+    }
+
     public isViewer(): boolean {
         return this.user.role === 'viewer';
+    }
+
+    public updateUser(user: { id?: string; name?: string; color?: string; role?: 'owner' | 'editor' | 'viewer'; isEditing?: boolean }): void {
+        this.user = {
+            ...this.user,
+            ...user,
+        };
+        console.log(`[PoC Yjs Provider] Usuario actualizado sin recrear canal (clientId=${this.clientId}, name=${this.user.name}, role=${this.user.role}, isEditing=${this.user.isEditing})`);
+        if (this.isChannelReady && this.channel) {
+            this.channel.track({
+                clientId: this.clientId,
+                user: this.user,
+                onlineAt: Date.now(),
+            }).catch?.(() => {});
+        }
     }
 
     public getLastConfirmedWriteId(): number {
@@ -269,6 +326,15 @@ export class SupabaseYjsProvider {
         } catch (e) {}
     }
 
+    private flushQueue() {
+        if (!this.isChannelReady || !this.channel) return;
+        const queue = [...this.broadcastQueue];
+        this.broadcastQueue = [];
+        for (const sendFn of queue) {
+            sendFn().catch((e) => console.warn('[PoC Yjs] Error enviando broadcast encolado:', e));
+        }
+    }
+
     private async teardownChannelAsync(): Promise<void> {
         this.stopAwarenessHeartbeat();
         if (this.subscriptionTimeout) {
@@ -276,12 +342,18 @@ export class SupabaseYjsProvider {
             this.subscriptionTimeout = null;
         }
 
+        this.isChannelReady = false;
+        this.broadcastQueue = [];
+
         const oldChannel = this.channel;
         this.channel = null;
 
         if (oldChannel) {
             try {
                 await oldChannel.untrack?.();
+            } catch (e) {}
+            try {
+                await oldChannel.unsubscribe?.();
             } catch (e) {}
             try {
                 await this.supabase.removeChannel(oldChannel);
@@ -383,6 +455,20 @@ export class SupabaseYjsProvider {
             return;
         }
 
+        const noteId = this.documentId;
+        const authUser = await this.supabase.auth.getUser();
+        this.channelCreationTime = Date.now();
+        diagLog('channel_create', { channelName, noteId, timestamp: this.channelCreationTime });
+        console.log('[YJS-DIAG] creando canal', {
+            channelName,
+            noteId,
+            userId: authUser.data.user?.id,
+            timestamp: this.channelCreationTime
+        });
+
+        this.isChannelReady = false;
+        this.broadcastQueue = [];
+
         // Canal estrictamente privado (valida RLS en realtime.messages)
         this.channel = this.supabase.channel(channelName, {
             config: {
@@ -399,6 +485,8 @@ export class SupabaseYjsProvider {
 
         // 1. Recepción de deltas por Realtime
         this.channel.on('broadcast', { event: 'YJS_UPDATE' }, async ({ payload }) => {
+            diagLog('broadcast_received', { topic: 'YJS_UPDATE', bytes: payload?.update?.length });
+            console.log('[YJS-DIAG] evento recibido', { tipo: 'broadcast', payload });
             if (this.isDestroyed || currentAttempt !== this.connectionAttemptId) return;
             if (!payload || payload.senderClientId === this.clientId) return;
 
@@ -408,7 +496,7 @@ export class SupabaseYjsProvider {
 
                 // Si el usuario es viewer, solo aplica a memoria; no intenta escribir a PostgreSQL
                 if (this.isViewer()) {
-                    this.onRemoteUpdate?.(payload.update);
+                    this.onRemoteUpdate?.(payload.update, 'remote-broadcast');
                     return;
                 }
 
@@ -459,12 +547,22 @@ export class SupabaseYjsProvider {
                     ).catch(() => {});
                 }
 
-                this.onRemoteUpdate?.(payload.update);
+                // Sincronizar delta remoto en el Y.Doc del proveedor
+                try {
+                    const updateBytes = base64ToBytes(payload.update);
+                    Y.applyUpdate(this.doc, updateBytes, 'remote');
+                } catch (e) {
+                    console.warn('[PoC Yjs Provider] Error aplicando update remoto a this.doc:', e);
+                }
+
+                this.onRemoteUpdate?.(payload.update, 'remote-broadcast');
             }
         });
 
         // 2. Awareness (cursores)
         this.channel.on('broadcast', { event: 'AWARENESS_UPDATE' }, ({ payload }) => {
+            diagLog('broadcast_received', { topic: 'AWARENESS_UPDATE', bytes: payload?.update?.length });
+            console.log('[YJS-DIAG] evento recibido', { tipo: 'broadcast', payload });
             if (this.isDestroyed || currentAttempt !== this.connectionAttemptId) return;
             if (!payload || payload.senderClientId === this.clientId) return;
             if (typeof payload.update === 'string') {
@@ -474,6 +572,8 @@ export class SupabaseYjsProvider {
 
         // 3. Handshake Paso 1
         this.channel.on('broadcast', { event: 'SYNC_STEP_1' }, ({ payload }) => {
+            diagLog('broadcast_received', { topic: 'SYNC_STEP_1', bytes: payload?.sv?.length });
+            console.log('[YJS-DIAG] evento recibido', { tipo: 'broadcast', payload });
             if (this.isDestroyed || currentAttempt !== this.connectionAttemptId) return;
             if (!payload || payload.senderClientId === this.clientId) return;
             if (typeof payload.sv === 'string') {
@@ -493,6 +593,8 @@ export class SupabaseYjsProvider {
 
         // 4. Handshake Paso 2
         this.channel.on('broadcast', { event: 'SYNC_STEP_2' }, async ({ payload }) => {
+            diagLog('broadcast_received', { topic: 'SYNC_STEP_2', bytes: payload?.update?.length });
+            console.log('[YJS-DIAG] evento recibido', { tipo: 'broadcast', payload });
             if (this.isDestroyed || currentAttempt !== this.connectionAttemptId) return;
             if (!payload || payload.senderClientId === this.clientId) return;
             if (payload.targetClientId && payload.targetClientId !== this.clientId) return;
@@ -503,7 +605,7 @@ export class SupabaseYjsProvider {
 
                 // Si es viewer, solo aplica a memoria
                 if (this.isViewer()) {
-                    this.onRemoteUpdate?.(payload.update);
+                    this.onRemoteUpdate?.(payload.update, 'remote-broadcast');
                     this.peerStatus = 'CONVERGED';
                     return;
                 }
@@ -535,7 +637,13 @@ export class SupabaseYjsProvider {
                     }
                 }
 
-                this.onRemoteUpdate?.(payload.update);
+                // Sincronizar delta del handshake en el Y.Doc del proveedor
+                try {
+                    const updateBytes = base64ToBytes(payload.update);
+                    Y.applyUpdate(this.doc, updateBytes, 'remote-handshake');
+                } catch (_) {}
+
+                this.onRemoteUpdate?.(payload.update, 'remote-broadcast');
                 this.peerStatus = 'CONVERGED';
                 // NO llamar checkAndSetSynced() automáticamente: la persistencia duradera aún está pendiente
             }
@@ -543,6 +651,8 @@ export class SupabaseYjsProvider {
 
         // 5. Salida de par
         this.channel.on('broadcast', { event: 'PEER_LEFT' }, ({ payload }) => {
+            diagLog('broadcast_received', { topic: 'PEER_LEFT', bytes: 0 });
+            console.log('[YJS-DIAG] evento recibido', { tipo: 'broadcast', payload });
             if (this.isDestroyed || currentAttempt !== this.connectionAttemptId) return;
             if (!payload || payload.senderClientId === this.clientId) return;
             this.onPeerLeft?.(payload.senderClientId);
@@ -550,6 +660,8 @@ export class SupabaseYjsProvider {
 
         // 6. Heartbeat
         this.channel.on('broadcast', { event: 'HEARTBEAT' }, ({ payload }) => {
+            diagLog('broadcast_received', { topic: 'HEARTBEAT', bytes: 0 });
+            console.log('[YJS-DIAG] evento recibido', { tipo: 'broadcast', payload });
             if (this.isDestroyed || currentAttempt !== this.connectionAttemptId) return;
             if (!payload || payload.senderClientId === this.clientId) return;
             this.onHeartbeat?.(payload.senderClientId);
@@ -560,7 +672,8 @@ export class SupabaseYjsProvider {
             if (this.isDestroyed || currentAttempt !== this.connectionAttemptId) return;
             this.isConnecting = false;
             if (this.status === 'CONNECTING' || this.status === 'RECONNECTING') {
-                console.warn('[PoC Yjs] Timeout de suscripción a canal privado');
+                const elapsedMs = Date.now() - (this.channelCreationTime || 0);
+                console.warn(`[PoC Yjs] Timeout de suscripción a canal privado (${elapsedMs}ms transcurridos)`);
                 this.updateStatus('ERROR');
                 this.scheduleReconnect(3000);
             }
@@ -568,6 +681,9 @@ export class SupabaseYjsProvider {
 
         // Suscripción al canal con captura detallada de estado y errores
         this.channel.subscribe(async (status, err) => {
+            const durationMs = Date.now() - (this.channelCreationTime || 0);
+            diagLog('subscribe', { status, err: err ? String(err) : null, durationMs });
+            console.log('[YJS-DIAG] subscribe', { status, err, channelName, durationMs });
             if (this.isDestroyed || currentAttempt !== this.connectionAttemptId) return;
             this.isConnecting = false;
             if (this.subscriptionTimeout) {
@@ -576,7 +692,9 @@ export class SupabaseYjsProvider {
             }
 
             if (status === 'SUBSCRIBED') {
+                this.isChannelReady = true;
                 this.updateStatus('CONNECTED');
+                this.flushQueue();
                 this.startAwarenessHeartbeat();
                 this.channel?.track({
                     clientId: this.clientId,
@@ -605,9 +723,11 @@ export class SupabaseYjsProvider {
                     console.warn('[PoC Yjs] Error durante reconciliación coordinada:', e);
                 }
             } else if (status === 'CLOSED') {
+                this.isChannelReady = false;
                 this.updateStatus('DISCONNECTED');
                 this.scheduleReconnect(2000);
             } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+                this.isChannelReady = false;
                 this.updateStatus('ERROR');
                 const errObj = err as any;
                 console.warn(`[PoC Yjs Channel] Evento de suscripción con error (${status}):`, {
@@ -659,6 +779,12 @@ export class SupabaseYjsProvider {
         this.pendingWritesCount++;
         this.updateStatus('SYNCING');
         console.log(`[PoC Yjs Diagnostic] [UPDATE_GENERATED] Delta local generado (${base64Update.length} chars base64). Pendientes en vuelo: ${this.pendingWritesCount}`);
+
+        // Reflejar delta generado por el WebView en el Y.Doc interno del provider
+        try {
+            const bytes = base64ToBytes(base64Update);
+            Y.applyUpdate(this.doc, bytes, 'webview');
+        } catch (_) {}
 
         // 1. Intentar persistencia local duradera en SQLite si está disponible
         if (this.localPersistence) {
@@ -735,7 +861,8 @@ export class SupabaseYjsProvider {
         }
 
         // 3. Difundir vía Realtime: garantizado que existe al menos una copia duradera (local o remota)
-        if (this.channel && (this.status === 'CONNECTED' || this.status === 'SYNCING' || this.status === 'SYNCED')) {
+        const sendBroadcastUpdate = async () => {
+            if (!this.channel) return;
             try {
                 const resp = await this.channel.send({
                     type: 'broadcast',
@@ -756,6 +883,13 @@ export class SupabaseYjsProvider {
             } catch (err: any) {
                 this.onError?.(err);
             }
+        };
+
+        if (this.isChannelReady && this.channel) {
+            await sendBroadcastUpdate();
+        } else {
+            console.log('[PoC Yjs] Canal aún no SUBSCRIBED. Encolando broadcast YJS_UPDATE');
+            this.broadcastQueue.push(sendBroadcastUpdate);
         }
 
         // 4. Si el delta se guardó localmente pero aún no se persistió remotamente, guardar en PostgreSQL
@@ -870,25 +1004,67 @@ export class SupabaseYjsProvider {
             };
         }
 
+        if (this.isCatchingUp) {
+            console.log(`[PoC Yjs State] [CATCHUP_SKIP] catchUpRemoteUpdates ya en curso para nota ${this.documentId}`);
+            return {
+                success: true,
+                appliedCount: 0,
+            };
+        }
+        this.isCatchingUp = true;
+        const catchupStartTime = Date.now();
+
+        // 1. Restaurar cursor local persistido si el cursor en memoria arranca en 0
+        if (this.lastProcessedReadId === 0 && this.localPersistence) {
+            try {
+                const persistedCursor = await this.localPersistence.getLastRemoteUpdateId(this.documentId);
+                if (persistedCursor > 0) {
+                    this.lastProcessedReadId = persistedCursor;
+                    diagLog('cursor_restored', { noteId: this.documentId, persistedCursor });
+                    console.log(`[PoC Yjs State] [CATCHUP_CURSOR] Restaurado cursor local persistido: ${persistedCursor} para nota ${this.documentId}`);
+                }
+            } catch (curErr) {
+                console.warn('[PoC Yjs State] Error leyendo cursor local persistido:', curErr);
+            }
+        }
+
         let applied = 0;
         this.updateStatus('SYNCING');
+        const source = this.lastProcessedReadId === 0 ? 'cold' : 'warm';
+        diagLog('catchup_start', { noteId: this.documentId, cursorFrom: this.lastProcessedReadId, source });
         console.log('[PoC Yjs State] [CATCHUP_START] Iniciando recuperación de actualizaciones remotas desde cursor', this.lastProcessedReadId);
 
         try {
             // Caso 1: Recuperación inicial o cliente sin cursor previo de lectura (lastProcessedReadId === 0)
             if (this.lastProcessedReadId === 0) {
-                const fetchRes = await this.remotePersistence.fetchDocument(this.documentId);
+                console.log('[YJS-DIAG] [CATCHUP] Iniciando fetchDocument para nota', this.documentId);
+                const fetchRes = await this.remotePersistence.fetchDocument(this.documentId, undefined, 3, this.lastProcessedReadId);
                 applied = fetchRes.appliedUpdatesCount;
+                console.log('[YJS-DIAG] [CATCHUP] fetchDocument completado', {
+                    noteId: this.documentId,
+                    appliedUpdatesCount: applied,
+                    maxUpdateId: fetchRes.maxUpdateId,
+                    hasSnapshot: fetchRes.hasSnapshot
+                });
 
                 // REGLA FASE B.4: Entregar el estado completo si hay snapshot O si hay deltas aplicados
                 if (fetchRes.hasSnapshot || applied > 0) {
                     const fullState = Y.encodeStateAsUpdate(fetchRes.doc);
+                    console.log('[YJS-DIAG] [CATCHUP] Entregando estado completo recuperado al editor', {
+                        bytes: fullState.byteLength,
+                        appliedUpdatesCount: applied
+                    });
                     // Comprobación de puente seguro: si el callback lanza error, se aborta la recuperación
-                    this.onRemoteUpdate?.(bytesToBase64(fullState));
+                    this.onRemoteUpdate?.(bytesToBase64(fullState), 'remote-replay-load');
                 }
 
-                if (this.localPersistence && (fetchRes.hasSnapshot || applied > 0)) {
-                    await this.localPersistence.compact(this.documentId, fetchRes.doc);
+                if (this.localPersistence) {
+                    if (fetchRes.hasSnapshot || applied > 0) {
+                        await this.localPersistence.compact(this.documentId, fetchRes.doc, fetchRes.maxUpdateId);
+                    }
+                    if (fetchRes.maxUpdateId > 0) {
+                        await this.localPersistence.setLastRemoteUpdateId(this.documentId, fetchRes.maxUpdateId);
+                    }
                 }
 
                 // Avanza el cursor de LECTURA solo al ID efectivamente recuperado y procesado
@@ -897,6 +1073,8 @@ export class SupabaseYjsProvider {
                 }
 
                 this.lastCatchUpSuccess = true;
+                const durationMs = Date.now() - catchupStartTime;
+                diagLog('catchup_done', { noteId: this.documentId, applied, maxUpdateId: fetchRes.maxUpdateId, durationMs, hadSnapshot: fetchRes.hasSnapshot });
                 console.log(`[PoC Yjs State] [CATCHUP_SUCCESS] Inicial completado (${applied} deltas aplicados, maxId=${fetchRes.maxUpdateId})`);
                 await this.checkAndSetSynced();
                 return {
@@ -911,18 +1089,38 @@ export class SupabaseYjsProvider {
                 this.lastProcessedReadId
             );
 
-            for (const upd of updates) {
-                this.receivedCount++;
-                this.onRemoteUpdate?.(upd.update_data);
-                applied++;
+            if (updates.length > 0) {
+                this.receivedCount += updates.length;
+                applied += updates.length;
+                this.onRemoteUpdate?.(
+                    JSON.stringify(updates.map(u => u.update_data)),
+                    'remote-replay-load'
+                );
 
                 if (this.localPersistence) {
-                    await this.localPersistence.storeUpdate(
-                        this.documentId,
-                        base64ToBytes(upd.update_data),
-                        true // ya confirmado en PostgreSQL
-                    );
+                    for (const upd of updates) {
+                        await this.localPersistence.storeUpdate(
+                            this.documentId,
+                            base64ToBytes(upd.update_data),
+                            true, // ya confirmado en PostgreSQL
+                            Number(upd.id)
+                        );
+                    }
                 }
+
+                // Sincronizar deltas acumulados en el Y.Doc del proveedor
+                for (const upd of updates) {
+                    if (upd.update_data) {
+                        try {
+                            const bytes = base64ToBytes(upd.update_data);
+                            Y.applyUpdate(this.doc, bytes, 'remote-catchup');
+                        } catch (_) {}
+                    }
+                }
+            }
+
+            if (this.localPersistence && maxUpdateId > 0) {
+                await this.localPersistence.setLastRemoteUpdateId(this.documentId, maxUpdateId);
             }
 
             if (maxUpdateId > this.lastProcessedReadId) {
@@ -930,6 +1128,8 @@ export class SupabaseYjsProvider {
             }
 
             this.lastCatchUpSuccess = true;
+            const durationMs = Date.now() - catchupStartTime;
+            diagLog('catchup_done', { noteId: this.documentId, applied, maxUpdateId, durationMs, hadSnapshot: false });
             console.log(`[PoC Yjs State] [CATCHUP_SUCCESS] Incremental completado (${applied} deltas aplicados, maxId=${maxUpdateId})`);
             await this.checkAndSetSynced();
             return {
@@ -946,6 +1146,8 @@ export class SupabaseYjsProvider {
                 appliedCount: applied,
                 error: err.message || 'Error en recuperación remota',
             };
+        } finally {
+            this.isCatchingUp = false;
         }
     }
 
@@ -1035,83 +1237,101 @@ export class SupabaseYjsProvider {
     }
 
     public async sendAwareness(base64Awareness: string): Promise<boolean> {
-        if (!this.channel || (this.status !== 'CONNECTED' && this.status !== 'SYNCING' && this.status !== 'SYNCED')) return false;
+        const doSend = async () => {
+            if (!this.channel) return;
+            try {
+                await this.channel.send({
+                    type: 'broadcast',
+                    event: 'AWARENESS_UPDATE',
+                    payload: {
+                        senderClientId: this.clientId,
+                        senderUserId: this.user.id,
+                        update: base64Awareness,
+                        timestamp: Date.now(),
+                    },
+                });
+            } catch {}
+        };
 
-        try {
-            await this.channel.send({
-                type: 'broadcast',
-                event: 'AWARENESS_UPDATE',
-                payload: {
-                    senderClientId: this.clientId,
-                    senderUserId: this.user.id,
-                    update: base64Awareness,
-                    timestamp: Date.now(),
-                },
-            });
+        if (this.isChannelReady && this.channel) {
+            await doSend();
             return true;
-        } catch {
-            return false;
+        } else {
+            this.broadcastQueue.push(doSend);
+            return true;
         }
     }
 
     public async sendSyncStep1(base64Sv: string, isReturnHandshake = false, correlationId?: string | null): Promise<boolean> {
-        if (!this.channel || (this.status !== 'CONNECTED' && this.status !== 'SYNCING' && this.status !== 'SYNCED')) return false;
-
         this.peerStatus = 'HANDSHAKE';
         if (this.pendingWritesCount > 0) {
             this.updateStatus('SYNCING');
         }
-        try {
-            const resp = await this.channel.send({
-                type: 'broadcast',
-                event: 'SYNC_STEP_1',
-                payload: {
-                    senderClientId: this.clientId,
-                    sv: base64Sv,
-                    isReturnHandshake,
-                    correlationId: correlationId || null,
-                    timestamp: Date.now(),
-                },
-            });
-            if (resp === 'ok') {
-                this.sentCount++;
-                this.updateMetrics(isReturnHandshake ? 'Retorno Handshake 1' : 'Envío Handshake 1');
-                return true;
-            }
-            return false;
-        } catch {
-            return false;
+
+        const doSend = async () => {
+            if (!this.channel) return;
+            try {
+                const resp = await this.channel.send({
+                    type: 'broadcast',
+                    event: 'SYNC_STEP_1',
+                    payload: {
+                        senderClientId: this.clientId,
+                        sv: base64Sv,
+                        isReturnHandshake,
+                        correlationId: correlationId || null,
+                        timestamp: Date.now(),
+                    },
+                });
+                if (resp === 'ok') {
+                    this.sentCount++;
+                    this.updateMetrics(isReturnHandshake ? 'Retorno Handshake 1' : 'Envío Handshake 1');
+                }
+            } catch {}
+        };
+
+        if (this.isChannelReady && this.channel) {
+            await doSend();
+            return true;
+        } else {
+            this.broadcastQueue.push(doSend);
+            return true;
         }
     }
 
     public async sendSyncStep2(base64Update: string, targetClientId?: string | null): Promise<boolean> {
         if (this.isViewer()) return false;
-        if (!this.channel || (this.status !== 'CONNECTED' && this.status !== 'SYNCING' && this.status !== 'SYNCED')) return false;
 
-        try {
-            const resp = await this.channel.send({
-                type: 'broadcast',
-                event: 'SYNC_STEP_2',
-                payload: {
-                    senderClientId: this.clientId,
-                    targetClientId: targetClientId || null,
-                    update: base64Update,
-                    timestamp: Date.now(),
-                },
-            });
-            if (resp === 'ok') {
-                this.sentCount++;
-                this.updateMetrics('Envío Handshake 2');
-                return true;
-            }
-            return false;
-        } catch {
-            return false;
+        const doSend = async () => {
+            if (!this.channel) return;
+            try {
+                const resp = await this.channel.send({
+                    type: 'broadcast',
+                    event: 'SYNC_STEP_2',
+                    payload: {
+                        senderClientId: this.clientId,
+                        targetClientId: targetClientId || null,
+                        update: base64Update,
+                        timestamp: Date.now(),
+                    },
+                });
+                if (resp === 'ok') {
+                    this.sentCount++;
+                    this.updateMetrics('Envío Handshake 2');
+                }
+            } catch {}
+        };
+
+        if (this.isChannelReady && this.channel) {
+            await doSend();
+            return true;
+        } else {
+            this.broadcastQueue.push(doSend);
+            return true;
         }
     }
 
     public async sendPeerLeft(): Promise<boolean> {
-        if (!this.channel) return false;
+        if (!this.channel || !this.isChannelReady) return false;
         try {
             this.channel.untrack?.().catch?.(() => {});
             this.channel.send({
@@ -1131,7 +1351,7 @@ export class SupabaseYjsProvider {
     private startAwarenessHeartbeat() {
         this.stopAwarenessHeartbeat();
         this.awarenessHeartbeatTimer = setInterval(() => {
-            if ((this.status === 'CONNECTED' || this.status === 'SYNCED') && this.channel) {
+            if (this.isChannelReady && this.channel && (this.status === 'CONNECTED' || this.status === 'SYNCED')) {
                 this.channel.send({
                     type: 'broadcast',
                     event: 'HEARTBEAT',
@@ -1196,6 +1416,8 @@ export class SupabaseYjsProvider {
     public destroy() {
         this.isDestroyed = true;
         this.isConnecting = false;
+        this.isChannelReady = false;
+        this.broadcastQueue = [];
         this.connectionAttemptId++;
         this.stopAwarenessHeartbeat();
         this.stopConnectionWatchdog();
@@ -1213,23 +1435,171 @@ export class SupabaseYjsProvider {
         if (this.channel) {
             const oldChannel = this.channel;
             this.channel = null;
-            oldChannel.send({
-                type: 'broadcast',
-                event: 'PEER_LEFT',
-                payload: {
-                    senderClientId: this.clientId,
-                    timestamp: Date.now(),
-                },
-            }).catch(() => {}).finally(() => {
-                oldChannel.untrack?.().catch(() => {});
-                this.supabase.removeChannel(oldChannel).catch(() => {});
-            });
+            try {
+                oldChannel.unsubscribe?.();
+            } catch (e) {}
+            try {
+                this.supabase.removeChannel(oldChannel);
+            } catch (e) {}
         }
 
         if (this.documentId) {
             this.purgeLingeringChannel(`note_yjs_${this.documentId}`);
         }
 
+        try {
+            this.doc.destroy();
+        } catch (_) {}
+
         this.updateStatus('DISCONNECTED');
+    }
+
+    // ─── GESTIÓN DE PÁGINAS (HOJAS) COLABORATIVAS ──────────────────────────────
+
+    /**
+     * Retorna el listado ordenado de IDs de páginas activas.
+     */
+    public getPageOrder(): string[] {
+        return this.pageOrder.toArray().map(String);
+    }
+
+    /**
+     * Agrega una nueva página al documento de manera transaccional.
+     * @param customPageId ID único opcional (por defecto genera page_<uuid>)
+     * @param targetIndex Índice donde insertar (al final si se omite)
+     */
+    public addPage(customPageId?: string, targetIndex?: number): string {
+        if (this.isViewer()) {
+            throw new Error('Permiso denegado: el usuario viewer no puede agregar páginas');
+        }
+
+        const pageId = customPageId || `page_${Math.random().toString(36).substring(2, 9)}_${Date.now().toString(36)}`;
+
+        this.doc.transact(() => {
+            const index = typeof targetIndex === 'number' && targetIndex >= 0 && targetIndex <= this.pageOrder.length
+                ? targetIndex
+                : this.pageOrder.length;
+
+            this.pageOrder.insert(index, [pageId]);
+
+            // Inicializar el fragmento XML de la nueva página con un párrafo vacío si está nuevo
+            const fragment = this.doc.getXmlFragment(pageId);
+            if (fragment.length === 0) {
+                const p = new Y.XmlElement('paragraph');
+                const text = new Y.XmlText();
+                p.insert(0, [text]);
+                fragment.insert(0, [p]);
+            }
+        }, 'local');
+
+        const updatedIds = this.getPageOrder();
+        this.onPageOrderChange?.(updatedIds);
+        return pageId;
+    }
+
+    /**
+     * Elimina una página por su ID estable.
+     * Si era la única página, crea una vacía de respaldo para preservar consistencia.
+     */
+    public removePage(pageId: string): boolean {
+        if (this.isViewer()) {
+            throw new Error('Permiso denegado: el usuario viewer no puede eliminar páginas');
+        }
+
+        let removed = false;
+        this.doc.transact(() => {
+            const currentIds = this.pageOrder.toArray().map(String);
+            const index = currentIds.indexOf(pageId);
+            if (index !== -1) {
+                this.pageOrder.delete(index, 1);
+                removed = true;
+
+                // Limpiar contenido del fragmento eliminado
+                try {
+                    const fragment = this.doc.getXmlFragment(pageId);
+                    if (fragment.length > 0) {
+                        fragment.delete(0, fragment.length);
+                    }
+                } catch (_) {}
+
+                // Si no quedan páginas, generar hoja de respaldo automática
+                if (this.pageOrder.length === 0) {
+                    const fallbackId = `page_${Math.random().toString(36).substring(2, 9)}_${Date.now().toString(36)}`;
+                    this.pageOrder.insert(0, [fallbackId]);
+                    const fragment = this.doc.getXmlFragment(fallbackId);
+                    const p = new Y.XmlElement('paragraph');
+                    const text = new Y.XmlText();
+                    p.insert(0, [text]);
+                    fragment.insert(0, [p]);
+                }
+            }
+        }, 'local');
+
+        const updatedIds = this.getPageOrder();
+        this.onPageOrderChange?.(updatedIds);
+        return removed;
+    }
+
+    /**
+     * Reordena una página desplazándola de un índice a otro de forma atómica.
+     */
+    public movePage(fromIndex: number, toIndex: number): boolean {
+        if (this.isViewer()) {
+            throw new Error('Permiso denegado: el usuario viewer no puede mover páginas');
+        }
+
+        if (fromIndex < 0 || fromIndex >= this.pageOrder.length || toIndex < 0 || toIndex >= this.pageOrder.length) {
+            return false;
+        }
+        if (fromIndex === toIndex) return true;
+
+        this.doc.transact(() => {
+            const pageId = this.pageOrder.get(fromIndex);
+            this.pageOrder.delete(fromIndex, 1);
+            this.pageOrder.insert(toIndex, [pageId]);
+        }, 'local');
+
+        const updatedIds = this.getPageOrder();
+        this.onPageOrderChange?.(updatedIds);
+        return true;
+    }
+
+    /**
+     * Aplica el estado consolidado inicial al Y.Doc interno (ej: desde SQLite local).
+     */
+    public applyInitialDoc(updateOrDoc: Uint8Array | Y.Doc): void {
+        if (updateOrDoc instanceof Y.Doc) {
+            const state = Y.encodeStateAsUpdate(updateOrDoc);
+            Y.applyUpdate(this.doc, state, 'sqlite-load');
+        } else {
+            Y.applyUpdate(this.doc, updateOrDoc, 'sqlite-load');
+        }
+        const currentOrder = this.getPageOrder();
+        if (currentOrder.length > 0) {
+            this.onPageOrderChange?.(currentOrder);
+        }
+    }
+
+    /**
+     * Si el Y.Doc no contiene ningún pageOrder (ej: nota recién creada), siembra las páginas iniciales.
+     */
+    public initializePageOrderIfEmpty(fallbackPageIds: string[] = []): void {
+        if (this.pageOrder.length === 0) {
+            this.doc.transact(() => {
+                if (this.pageOrder.length === 0) {
+                    const ids = fallbackPageIds.length > 0 ? fallbackPageIds : [`page_${Math.random().toString(36).substring(2, 9)}`];
+                    this.pageOrder.insert(0, ids);
+                    for (const pid of ids) {
+                        const fragment = this.doc.getXmlFragment(pid);
+                        if (fragment.length === 0) {
+                            const p = new Y.XmlElement('paragraph');
+                            const text = new Y.XmlText();
+                            p.insert(0, [text]);
+                            fragment.insert(0, [p]);
+                        }
+                    }
+                }
+            }, 'local-init-pages');
+        }
     }
 }

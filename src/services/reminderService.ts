@@ -1,13 +1,12 @@
-import { getDB } from '../db';
+import { getDB, withDB } from '../db';
 import { Reminder, ReminderStatus, ControlLevel } from '../types/db';
 import * as Crypto from 'expo-crypto';
-import { WidgetService } from './widgetService';
+import { updateTodayWidget } from '../widgets/widgetUpdater';
 
 function triggerWidgetSync() {
-    WidgetService.sync().catch(err => {
+    updateTodayWidget().catch(err => {
         console.warn('[ReminderService] Widget sync notice:', err);
     });
-    WidgetService.syncSchedule().catch(() => {});
 }
 
 function triggerSearchIndex(reminder: Reminder) {
@@ -32,7 +31,9 @@ export const ReminderService = {
         repeatRule?: string, // JSON
         attachments?: string, // JSON
         links?: string, // JSON
-        subtasks?: string // JSON
+        subtasks?: string, // JSON
+        eventId?: string | null,
+        offsetMinutes?: number | null
     ): Promise<Reminder> {
         const db = await getDB();
         const id = Crypto.randomUUID();
@@ -60,12 +61,14 @@ export const ReminderService = {
             attachments,
             links,
             subtasks,
+            event_id: eventId || null,
+            offset_minutes: offsetMinutes !== undefined ? offsetMinutes : null,
         };
 
         await db.runAsync(
-            `INSERT INTO reminders (id, user_id, title, description, due_date_ms, control_level, priority, status, next_attempt_ms, retry_count, max_retries, last_modified_ms, deleted, repeat_rule, attachments, links, subtasks)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [id, newReminder.user_id, title, description || null, dueDate, controlLevel, priority, 'pending', dueDate, 0, newReminder.max_retries, now, 0, repeatRule || null, attachments || null, links || null, subtasks || null]
+            `INSERT INTO reminders (id, user_id, title, description, due_date_ms, control_level, priority, status, next_attempt_ms, retry_count, max_retries, last_modified_ms, deleted, repeat_rule, attachments, links, subtasks, event_id, offset_minutes)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [id, newReminder.user_id, title, description || null, dueDate, controlLevel, priority, 'pending', dueDate, 0, newReminder.max_retries, now, 0, repeatRule || null, attachments || null, links || null, subtasks || null, eventId || null, offsetMinutes !== undefined ? offsetMinutes : null]
         );
 
         triggerWidgetSync();
@@ -202,11 +205,13 @@ export const ReminderService = {
             `UPDATE reminders SET status = 'pending', last_modified_ms = ? WHERE id IN (${placeholders})`,
             [now, ...ids]
         );
+        triggerWidgetSync();
     },
 
     async deleteForever(id: string): Promise<void> {
         const db = await getDB();
         await db.runAsync(`DELETE FROM reminders WHERE id = ?`, [id]);
+        triggerWidgetSync();
         triggerSearchRemove(id);
     },
 
@@ -215,11 +220,13 @@ export const ReminderService = {
         const db = await getDB();
         const placeholders = ids.map(() => '?').join(', ');
         await db.runAsync(`DELETE FROM reminders WHERE id IN (${placeholders})`, ids);
+        triggerWidgetSync();
     },
 
     async emptyRemindersTrash(): Promise<void> {
         const db = await getDB();
         await db.runAsync(`DELETE FROM reminders WHERE deleted = 1`);
+        triggerWidgetSync();
     },
 
     async getOverdueReminders(): Promise<Reminder[]> {

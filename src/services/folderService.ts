@@ -1,17 +1,14 @@
 import { getDB, withDB } from '../db';
 import { Folder } from '../types/db';
 import * as Crypto from 'expo-crypto';
+import { SearchService } from './searchService';
 
 function triggerSearchIndex(folder: Folder) {
-    import('./searchService').then(({ SearchService }) => {
-        SearchService.indexFolder(folder).catch(() => {});
-    }).catch(() => {});
+    SearchService.indexFolder(folder).catch(() => {});
 }
 
 function triggerSearchRemove(id: string) {
-    import('./searchService').then(({ SearchService }) => {
-        SearchService.removeItem('folder', id).catch(() => {});
-    }).catch(() => {});
+    SearchService.removeItem('folder', id).catch(() => {});
 }
 
 export const FolderService = {
@@ -131,24 +128,32 @@ export const FolderService = {
         });
     },
 
-    async getAllDescendantFolderIds(folderIds: string[], db: any): Promise<string[]> {
-        const allIds = new Set<string>();
-        let currentQueue = [...folderIds];
-        while (currentQueue.length > 0) {
-            const placeholders = currentQueue.map(() => '?').join(',');
-            const rows = await db.getAllAsync(
-                `SELECT id FROM folders WHERE parent_id IN (${placeholders}) AND deleted = 0`,
-                currentQueue
-            );
-            currentQueue = [];
-            for (const r of rows) {
-                if (!allIds.has(r.id)) {
-                    allIds.add(r.id);
-                    currentQueue.push(r.id);
+    async getAllDescendantFolderIds(folderIds: string[], db?: any): Promise<string[]> {
+        if (!folderIds || folderIds.length === 0) return [];
+        const runner = async (database: any) => {
+            const allIds = new Set<string>();
+            let currentQueue = [...folderIds];
+            while (currentQueue.length > 0) {
+                const placeholders = currentQueue.map(() => '?').join(',');
+                const rows = await database.getAllAsync(
+                    `SELECT id FROM folders WHERE parent_id IN (${placeholders}) AND deleted = 0`,
+                    currentQueue
+                );
+                currentQueue = [];
+                for (const r of rows) {
+                    if (!allIds.has(r.id)) {
+                        allIds.add(r.id);
+                        currentQueue.push(r.id);
+                    }
                 }
             }
+            return Array.from(allIds);
+        };
+
+        if (db) {
+            return await runner(db);
         }
-        return Array.from(allIds);
+        return withDB(runner);
     },
 
     async deleteFolder(id: string, deleteNotes: boolean = false): Promise<void> {
@@ -208,6 +213,7 @@ export const FolderService = {
                 `UPDATE folders SET deleted = 1, updated_at_ms = ?, last_modified_ms = ? WHERE id IN (${placeholders})`,
                 [now, now, ...allTargetIds]
             );
+            allTargetIds.forEach(triggerSearchRemove);
         });
     },
 
@@ -242,3 +248,22 @@ export const FolderService = {
         });
     },
 };
+
+/**
+ * Obtiene de forma recursiva todos los IDs de subcarpetas descendientes a partir de una lista en memoria.
+ */
+export function getAllDescendantFolderIds(folderId: string, allFolders: Folder[]): string[] {
+    const descendantIds = new Set<string>();
+    let currentQueue = [folderId];
+    while (currentQueue.length > 0) {
+        const curr = currentQueue.shift()!;
+        const children = allFolders.filter(f => f.parent_id === curr && f.deleted !== 1);
+        for (const child of children) {
+            if (!descendantIds.has(child.id)) {
+                descendantIds.add(child.id);
+                currentQueue.push(child.id);
+            }
+        }
+    }
+    return Array.from(descendantIds);
+}

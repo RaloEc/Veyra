@@ -221,7 +221,7 @@ export class YjsNoteModel {
     }
 }
 
-function serializeXmlFragment(node: Y.XmlFragment | Y.XmlElement | Y.XmlText): any {
+function serializeXmlFragment(node: any): any {
     if (node instanceof Y.XmlFragment) {
         return {
             type: 'fragment',

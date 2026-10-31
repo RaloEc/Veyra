@@ -222,11 +222,14 @@ CREATE TABLE IF NOT EXISTS public.events (
     notification_offsets TEXT,
     notification_ids TEXT,
     note_id TEXT,
+    folder_id TEXT,
     created_at_ms BIGINT NOT NULL,
     updated_at_ms BIGINT NOT NULL,
     last_modified_ms BIGINT NOT NULL,
     deleted INTEGER DEFAULT 0
 );
+
+ALTER TABLE public.events ADD COLUMN IF NOT EXISTS folder_id TEXT;
 
 ALTER TABLE public.events ENABLE ROW LEVEL SECURITY;
 

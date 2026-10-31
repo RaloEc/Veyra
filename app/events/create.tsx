@@ -4,29 +4,33 @@ import {
     Text,
     TextInput,
     TouchableOpacity,
+    TouchableWithoutFeedback,
     StyleSheet,
     ScrollView,
     Alert,
-    Platform,
     Modal,
     BackHandler,
     useWindowDimensions,
+    Keyboard,
+    Platform,
 } from 'react-native';
 import Reanimated, {
     useSharedValue,
     useAnimatedStyle,
     withTiming,
     interpolate,
-    interpolateColor,
     Extrapolation,
     Easing as ReanimatedEasing,
     runOnJS,
 } from 'react-native-reanimated';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
 import { useScreenInsets } from '../../src/hooks/useScreenInsets';
 import {
     ChevronLeft,
+    ChevronRight,
+    ChevronDown,
+    Sliders,
     Trash2,
     Calendar as CalendarIcon,
     Clock,
@@ -44,21 +48,30 @@ import {
     Notebook,
     Share2,
     Tag as TagIcon,
+    Sun,
+    ShieldAlert,
+    AlertCircle,
+    Folder as FolderIcon,
+    FolderPlus,
 } from '@tamagui/lucide-icons';
-import { format, addHours } from 'date-fns';
+import { format, isToday, isTomorrow } from 'date-fns';
 import { es } from 'date-fns/locale';
 
 import { useStore } from '../../src/store/useStore';
 import { useEventsStore } from '../../src/store/useEventsStore';
 import { useNotesStore } from '../../src/store/useNotesStore';
+import { useFoldersStore } from '../../src/store/useFoldersStore';
+import { FolderIconRenderer } from '../../src/components/notes/FolderIconRenderer';
 import { useVeyraTheme } from '../../src/theme/useVeyraTheme';
 import { VeyraSurface } from '../../src/components/ui/VeyraSurface';
-import { VeyraButton } from '../../src/components/ui/VeyraButton';
 import { VeyraIconButton } from '../../src/components/ui/VeyraIconButton';
 import { DatePickerModal, TimePickerModal } from '../../src/components/ui';
 import { RecurringDeleteModal } from '../../src/components/events/RecurringDeleteModal';
 import { ShareModal } from '../../src/components/collaboration/ShareModal';
-import { CalendarEvent, Note } from '../../src/types/db';
+import { CalendarEvent, Reminder, ControlLevel } from '../../src/types/db';
+import { looksLikeBirthday } from '../../src/utils/birthdayDetector';
+import { getDeviceTimezone, makeZonedDateMs } from '../../src/services/recurrence/recurrenceEngine';
+import { ReminderService } from '../../src/services/reminderService';
 import { parseInitialDate } from '../../src/hooks/useCreateReminder';
 
 const EVENT_COLORS = [
@@ -70,6 +83,42 @@ const EVENT_COLORS = [
     { label: 'Rojo', color: '#EF4444' },
     { label: 'Cian', color: '#06B6D4' },
     { label: 'Índigo', color: '#6366F1' },
+];
+
+const CONTROL_LEVELS: { key: ControlLevel; label: string; shortDesc: string; icon: any; color: string; desc: string }[] = [
+    {
+        key: 'normal',
+        label: 'Normal',
+        shortDesc: 'Estándar',
+        icon: Bell,
+        color: '#64748B',
+        desc: 'Notificación estándar. Ideal para clases, reuniones y eventos habituales.',
+    },
+    {
+        key: 'strict',
+        label: 'Estricto',
+        shortDesc: 'Insistente',
+        icon: AlertCircle,
+        color: '#F59E0B',
+        desc: 'Alarma persistente. Te avisará insistentemente antes del evento.',
+    },
+    {
+        key: 'critical',
+        label: 'Crítico',
+        shortDesc: 'Alarma máxima',
+        icon: ShieldAlert,
+        color: '#EF4444',
+        desc: 'Alarma con sonido continuo hasta que confirmes tu asistencia.',
+    },
+];
+
+const RECURRENCE_TYPES: { key: string; label: string; desc: string }[] = [
+    { key: 'none', label: 'No repetir', desc: 'Evento único en la fecha seleccionada' },
+    { key: 'daily', label: 'Diario', desc: 'Se repite todos los días' },
+    { key: 'weekly', label: 'Semanal', desc: 'Elige qué días de la semana se repite' },
+    { key: 'weekdays', label: 'Lun a Vie', desc: 'Todos los días hábiles de lunes a viernes' },
+    { key: 'monthly', label: 'Mensual', desc: 'El mismo día de cada mes' },
+    { key: 'yearly', label: 'Anual', desc: 'Cada año en esta fecha (ej. cumpleaños)' },
 ];
 
 const AVAILABLE_OFFSETS: { label: string; value: number }[] = [
@@ -105,13 +154,13 @@ const getOffsetLabel = (minutes: number): string => {
 };
 
 const WEEKDAYS = [
-    { label: 'L', name: 'Lunes', day: 1 },
-    { label: 'M', name: 'Martes', day: 2 },
-    { label: 'M', name: 'Miércoles', day: 3 },
-    { label: 'J', name: 'Jueves', day: 4 },
-    { label: 'V', name: 'Viernes', day: 5 },
-    { label: 'S', name: 'Sábado', day: 6 },
-    { label: 'D', name: 'Domingo', day: 0 },
+    { label: 'L', name: 'Lun', day: 1 },
+    { label: 'M', name: 'Mar', day: 2 },
+    { label: 'M', name: 'Mié', day: 3 },
+    { label: 'J', name: 'Jue', day: 4 },
+    { label: 'V', name: 'Vie', day: 5 },
+    { label: 'S', name: 'Sáb', day: 6 },
+    { label: 'D', name: 'Dom', day: 0 },
 ];
 
 const PRESET_TAGS = ['clase', 'universidad', 'trabajo', 'personal', 'salud', 'gym'];
@@ -119,11 +168,28 @@ const PRESET_TAGS = ['clase', 'universidad', 'trabajo', 'personal', 'salud', 'gy
 export default function CreateOrEditEventScreen() {
     const router = useRouter();
     const { insets, bottom: bottomInset } = useScreenInsets();
-    const { id, initialDate, occurrenceDate, tag, dayOfWeek } = useLocalSearchParams<{ id?: string; initialDate?: string; occurrenceDate?: string; tag?: string; dayOfWeek?: string }>();
-    const { colors, typography, radii, accent, isDark } = useVeyraTheme();
+    const { id, initialDate, occurrenceDate, tag, isBirthday, title: initialTitle, fromMorph, cardHeight } = useLocalSearchParams<{
+        id?: string;
+        initialDate?: string;
+        occurrenceDate?: string;
+        tag?: string;
+        dayOfWeek?: string;
+        isBirthday?: string;
+        title?: string;
+        fromMorph?: string;
+        cardHeight?: string;
+    }>();
+    const { colors, accent, isDark, isAmoled } = useVeyraTheme();
 
-    const { events, createEvent, updateEvent, deleteEvent, deleteEventOccurrence, linkNoteToEvent, unlinkNoteFromEvent } = useEventsStore();
+    const screenBgColor = isAmoled ? '#000000' : (isDark ? '#121212' : '#F8FAFC');
+    const cardBgColor = isAmoled ? '#161616' : (isDark ? '#22242B' : '#FFFFFF');
+    const controlBgColor = isAmoled ? '#222222' : (isDark ? '#2D3039' : '#F1F5F9');
+    const cardBorderColor = isAmoled ? 'rgba(255, 255, 255, 0.14)' : (isDark ? 'rgba(255, 255, 255, 0.10)' : 'rgba(0, 0, 0, 0.08)');
+    const controlBorderColor = isAmoled ? 'rgba(255, 255, 255, 0.18)' : (isDark ? 'rgba(255, 255, 255, 0.12)' : 'rgba(0, 0, 0, 0.08)');
+
+    const { events, createEvent, updateEvent, deleteEvent, deleteEventOccurrence } = useEventsStore();
     const { notes, addNote } = useNotesStore();
+    const { folders, createFolder } = useFoldersStore();
 
     const isEditing = Boolean(id && id !== 'create');
     const existingEventFromStore = isEditing ? events.find(e => e.id === id) : null;
@@ -131,10 +197,39 @@ export default function CreateOrEditEventScreen() {
     const existingEvent = existingEventFromStore || fetchedEvent;
 
     // Estado de formulario
-    const [title, setTitle] = useState(existingEvent?.title || '');
+    const [title, setTitle] = useState(existingEvent?.title || initialTitle || '');
     const [description, setDescription] = useState(existingEvent?.description || '');
     const [location, setLocation] = useState(existingEvent?.location || '');
-    const [selectedColor, setSelectedColor] = useState(existingEvent?.color || EVENT_COLORS[0].color);
+    const [selectedColor, setSelectedColor] = useState(
+        existingEvent?.color || (isBirthday === 'true' ? '#EC4899' : EVENT_COLORS[0].color)
+    );
+    const [isAllDay, setIsAllDay] = useState<boolean>(() => {
+        if (isBirthday === 'true') return true;
+        if (existingEvent?.is_all_day !== undefined) return Boolean(existingEvent.is_all_day);
+        return false;
+    });
+    const [isBirthdayLike, setIsBirthdayLike] = useState<boolean>(() => {
+        if (isBirthday === 'true') return true;
+        if (existingEvent?.is_birthday_like !== undefined) return Boolean(existingEvent.is_birthday_like);
+        return false;
+    });
+    const [extendedRecurrenceType, setExtendedRecurrenceType] = useState<string>(() => {
+        if (isBirthday === 'true') return 'yearly';
+        if (existingEvent?.recurrence_rule) {
+            try {
+                return JSON.parse(existingEvent.recurrence_rule).type || 'none';
+            } catch { }
+        }
+        if (existingEvent?.repeat_rule) {
+            try {
+                return JSON.parse(existingEvent.repeat_rule).type || 'none';
+            } catch { }
+        }
+        return 'none';
+    });
+    const [feb29Policy, setFeb29Policy] = useState<'feb28' | 'mar01' | 'skip'>('feb28');
+    const [linkedReminders, setLinkedReminders] = useState<Reminder[]>([]);
+    const [controlLevel, setControlLevel] = useState<ControlLevel>('normal');
     const [isRecurringDeleteModalVisible, setIsRecurringDeleteModalVisible] = useState(false);
     const [isShareModalVisible, setIsShareModalVisible] = useState(false);
 
@@ -153,7 +248,6 @@ export default function CreateOrEditEventScreen() {
                     return;
                 }
 
-                // Si no está en SQLite local, intentar consultar Supabase
                 const { supabase } = await import('../../src/lib/supabase');
                 const { data: remote } = await supabase.from('events').select('*').eq('id', id).maybeSingle();
                 if (remote && isMounted) {
@@ -187,10 +281,74 @@ export default function CreateOrEditEventScreen() {
             }
         })();
 
-        return () => { isMounted = false; };
+        return () => {
+            isMounted = false;
+        };
     }, [id, isEditing, existingEventFromStore]);
 
-    // Sincronizar el formulario cuando el evento esté disponible (evita que aparezca en blanco)
+    // Cargar recordatorios asociados a este evento
+    useEffect(() => {
+        if (!isEditing || !existingEvent?.id) return;
+        (async () => {
+            try {
+                const { getDB } = await import('../../src/db');
+                const db = await getDB();
+                const rems = await db.getAllAsync<Reminder>(
+                    'SELECT * FROM reminders WHERE event_id = ? AND deleted = 0 ORDER BY due_date_ms ASC',
+                    [existingEvent.id]
+                );
+                setLinkedReminders(rems || []);
+            } catch (err) {
+                console.warn('[CreateEvent] Error cargando recordatorios vinculados:', err);
+            }
+        })();
+    }, [isEditing, existingEvent?.id]);
+
+    // Fechas y horas
+    const parsedOccurrenceDate = useMemo(() => (occurrenceDate ? new Date(occurrenceDate) : null), [occurrenceDate]);
+    const initialBaseDate = parsedOccurrenceDate || (initialDate ? parseInitialDate(initialDate) : new Date());
+    const [eventDate, setEventDate] = useState<Date>(
+        parsedOccurrenceDate || (existingEvent ? new Date(existingEvent.start_time_ms) : initialBaseDate)
+    );
+    const [startTime, setStartTime] = useState<Date>(() => {
+        if (existingEvent) return new Date(existingEvent.start_time_ms);
+        const d = new Date(initialBaseDate);
+        d.setMinutes(0, 0, 0);
+        d.setHours(d.getHours() + 1);
+        return d;
+    });
+    const [endTime, setEndTime] = useState<Date>(() => {
+        if (existingEvent) return new Date(existingEvent.end_time_ms);
+        const d = new Date(initialBaseDate);
+        d.setMinutes(0, 0, 0);
+        d.setHours(d.getHours() + 2);
+        return d;
+    });
+
+    // Recurrencia
+    const [isRecurring, setIsRecurring] = useState(() => {
+        if (!existingEvent?.repeat_rule && !existingEvent?.recurrence_rule) return isBirthday === 'true';
+        try {
+            const raw = existingEvent?.recurrence_rule || existingEvent?.repeat_rule;
+            const parsed = raw ? JSON.parse(raw) : null;
+            return Boolean(parsed?.type && parsed.type !== 'none');
+        } catch {
+            return false;
+        }
+    });
+    const [selectedDays, setSelectedDays] = useState<number[]>(() => {
+        if (!existingEvent?.repeat_rule && !existingEvent?.recurrence_rule) return [eventDate.getDay()];
+        try {
+            const raw = existingEvent?.recurrence_rule || existingEvent?.repeat_rule;
+            const parsed = raw ? JSON.parse(raw) : null;
+            const days = parsed?.by_weekday || parsed?.days;
+            return Array.isArray(days) && days.length > 0 ? days : [eventDate.getDay()];
+        } catch {
+            return [eventDate.getDay()];
+        }
+    });
+
+    // Sincronizar el formulario cuando el evento esté disponible
     useEffect(() => {
         if (!existingEvent) return;
         setTitle(existingEvent.title || '');
@@ -198,17 +356,18 @@ export default function CreateOrEditEventScreen() {
         setLocation(existingEvent.location || '');
         setSelectedColor(existingEvent.color || EVENT_COLORS[0].color);
         if (existingEvent.note_id) setLinkedNoteId(existingEvent.note_id);
+        if (existingEvent.folder_id) setLinkedFolderId(existingEvent.folder_id);
         if (existingEvent.tags) {
             try {
                 const parsed = JSON.parse(existingEvent.tags);
                 if (Array.isArray(parsed)) setTags(parsed);
-            } catch {}
+            } catch { }
         }
         if (existingEvent.notification_offsets) {
             try {
                 const parsed = JSON.parse(existingEvent.notification_offsets);
                 if (Array.isArray(parsed)) setSelectedOffsets(parsed.sort((a, b) => a - b));
-            } catch {}
+            } catch { }
         } else if (existingEvent.notification_offset_min !== undefined && existingEvent.notification_offset_min !== null) {
             setSelectedOffsets([existingEvent.notification_offset_min]);
         }
@@ -217,12 +376,22 @@ export default function CreateOrEditEventScreen() {
         setEventDate(evStart);
         setStartTime(evStart);
         setEndTime(evEnd);
-        if (existingEvent.repeat_rule) {
+        if (existingEvent.is_all_day !== undefined) {
+            setIsAllDay(Boolean(existingEvent.is_all_day));
+        }
+        if (existingEvent.is_birthday_like !== undefined) {
+            setIsBirthdayLike(Boolean(existingEvent.is_birthday_like));
+        }
+        const ruleRaw = existingEvent.recurrence_rule || existingEvent.repeat_rule;
+        if (ruleRaw) {
             try {
-                const parsed = JSON.parse(existingEvent.repeat_rule);
-                setIsRecurring(parsed.type === 'weekly');
-                if (Array.isArray(parsed.days)) setSelectedDays(parsed.days);
-            } catch {}
+                const parsed = JSON.parse(ruleRaw);
+                const rType = parsed.type || 'none';
+                setExtendedRecurrenceType(rType);
+                setIsRecurring(rType !== 'none');
+                if (Array.isArray(parsed.by_weekday || parsed.days)) setSelectedDays(parsed.by_weekday || parsed.days);
+                if (parsed.feb29_policy) setFeb29Policy(parsed.feb29_policy);
+            } catch { }
         }
     }, [existingEvent]);
 
@@ -261,7 +430,7 @@ export default function CreateOrEditEventScreen() {
             try {
                 const parsed = JSON.parse(existingEvent.notification_offsets);
                 if (Array.isArray(parsed)) return parsed.sort((a, b) => a - b);
-            } catch {}
+            } catch { }
         }
         if (existingEvent?.notification_offset_min !== undefined && existingEvent?.notification_offset_min !== null) {
             return [existingEvent.notification_offset_min];
@@ -269,7 +438,7 @@ export default function CreateOrEditEventScreen() {
         if (existingEvent) {
             return [];
         }
-        return [15]; // Por defecto 15 min antes para eventos nuevos
+        return [15];
     });
 
     const [isAddAvisoModalOpen, setIsAddAvisoModalOpen] = useState(false);
@@ -284,53 +453,15 @@ export default function CreateOrEditEventScreen() {
         setSelectedOffsets(selectedOffsets.filter(v => v !== value));
     };
 
-    // Fechas y horas
-    const parsedOccurrenceDate = useMemo(() => (occurrenceDate ? new Date(occurrenceDate) : null), [occurrenceDate]);
-    const initialBaseDate = parsedOccurrenceDate || (initialDate ? parseInitialDate(initialDate) : new Date());
-    const [eventDate, setEventDate] = useState<Date>(
-        parsedOccurrenceDate || (existingEvent ? new Date(existingEvent.start_time_ms) : initialBaseDate)
-    );
-    const [startTime, setStartTime] = useState<Date>(() => {
-        if (existingEvent) return new Date(existingEvent.start_time_ms);
-        const d = new Date(initialBaseDate);
-        d.setMinutes(0, 0, 0);
-        d.setHours(d.getHours() + 1);
-        return d;
-    });
-    const [endTime, setEndTime] = useState<Date>(() => {
-        if (existingEvent) return new Date(existingEvent.end_time_ms);
-        const d = new Date(initialBaseDate);
-        d.setMinutes(0, 0, 0);
-        d.setHours(d.getHours() + 2);
-        return d;
-    });
-
-    // Recurrencia
-    const [isRecurring, setIsRecurring] = useState(() => {
-        if (!existingEvent?.repeat_rule) return false;
-        try {
-            const parsed = JSON.parse(existingEvent.repeat_rule);
-            return parsed.type === 'weekly';
-        } catch {
-            return false;
-        }
-    });
-    const [selectedDays, setSelectedDays] = useState<number[]>(() => {
-        if (!existingEvent?.repeat_rule) return [eventDate.getDay()];
-        try {
-            const parsed = JSON.parse(existingEvent.repeat_rule);
-            return Array.isArray(parsed.days) ? parsed.days : [eventDate.getDay()];
-        } catch {
-            return [eventDate.getDay()];
-        }
-    });
-
-    // Enlace a nota
+    // Enlace a nota y carpeta
     const [linkedNoteId, setLinkedNoteId] = useState<string | null>(existingEvent?.note_id || null);
+    const [linkedFolderId, setLinkedFolderId] = useState<string | null>(existingEvent?.folder_id || null);
     const [isLinkNoteModalVisible, setIsLinkNoteModalVisible] = useState(false);
+    const [isLinkFolderModalVisible, setIsLinkFolderModalVisible] = useState(false);
     const [noteSearchQuery, setNoteSearchQuery] = useState('');
+    const [folderSearchQuery, setFolderSearchQuery] = useState('');
 
-    // Pickers nativos
+    // Pickers
     const [showDatePicker, setShowDatePicker] = useState(false);
     const [showStartTimePicker, setShowStartTimePicker] = useState(false);
     const [showEndTimePicker, setShowEndTimePicker] = useState(false);
@@ -340,29 +471,90 @@ export default function CreateOrEditEventScreen() {
         return notes.find(n => n.id === linkedNoteId) || null;
     }, [linkedNoteId, notes]);
 
+    const linkedFolder = useMemo(() => {
+        if (!linkedFolderId) return null;
+        return folders.find(f => f.id === linkedFolderId && !f.deleted) || null;
+    }, [linkedFolderId, folders]);
+
     const filteredNotes = useMemo(() => {
         if (!noteSearchQuery.trim()) return notes;
         const q = noteSearchQuery.toLowerCase();
         return notes.filter(n => (n.title || 'Sin título').toLowerCase().includes(q));
     }, [notes, noteSearchQuery]);
 
+    const filteredFolders = useMemo(() => {
+        const active = folders.filter(f => !f.deleted);
+        if (!folderSearchQuery.trim()) return active;
+        const q = folderSearchQuery.toLowerCase();
+        return active.filter(f => f.name.toLowerCase().includes(q));
+    }, [folders, folderSearchQuery]);
+
     const toggleDay = (dayIndex: number) => {
         if (selectedDays.includes(dayIndex)) {
-            if (selectedDays.length === 1) return; // Al menos un día seleccionado
+            if (selectedDays.length === 1) return;
             setSelectedDays(selectedDays.filter(d => d !== dayIndex));
         } else {
             setSelectedDays([...selectedDays, dayIndex].sort());
         }
     };
 
+    const handleSelectRecurrenceType = (typeKey: string) => {
+        setExtendedRecurrenceType(typeKey);
+        setIsRecurring(typeKey !== 'none');
+        if (typeKey === 'weekly' && selectedDays.length === 0) {
+            setSelectedDays([eventDate.getDay()]);
+        }
+    };
+
     const handleCreateNewNoteForEvent = async () => {
-        const defaultTitle = title.trim() ? `${title.trim()} - ${format(eventDate, 'dd/MM/yyyy')}` : `Apuntes - ${format(eventDate, 'dd/MM/yyyy')}`;
-        const newNote = await addNote(defaultTitle, '');
+        const defaultTitle = title.trim()
+            ? `${title.trim()} - ${format(eventDate, 'dd/MM/yyyy')}`
+            : `Apuntes - ${format(eventDate, 'dd/MM/yyyy')}`;
+        const newNote = await addNote(defaultTitle, '', undefined, undefined, false, linkedFolderId);
         if (newNote?.id) {
             setLinkedNoteId(newNote.id);
             Alert.alert('Nota Creada', `Se ha creado y vinculado la nota "${defaultTitle}".`);
         }
     };
+
+    const handleCreateNewFolderForEvent = async () => {
+        const defaultFolderName = title.trim() || `Carpeta - ${format(eventDate, 'dd/MM/yyyy')}`;
+        const newFolder = await createFolder(defaultFolderName, 'folder', selectedColor, false, null);
+        if (newFolder?.id) {
+            setLinkedFolderId(newFolder.id);
+            Alert.alert('Carpeta Creada', `Se ha creado y vinculado la carpeta "${defaultFolderName}".`);
+        }
+    };
+
+    const [isAdvancedOpen, setIsAdvancedOpen] = useState(false);
+
+    const activeAdvancedCount = useMemo(() => {
+        let count = 0;
+        if (extendedRecurrenceType && extendedRecurrenceType !== 'none') count++;
+        if (selectedOffsets.length > 0) count++;
+        if (tags.length > 0) count++;
+        if (linkedNoteId || linkedFolderId) count++;
+        if (description && description.trim().length > 0) count++;
+        if (controlLevel !== 'normal') count++;
+        return count;
+    }, [extendedRecurrenceType, selectedOffsets, tags, linkedNoteId, linkedFolderId, description, controlLevel]);
+
+    useEffect(() => {
+        if (existingEvent) {
+            const hasAdvanced =
+                (existingEvent.recurrence_rule && existingEvent.recurrence_rule !== 'none') ||
+                (existingEvent.repeat_rule && existingEvent.repeat_rule !== 'none') ||
+                Boolean(existingEvent.tags && existingEvent.tags !== '[]') ||
+                Boolean(existingEvent.note_id) ||
+                Boolean(existingEvent.folder_id) ||
+                Boolean(existingEvent.description && existingEvent.description.trim().length > 0) ||
+                Boolean(existingEvent.notification_offsets && existingEvent.notification_offsets !== '[]') ||
+                Boolean(existingEvent.notification_offset_min);
+            if (hasAdvanced) {
+                setIsAdvancedOpen(true);
+            }
+        }
+    }, [existingEvent]);
 
     const handleSave = async () => {
         if (!title.trim()) {
@@ -370,24 +562,59 @@ export default function CreateOrEditEventScreen() {
             return;
         }
 
-        // Construir timestamps combinando eventDate con startTime y endTime
-        const start = new Date(eventDate);
-        start.setHours(startTime.getHours(), startTime.getMinutes(), 0, 0);
+        const tz = getDeviceTimezone();
+        let startTimeMs: number;
+        let endTimeMs: number;
+        let allDayDate: string | null = null;
 
-        const end = new Date(eventDate);
-        end.setHours(endTime.getHours(), endTime.getMinutes(), 0, 0);
+        if (isAllDay) {
+            allDayDate = format(eventDate, 'yyyy-MM-dd');
+            const [y, m, d] = allDayDate.split('-').map(Number);
+            startTimeMs = makeZonedDateMs(y, m, d, 0, 0, 0, tz);
+            endTimeMs = makeZonedDateMs(y, m, d, 23, 59, 59, tz) + 999;
+        } else {
+            const start = new Date(eventDate);
+            start.setHours(startTime.getHours(), startTime.getMinutes(), 0, 0);
 
-        if (end.getTime() <= start.getTime()) {
-            Alert.alert('Horario no válido', 'La hora de finalización debe ser posterior a la hora de inicio.');
-            return;
+            const end = new Date(eventDate);
+            end.setHours(endTime.getHours(), endTime.getMinutes(), 0, 0);
+
+            if (end.getTime() <= start.getTime()) {
+                Alert.alert('Horario no válido', 'La hora de finalización debe ser posterior a la hora de inicio.');
+                return;
+            }
+            startTimeMs = start.getTime();
+            endTimeMs = end.getTime();
         }
 
-        const repeatRule = isRecurring
-            ? JSON.stringify({ type: 'weekly', days: selectedDays })
-            : undefined;
+        let recurrenceRuleObj: any = null;
+        if (extendedRecurrenceType === 'daily') {
+            recurrenceRuleObj = { type: 'daily', interval: 1 };
+        } else if (extendedRecurrenceType === 'weekly') {
+            recurrenceRuleObj = { type: 'weekly', interval: 1, by_weekday: selectedDays };
+        } else if (extendedRecurrenceType === 'weekdays') {
+            recurrenceRuleObj = { type: 'weekdays' };
+        } else if (extendedRecurrenceType === 'monthly') {
+            recurrenceRuleObj = { type: 'monthly', interval: 1, by_monthday: [eventDate.getDate()] };
+        } else if (extendedRecurrenceType === 'yearly') {
+            recurrenceRuleObj = {
+                type: 'yearly',
+                interval: 1,
+                by_month: eventDate.getMonth() + 1,
+                by_monthday: eventDate.getDate(),
+                feb29_policy: feb29Policy,
+            };
+        }
+
+        const recurrenceRuleJson = recurrenceRuleObj ? JSON.stringify(recurrenceRuleObj) : undefined;
+        const legacyRepeatRule =
+            recurrenceRuleObj && extendedRecurrenceType === 'weekly'
+                ? JSON.stringify({ type: 'weekly', days: selectedDays })
+                : recurrenceRuleJson;
 
         const notificationOffsetsJson = JSON.stringify(selectedOffsets);
         const primaryOffset = selectedOffsets.length > 0 ? selectedOffsets[0] : null;
+
         const finalTags = [...tags];
         const combinedText = `${title} ${description}`.toLowerCase();
         if (/#clase\b/i.test(combinedText) && !finalTags.includes('clase')) {
@@ -395,59 +622,96 @@ export default function CreateOrEditEventScreen() {
         }
         const tagsJson = finalTags.length > 0 ? JSON.stringify(finalTags) : undefined;
 
+        const isBirthdayDetected = isBirthdayLike || looksLikeBirthday(title);
+
         if (isEditing && existingEvent) {
-            await updateEvent(existingEvent.id, {
-                title: title.trim(),
-                description: description.trim() || undefined,
-                location: location.trim() || undefined,
-                color: selectedColor,
-                start_time_ms: start.getTime(),
-                end_time_ms: end.getTime(),
-                repeat_rule: repeatRule,
-                notification_offset_min: primaryOffset ?? undefined,
-                notification_offsets: notificationOffsetsJson,
-                note_id: linkedNoteId,
-                tags: tagsJson,
-            });
+            await updateEvent(
+                existingEvent.id,
+                {
+                    title: title.trim(),
+                    description: description.trim() || undefined,
+                    location: location.trim() || undefined,
+                    color: selectedColor,
+                    start_time_ms: startTimeMs,
+                    end_time_ms: endTimeMs,
+                    is_all_day: isAllDay ? 1 : 0,
+                    all_day_date: isAllDay ? allDayDate : null,
+                    timezone: tz,
+                    repeat_rule: legacyRepeatRule,
+                    recurrence_rule: recurrenceRuleJson,
+                    is_birthday_like: isBirthdayDetected ? 1 : 0,
+                    notification_offset_min: primaryOffset ?? undefined,
+                    notification_offsets: notificationOffsetsJson,
+                    note_id: linkedNoteId,
+                    folder_id: linkedFolderId,
+                    tags: tagsJson,
+                },
+                finalTags
+            );
         } else {
-            await createEvent({
+            const created = await createEvent({
                 title: title.trim(),
                 description: description.trim() || undefined,
                 location: location.trim() || undefined,
                 color: selectedColor,
-                startTimeMs: start.getTime(),
-                endTimeMs: end.getTime(),
-                repeatRule,
+                startTimeMs,
+                endTimeMs,
+                isAllDay,
+                allDayDate,
+                timezone: tz,
+                repeatRule: legacyRepeatRule,
+                recurrenceRule: recurrenceRuleJson,
+                isBirthdayLike: isBirthdayDetected,
                 notificationOffsetMin: primaryOffset ?? undefined,
                 notificationOffsets: notificationOffsetsJson,
                 noteId: linkedNoteId,
+                folderId: linkedFolderId,
                 tags: tagsJson,
+                tagNames: finalTags,
             });
+
+            if (created?.id && linkedReminders.length > 0) {
+                for (const rem of linkedReminders) {
+                    if (!rem.id || rem.id.startsWith('temp_')) {
+                        const dueDate = created.start_time_ms + (rem.offset_minutes || 0) * 60000;
+                        await ReminderService.createReminder(
+                            rem.title,
+                            dueDate,
+                            rem.control_level,
+                            undefined,
+                            rem.description,
+                            undefined,
+                            undefined,
+                            undefined,
+                            undefined,
+                            created.id,
+                            rem.offset_minutes
+                        );
+                    }
+                }
+            }
         }
 
+        Keyboard.dismiss();
         router.back();
     };
 
     const handleDelete = () => {
         if (!existingEvent) return;
-        if (isRecurring) {
+        if (isRecurring || extendedRecurrenceType !== 'none') {
             setIsRecurringDeleteModalVisible(true);
         } else {
-            Alert.alert(
-                'Eliminar Evento',
-                '¿Estás seguro de que deseas eliminar este evento?',
-                [
-                    { text: 'Cancelar', style: 'cancel' },
-                    {
-                        text: 'Eliminar',
-                        style: 'destructive',
-                        onPress: async () => {
-                            await deleteEvent(existingEvent.id);
-                            handleBack();
-                        },
+            Alert.alert('Eliminar Evento', '¿Estás seguro de que deseas eliminar este evento?', [
+                { text: 'Cancelar', style: 'cancel' },
+                {
+                    text: 'Eliminar',
+                    style: 'destructive',
+                    onPress: async () => {
+                        await deleteEvent(existingEvent.id);
+                        handleBack();
                     },
-                ]
-            );
+                },
+            ]);
         }
     };
 
@@ -458,58 +722,104 @@ export default function CreateOrEditEventScreen() {
         handleBack();
     };
 
-    const { height: screenHeight } = useWindowDimensions();
+    const { height: screenHeight, width: screenWidth } = useWindowDimensions();
     const layoutHeight = useSharedValue(screenHeight);
     const language = useStore(state => state.language);
-    const bottomPadding = Math.max(bottomInset, 10);
-    const barHeight = 58 + bottomPadding;
-    const barBgColor = colors.navBar || (isDark ? '#1B1B1B' : '#FFFFFF');
+    const bottomOffset = insets.bottom > 0 ? insets.bottom + 6 : 14;
+    const isFromMorph = fromMorph === 'true';
+    const initialCardH = isFromMorph && cardHeight ? Math.max(120, Number(cardHeight)) : (58 + bottomOffset);
+    const morphedDockWidth = Math.min(screenWidth - 20, 440);
+    const dockMarginHorizontal = Math.max(10, Math.round((screenWidth - morphedDockWidth) / 2));
 
     const morphProgress = useSharedValue(0);
     const isExiting = useRef(false);
 
     useEffect(() => {
         morphProgress.value = withTiming(1, {
-            duration: 210,
-            easing: ReanimatedEasing.out(ReanimatedEasing.cubic),
+            duration: 280,
+            easing: ReanimatedEasing.bezier(0.16, 1, 0.3, 1),
         });
     }, []);
 
+    const backdropAnimatedStyle = useAnimatedStyle(() => ({
+        opacity: interpolate(morphProgress.value, [0, 0.8], [0, isDark ? 0.35 : 0.18], Extrapolation.CLAMP),
+    }));
+
     const containerAnimatedStyle = useAnimatedStyle(() => {
         const totalHeight = layoutHeight.value > 0 ? layoutHeight.value : screenHeight;
+        const initialH = initialCardH;
+
+        // Comienza exactamente en la coordenada Y de la tarjeta "Crear con Veyra"
+        const translateY = interpolate(
+            morphProgress.value,
+            [0, 1],
+            [totalHeight - (initialH + bottomOffset), 0],
+            Extrapolation.CLAMP
+        );
+
+        // Se expande desde la altura de la tarjeta dock hasta la pantalla completa
+        const height = interpolate(
+            morphProgress.value,
+            [0, 1],
+            [initialH, totalHeight],
+            Extrapolation.CLAMP
+        );
+
+        // Se expande horizontalmente hasta cubrir los bordes de la pantalla
+        const marginHorizontal = interpolate(
+            morphProgress.value,
+            [0, 0.75, 1],
+            [dockMarginHorizontal, 4, 0],
+            Extrapolation.CLAMP
+        );
+
+        // Las 4 esquinas redondeadas pasan de 28px (dock flotante) a 0px (pantalla completa)
+        const borderRadius = interpolate(
+            morphProgress.value,
+            [0, 0.75, 1],
+            [28, 14, 0],
+            Extrapolation.CLAMP
+        );
+
         return {
-            transform: [
-                {
-                    translateY: interpolate(
-                        morphProgress.value,
-                        [0, 1],
-                        [totalHeight - barHeight, 0],
-                        Extrapolation.CLAMP
-                    ),
-                },
-            ],
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            right: 0,
+            height,
+            transform: [{ translateY }],
+            marginHorizontal,
+            borderRadius,
+            overflow: 'hidden',
+        };
+    });
+
+    const safePaddingTopStyle = useAnimatedStyle(() => {
+        const pad = interpolate(
+            morphProgress.value,
+            [0.35, 1],
+            [Platform.OS === 'ios' ? 8 : 10, insets.top],
+            Extrapolation.CLAMP
+        );
+        return {
+            paddingTop: pad,
         };
     });
 
     const formAnimatedStyle = useAnimatedStyle(() => ({
-        opacity: interpolate(
-            morphProgress.value,
-            [0.2, 0.9],
-            [0, 1],
-            Extrapolation.CLAMP
-        ),
+        opacity: interpolate(morphProgress.value, [0.15, 0.7], [0, 1], Extrapolation.CLAMP),
+        transform: [
+            {
+                translateY: interpolate(morphProgress.value, [0.15, 1], [28, 0], Extrapolation.CLAMP),
+            },
+        ],
     }));
 
-    const morphPreviewAnimatedStyle = useAnimatedStyle(() => ({
-        opacity: interpolate(
-            morphProgress.value,
-            [0, 0.18],
-            [1, 0],
-            Extrapolation.CLAMP
-        ),
-    }));
+    const hasNavigated = useRef(false);
 
     const navigateBack = () => {
+        if (hasNavigated.current) return;
+        hasNavigated.current = true;
         if (router.canGoBack()) {
             router.back();
         } else {
@@ -520,11 +830,12 @@ export default function CreateOrEditEventScreen() {
     const handleBack = () => {
         if (isExiting.current) return;
         isExiting.current = true;
+        Keyboard.dismiss();
         morphProgress.value = withTiming(
             0,
             {
-                duration: 180,
-                easing: ReanimatedEasing.out(ReanimatedEasing.cubic),
+                duration: 220,
+                easing: ReanimatedEasing.bezier(0.4, 0, 0.2, 1),
             },
             (finished) => {
                 if (finished) {
@@ -534,18 +845,20 @@ export default function CreateOrEditEventScreen() {
         );
         setTimeout(() => {
             navigateBack();
-        }, 150);
+        }, 240);
     };
 
     useFocusEffect(
         React.useCallback(() => {
             isExiting.current = false;
+            hasNavigated.current = false;
             morphProgress.value = withTiming(1, {
-                duration: 210,
-                easing: ReanimatedEasing.out(ReanimatedEasing.cubic),
+                duration: 280,
+                easing: ReanimatedEasing.bezier(0.16, 1, 0.3, 1),
             });
 
             const onHardwareBack = () => {
+                Keyboard.dismiss();
                 handleBack();
                 return true;
             };
@@ -553,6 +866,16 @@ export default function CreateOrEditEventScreen() {
             return () => subscription.remove();
         }, [])
     );
+
+    const getFormattedDateBadge = (d: Date): string => {
+        if (isToday(d)) return `Hoy, ${format(d, "d 'de' MMM", { locale: es })}`;
+        if (isTomorrow(d)) return `Mañana, ${format(d, "d 'de' MMM", { locale: es })}`;
+        return format(d, "EEE, d 'de' MMM", { locale: es });
+    };
+
+    const currentControlLevel = CONTROL_LEVELS.find(l => l.key === controlLevel) || CONTROL_LEVELS[0];
+    const currentRecurrenceObj = RECURRENCE_TYPES.find(r => r.key === extendedRecurrenceType) || RECURRENCE_TYPES[0];
+    const selectedColorObj = EVENT_COLORS.find(c => c.color === selectedColor) || EVENT_COLORS[0];
 
     return (
         <View
@@ -564,754 +887,1398 @@ export default function CreateOrEditEventScreen() {
                 }
             }}
         >
+            {/* Backdrop oscuro sutil que acompaña la expansión */}
+            <TouchableWithoutFeedback onPress={handleBack}>
+                <Reanimated.View
+                    style={[
+                        StyleSheet.absoluteFill,
+                        { backgroundColor: '#000000' },
+                        backdropAnimatedStyle,
+                    ]}
+                />
+            </TouchableWithoutFeedback>
+
+            {/* Contenedor principal que hace morphing desde la tarjeta "Crear con Veyra" */}
             <Reanimated.View
                 style={[
-                    styles.screen,
                     {
                         backgroundColor: colors.bg,
-                        borderTopColor: colors.borderSubtle,
                     },
                     containerAnimatedStyle,
                 ]}
             >
-                {/* Formulario de Evento (se desvanece suavemente en el morph) */}
-                <Reanimated.View style={[{ flex: 1 }, formAnimatedStyle]}>
-                    <SafeAreaView style={styles.container}>
-                    {/* Header */}
-                    <View style={[styles.header, { borderBottomColor: colors.borderSubtle }]}>
-                        <VeyraIconButton
-                            icon={<ChevronLeft size={24} color={colors.textPrimary as any} />}
-                            onPress={handleBack}
-                            variant="ghost"
-                            size="sm"
-                        />
-                <Text style={[styles.headerTitle, { color: colors.textPrimary }]}>
-                    {isEditing ? 'Editar Evento' : 'Nuevo Evento'}
-                </Text>
-                <View style={styles.headerActions}>
-                    {isEditing && existingEvent && (
-                        <VeyraIconButton
-                            icon={<Share2 size={17} color={colors.textPrimary as any} />}
-                            onPress={() => setIsShareModalVisible(true)}
-                            variant="ghost"
-                            size="sm"
-                        />
-                    )}
-                    {isEditing && (
-                        <VeyraIconButton
-                            icon={<Trash2 size={17} color={isDark ? '#FB7185' : '#E11D48'} />}
-                            onPress={handleDelete}
-                            variant="danger"
-                            size="sm"
-                        />
-                    )}
-                    <TouchableOpacity
-                        activeOpacity={0.7}
-                        disabled={!title.trim()}
-                        onPress={handleSave}
-                        style={[
-                            styles.headerSaveBtn,
-                            {
-                                backgroundColor: title.trim() ? (accent.primary || '#3B82F6') : (isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)'),
-                                opacity: title.trim() ? 1 : 0.45,
-                            },
-                        ]}
-                    >
-                        <Check size={15} color={title.trim() ? (isDark ? '#1B1B1B' : '#FFFFFF') : colors.textMuted} strokeWidth={3} />
-                        <Text
-                            style={[
-                                styles.headerSaveText,
-                                {
-                                    color: title.trim() ? (isDark ? '#1B1B1B' : '#FFFFFF') : colors.textMuted,
-                                },
-                            ]}
-                        >
-                            Guardar
-                        </Text>
-                    </TouchableOpacity>
-                </View>
-            </View>
-
-            <ScrollView
-                style={styles.scroll}
-                contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom + 36 }]}
-                keyboardShouldPersistTaps="always"
-                showsVerticalScrollIndicator={false}
-            >
-                {/* Título y Descripción */}
-                <VeyraSurface level={1} radius="lg" style={styles.section}>
-                    <TextInput
-                        placeholder="Título del evento (ej: Clase, Reunión...)"
-                        placeholderTextColor={colors.textMuted}
-                        value={title}
-                        onChangeText={setTitle}
-                        style={[styles.titleInput, { color: colors.textPrimary }]}
-                        autoFocus={!isEditing}
-                    />
-                    <TextInput
-                        placeholder="Descripción o notas adicionales (opcional)"
-                        placeholderTextColor={colors.textMuted}
-                        value={description}
-                        onChangeText={setDescription}
-                        style={[styles.descInput, { color: colors.textSecondary }]}
-                        multiline
-                    />
-                </VeyraSurface>
-
-                {/* Etiquetas / Categorías */}
-                <VeyraSurface level={1} radius="lg" style={styles.section}>
-                    <View style={styles.rowIconLabel}>
-                        <TagIcon size={18} color={accent.primary as any} />
-                        <Text style={[styles.sectionTitleNoMargin, { color: colors.textSecondary }]}>
-                            ETIQUETAS / CATEGORÍAS
-                        </Text>
-                    </View>
-                    <Text style={[styles.helperText, { color: colors.textMuted, marginTop: 4, marginBottom: 8 }]}>
-                        Usa <Text style={{ color: accent.primary, fontWeight: '700' }}>#clase</Text> para que se sincronice con el widget de Horario de Clases.
-                    </Text>
-
-                    {/* Tags activos */}
-                    {tags.length > 0 && (
-                        <View style={styles.tagsContainer}>
-                            {tags.map(tag => (
-                                <View
-                                    key={tag}
-                                    style={[
-                                        styles.tagBadgeActive,
-                                        {
-                                            backgroundColor: tag === 'clase' ? `${accent.primary}25` : (isDark ? '#334155' : '#E2E8F0'),
-                                            borderColor: tag === 'clase' ? accent.primary : colors.borderSubtle,
-                                        },
-                                    ]}
-                                >
-                                    <Text
-                                        style={[
-                                            styles.tagBadgeText,
-                                            { color: tag === 'clase' ? accent.primary : colors.textPrimary, fontWeight: '600' },
-                                        ]}
-                                    >
-                                        #{tag}
-                                    </Text>
-                                    <TouchableOpacity
-                                        activeOpacity={0.7}
-                                        onPress={() => handleRemoveTag(tag)}
-                                        style={styles.tagRemoveBtn}
-                                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                                    >
-                                        <X size={12} color={colors.textSecondary as any} />
-                                    </TouchableOpacity>
-                                </View>
-                            ))}
-                        </View>
-                    )}
-
-                    {/* Input para agregar tag nuevo */}
-                    <View style={styles.tagInputRow}>
-                        <TextInput
-                            placeholder="Añadir etiqueta (ej: #estudio)"
-                            placeholderTextColor={colors.textMuted}
-                            value={customTagInput}
-                            onChangeText={setCustomTagInput}
-                            onSubmitEditing={() => handleAddTag(customTagInput)}
-                            returnKeyType="done"
-                            style={[
-                                styles.tagInputField,
-                                { color: colors.textPrimary, borderColor: colors.borderSubtle },
-                            ]}
-                        />
-                        {customTagInput.trim().length > 0 && (
-                            <TouchableOpacity
-                                activeOpacity={0.7}
-                                onPress={() => handleAddTag(customTagInput)}
-                                style={[styles.tagAddBtn, { backgroundColor: accent.primary }]}
-                            >
-                                <Plus size={16} color="#FFFFFF" />
-                            </TouchableOpacity>
-                        )}
-                    </View>
-
-                    {/* Chips rápidos sugeridos */}
-                    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tagChipsRow}>
-                        {PRESET_TAGS.map(preset => {
-                            const isSelected = tags.includes(preset);
-                            return (
+                <Reanimated.View style={[{ flex: 1 }, safePaddingTopStyle]}>
+                    <View style={styles.container}>
+                        {/* ─── HEADER ─── */}
+                        <View style={[styles.header, { borderBottomColor: colors.borderSubtle, backgroundColor: colors.bg }]}>
+                            <VeyraIconButton
+                                icon={<ChevronLeft size={24} color={colors.textPrimary as any} />}
+                                onPress={handleBack}
+                                variant="ghost"
+                                size="sm"
+                            />
+                            <View style={styles.headerCenter}>
+                                <Text style={[styles.headerTitle, { color: colors.textPrimary }]}>
+                                    {isEditing ? 'Editar Evento' : 'Nuevo Evento'}
+                                </Text>
+                            </View>
+                            <View style={styles.headerActions}>
+                                {isEditing && existingEvent && (
+                                    <VeyraIconButton
+                                        icon={<Share2 size={17} color={colors.textPrimary as any} />}
+                                        onPress={() => setIsShareModalVisible(true)}
+                                        variant="ghost"
+                                        size="sm"
+                                    />
+                                )}
+                                {isEditing && (
+                                    <VeyraIconButton
+                                        icon={<Trash2 size={17} color={isDark ? '#FB7185' : '#E11D48'} />}
+                                        onPress={handleDelete}
+                                        variant="danger"
+                                        size="sm"
+                                    />
+                                )}
                                 <TouchableOpacity
-                                    key={preset}
                                     activeOpacity={0.7}
-                                    onPress={() => isSelected ? handleRemoveTag(preset) : handleAddTag(preset)}
+                                    disabled={!title.trim()}
+                                    onPress={handleSave}
                                     style={[
-                                        styles.tagChipPreset,
+                                        styles.headerSaveBtn,
                                         {
-                                            backgroundColor: isSelected
-                                                ? `${accent.primary}20`
-                                                : (isDark ? '#1E293B' : '#F1F5F9'),
-                                            borderColor: isSelected ? accent.primary : colors.borderSubtle,
+                                            backgroundColor: title.trim() ? (accent.primary || '#3B82F6') : controlBgColor,
+                                            opacity: title.trim() ? 1 : 0.5,
                                         },
                                     ]}
                                 >
+                                    <Check size={15} color={(title.trim() ? colors.textInverse : colors.textMuted) as any} strokeWidth={3} />
                                     <Text
                                         style={[
-                                            styles.tagChipPresetText,
+                                            styles.headerSaveText,
                                             {
-                                                color: isSelected ? accent.primary : colors.textSecondary,
-                                                fontWeight: isSelected ? '700' : '500',
+                                                color: title.trim() ? colors.textInverse : colors.textMuted,
                                             },
                                         ]}
                                     >
-                                        #{preset}
+                                        Guardar
                                     </Text>
-                                    {isSelected && <Check size={12} color={accent.primary as any} style={{ marginLeft: 4 }} />}
                                 </TouchableOpacity>
-                            );
-                        })}
-                    </ScrollView>
-                </VeyraSurface>
-
-                {/* Fecha y Horario (Rango Inicio - Fin) */}
-                <VeyraSurface level={1} radius="lg" style={styles.section}>
-                    <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>
-                        FECHA Y HORARIO
-                    </Text>
-
-                    {/* Fecha */}
-                    <TouchableOpacity
-                        activeOpacity={0.7}
-                        onPress={() => setShowDatePicker(true)}
-                        style={[styles.rowSelector, { borderBottomColor: colors.borderSubtle }]}
-                    >
-                        <View style={styles.rowIconLabel}>
-                            <CalendarIcon size={18} color={accent.primary as any} />
-                            <Text style={[styles.rowLabel, { color: colors.textPrimary }]}>Fecha</Text>
+                            </View>
                         </View>
-                        <Text style={[styles.rowValue, { color: accent.primary }]}>
-                            {format(eventDate, "EEEE, d 'de' MMMM", { locale: es })}
-                        </Text>
-                    </TouchableOpacity>
 
-                    {/* Hora de Inicio */}
-                    <TouchableOpacity
-                        activeOpacity={0.7}
-                        onPress={() => setShowStartTimePicker(true)}
-                        style={[styles.rowSelector, { borderBottomColor: colors.borderSubtle }]}
-                    >
-                        <View style={styles.rowIconLabel}>
-                            <Clock size={18} color={accent.primary as any} />
-                            <Text style={[styles.rowLabel, { color: colors.textPrimary }]}>Hora de inicio</Text>
-                        </View>
-                        <Text style={[styles.rowValue, { color: accent.primary }]}>
-                            {format(startTime, 'HH:mm')}
-                        </Text>
-                    </TouchableOpacity>
-
-                    {/* Hora de Fin */}
-                    <TouchableOpacity
-                        activeOpacity={0.7}
-                        onPress={() => setShowEndTimePicker(true)}
-                        style={styles.rowSelector}
-                    >
-                        <View style={styles.rowIconLabel}>
-                            <Clock size={18} color={accent.primary as any} />
-                            <Text style={[styles.rowLabel, { color: colors.textPrimary }]}>Hora de fin</Text>
-                        </View>
-                        <Text style={[styles.rowValue, { color: accent.primary }]}>
-                            {format(endTime, 'HH:mm')}
-                        </Text>
-                    </TouchableOpacity>
-                </VeyraSurface>
-
-                {/* Recurrencia Semanal */}
-                <VeyraSurface level={1} radius="lg" style={styles.section}>
-                    <View style={styles.sectionHeaderRow}>
-                        <View style={styles.rowIconLabel}>
-                            <Repeat size={18} color={colors.textSecondary as any} />
-                            <Text style={[styles.sectionTitleNoMargin, { color: colors.textSecondary }]}>
-                                REPETIR SEMANALMENTE
-                            </Text>
-                        </View>
-                        <TouchableOpacity
-                            activeOpacity={0.7}
-                            onPress={() => setIsRecurring(!isRecurring)}
-                            style={[
-                                styles.switchBtn,
-                                {
-                                    backgroundColor: isRecurring ? accent.primary : (isDark ? '#334155' : '#E2E8F0'),
-                                },
-                            ]}
-                        >
-                            <View
-                                style={[
-                                    styles.switchThumb,
-                                    {
-                                        transform: [{ translateX: isRecurring ? 18 : 2 }],
-                                        backgroundColor: '#FFFFFF',
-                                    },
-                                ]}
-                            />
-                        </TouchableOpacity>
-                    </View>
-
-                    {isRecurring && (
-                        <View style={styles.daysContainer}>
-                            <Text style={[styles.helperText, { color: colors.textMuted }]}>
-                                Selecciona los días que se repite este evento:
-                            </Text>
-                            <View style={styles.daysRow}>
-                                {WEEKDAYS.map(w => {
-                                    const selected = selectedDays.includes(w.day);
-                                    return (
-                                        <TouchableOpacity
-                                            key={w.day}
-                                            activeOpacity={0.7}
-                                            onPress={() => toggleDay(w.day)}
+                        {/* ─── CONTENIDO MODULAR FLAT (BÁSICO + AVANZADO) ─── */}
+                        <Reanimated.View style={[{ flex: 1 }, formAnimatedStyle]}>
+                            <ScrollView
+                                style={styles.scroll}
+                                contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom + 48 }]}
+                                keyboardShouldPersistTaps="handled"
+                                showsVerticalScrollIndicator={false}
+                            >
+                                {/* ─── 1. SECCIÓN BÁSICA: TÍTULO, COLOR Y UBICACIÓN ─── */}
+                                <View
+                                    style={[
+                                        styles.sectionCard,
+                                        {
+                                            backgroundColor: cardBgColor,
+                                            borderColor: cardBorderColor,
+                                            borderTopColor: selectedColor,
+                                            borderTopWidth: 3,
+                                        },
+                                    ]}
+                                >
+                                    <View style={styles.heroTopMeta}>
+                                        <View
                                             style={[
-                                                styles.dayCircle,
+                                                styles.typePill,
                                                 {
-                                                    backgroundColor: selected ? accent.primary : (isDark ? '#1E293B' : '#F1F5F9'),
-                                                    borderColor: selected ? accent.primary : colors.borderSubtle,
+                                                    backgroundColor: `${selectedColor}18`,
                                                 },
                                             ]}
                                         >
-                                            <Text
+                                            <View style={[styles.statusDot, { backgroundColor: selectedColor }]} />
+                                            <Text style={[styles.typePillText, { color: selectedColor }]}>
+                                                EVENTO • {selectedColorObj.label.toUpperCase()}
+                                            </Text>
+                                        </View>
+
+                                        {isAllDay && (
+                                            <View
                                                 style={[
-                                                    styles.dayText,
+                                                    styles.typePill,
                                                     {
-                                                        color: selected ? '#FFFFFF' : colors.textSecondary,
-                                                        fontWeight: selected ? '700' : '500',
+                                                        backgroundColor: 'rgba(245, 158, 11, 0.15)',
                                                     },
                                                 ]}
                                             >
-                                                {w.label}
-                                            </Text>
-                                        </TouchableOpacity>
-                                    );
-                                })}
-                            </View>
-                        </View>
-                    )}
-                </VeyraSurface>
-
-                {/* Ubicación o Enlace */}
-                <VeyraSurface level={1} radius="lg" style={styles.section}>
-                    <View style={styles.rowIconLabel}>
-                        <MapPin size={18} color={colors.textSecondary as any} />
-                        <Text style={[styles.sectionTitleNoMargin, { color: colors.textSecondary }]}>
-                            UBICACIÓN O ENLACE
-                        </Text>
-                    </View>
-                    <TextInput
-                        placeholder="Aula 302, Sala de Juntas, o link de Meet/Zoom"
-                        placeholderTextColor={colors.textMuted}
-                        value={location}
-                        onChangeText={setLocation}
-                        style={[styles.inputField, { color: colors.textPrimary, borderColor: colors.borderSubtle }]}
-                    />
-                </VeyraSurface>
-
-                {/* Color del Evento */}
-                <VeyraSurface level={1} radius="lg" style={styles.section}>
-                    <View style={styles.rowIconLabel}>
-                        <Palette size={18} color={colors.textSecondary as any} />
-                        <Text style={[styles.sectionTitleNoMargin, { color: colors.textSecondary }]}>
-                            COLOR DISTINTIVO
-                        </Text>
-                    </View>
-                    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.colorPaletteRow}>
-                        {EVENT_COLORS.map(c => (
-                            <TouchableOpacity
-                                key={c.color}
-                                activeOpacity={0.7}
-                                onPress={() => setSelectedColor(c.color)}
-                                style={[
-                                    styles.colorBall,
-                                    {
-                                        backgroundColor: c.color,
-                                        borderColor: selectedColor === c.color ? '#FFFFFF' : 'transparent',
-                                        borderWidth: selectedColor === c.color ? 2 : 0,
-                                    },
-                                ]}
-                            >
-                                {selectedColor === c.color && <Check size={14} color="#FFFFFF" strokeWidth={3} />}
-                            </TouchableOpacity>
-                        ))}
-                    </ScrollView>
-                </VeyraSurface>
-
-                {/* Avisos Preventivos en Pila con botón "+" */}
-                <VeyraSurface level={1} radius="lg" style={styles.section}>
-                    <View style={styles.sectionHeaderRow}>
-                        <View style={styles.rowIconLabel}>
-                            <Bell size={18} color={accent.primary as any} />
-                            <Text style={[styles.sectionTitleNoMargin, { color: colors.textSecondary }]}>
-                                AVISOS PREVENTIVOS
-                            </Text>
-                        </View>
-                        {selectedOffsets.length > 0 && (
-                            <Text style={[styles.badgeText, { color: accent.primary }]}>
-                                {selectedOffsets.length} {selectedOffsets.length === 1 ? 'aviso' : 'avisos'}
-                            </Text>
-                        )}
-                    </View>
-
-                    {/* Pila de avisos configurados */}
-                    {selectedOffsets.length === 0 ? (
-                        <View style={styles.emptyAvisoBox}>
-                            <Text style={[styles.emptyAvisoText, { color: colors.textMuted }]}>
-                                Sin avisos configurados para este evento.
-                            </Text>
-                        </View>
-                    ) : (
-                        <View style={styles.avisosStackContainer}>
-                            {selectedOffsets.map(offset => (
-                                <View
-                                    key={offset}
-                                    style={[
-                                        styles.avisoStackedRow,
-                                        {
-                                            backgroundColor: isDark ? 'rgba(255, 255, 255, 0.04)' : '#F8FAFC',
-                                            borderColor: colors.borderSubtle,
-                                        },
-                                    ]}
-                                >
-                                    <View style={styles.avisoStackedLeft}>
-                                        <View style={[styles.avisoStackedIcon, { backgroundColor: `${accent.primary}18` }]}>
-                                            <Bell size={13} color={accent.primary as any} />
-                                        </View>
-                                        <Text style={[styles.avisoStackedText, { color: colors.textPrimary }]}>
-                                            {getOffsetLabel(offset)}
-                                        </Text>
+                                                <Sun size={11} color="#F59E0B" />
+                                                <Text style={[styles.typePillText, { color: '#F59E0B' }]}>
+                                                    TODO EL DÍA
+                                                </Text>
+                                            </View>
+                                        )}
                                     </View>
-                                    <TouchableOpacity
-                                        activeOpacity={0.7}
-                                        onPress={() => handleRemoveOffset(offset)}
-                                        style={styles.avisoStackedDelete}
-                                        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                                    >
-                                        <X size={16} color={colors.textMuted as any} />
-                                    </TouchableOpacity>
-                                </View>
-                            ))}
-                        </View>
-                    )}
 
-                    {/* Botón "+" para agregar nuevo aviso */}
-                    <TouchableOpacity
-                        activeOpacity={0.75}
-                        onPress={() => setIsAddAvisoModalOpen(true)}
-                        style={[
-                            styles.addAvisoBtn,
-                            {
-                                borderColor: accent.primary + '50',
-                                backgroundColor: isDark ? `${accent.primary}10` : `${accent.primary}08`,
-                            },
-                        ]}
-                    >
-                        <Plus size={16} color={accent.primary as any} strokeWidth={2.5} />
-                        <Text style={[styles.addAvisoBtnText, { color: accent.primary }]}>
-                            Agregar aviso
-                        </Text>
-                    </TouchableOpacity>
-                </VeyraSurface>
+                                    <TextInput
+                                        placeholder="Título del evento (ej: Clase de Cálculo, Reunión...)"
+                                        placeholderTextColor={colors.textMuted}
+                                        value={title}
+                                        onChangeText={setTitle}
+                                        style={[styles.titleInput, { color: colors.textPrimary }]}
+                                        autoFocus={false}
+                                    />
 
-                {/* SECCIÓN ESTRELLA: Enlace con Notas */}
-                <VeyraSurface level={1} radius="lg" style={styles.section}>
-                    <View style={styles.rowIconLabel}>
-                        <FileText size={18} color="#3B82F6" />
-                        <Text style={[styles.sectionTitleNoMargin, { color: colors.textSecondary }]}>
-                            CUADERNO / NOTAS DEL EVENTO
-                        </Text>
-                    </View>
+                                    <View style={[styles.cardInternalDivider, { backgroundColor: colors.borderSubtle }]} />
 
-                    {linkedNote ? (
-                        <View style={[styles.linkedCard, { backgroundColor: isDark ? '#1E293B' : '#F8FAFC', borderColor: colors.borderSubtle }]}>
-                            <View style={styles.linkedCardContent}>
-                                <FileText size={16} color="#3B82F6" />
-                                <View style={{ flex: 1 }}>
-                                    <Text style={[styles.linkedNoteTitle, { color: colors.textPrimary }]} numberOfLines={1}>
-                                        {linkedNote.title || 'Sin título'}
-                                    </Text>
-                                    <Text style={[styles.linkedNoteDate, { color: colors.textMuted }]}>
-                                        Nota vinculada
-                                    </Text>
-                                </View>
-                            </View>
-                            <View style={styles.linkedCardActions}>
-                                <TouchableOpacity
-                                    onPress={() => router.push({ pathname: '/notes/[id]', params: { id: linkedNote.id } })}
-                                    style={[styles.smallBtn, { backgroundColor: accent.primary + '20' }]}
-                                >
-                                    <Text style={[styles.smallBtnText, { color: accent.primary }]}>Abrir</Text>
-                                </TouchableOpacity>
-                                <TouchableOpacity
-                                    onPress={() => setLinkedNoteId(null)}
-                                    style={[styles.smallBtn, { backgroundColor: 'rgba(239, 68, 68, 0.15)' }]}
-                                >
-                                    <Unlink size={12} color="#EF4444" />
-                                </TouchableOpacity>
-                            </View>
-                        </View>
-                    ) : (
-                        <View style={styles.noNoteContainer}>
-                            <Text style={[styles.helperText, { color: colors.textMuted }]}>
-                                Vincula una nota para tomar apuntes de esta clase, minuta de reunión o notas importantes.
-                            </Text>
-                            <View style={styles.noNoteBtnRow}>
-                                <TouchableOpacity
-                                    activeOpacity={0.7}
-                                    onPress={handleCreateNewNoteForEvent}
-                                    style={[styles.noteActionBtn, { backgroundColor: accent.primary }]}
-                                >
-                                    <Plus size={14} color="#FFFFFF" strokeWidth={2.5} />
-                                    <Text style={styles.noteActionBtnText}>Crear nueva nota</Text>
-                                </TouchableOpacity>
-                                <TouchableOpacity
-                                    activeOpacity={0.7}
-                                    onPress={() => setIsLinkNoteModalVisible(true)}
-                                    style={[styles.noteActionBtn, { backgroundColor: isDark ? '#1E293B' : '#E2E8F0' }]}
-                                >
-                                    <Link size={14} color={colors.textPrimary as any} />
-                                    <Text style={[styles.noteActionBtnText, { color: colors.textPrimary }]}>Vincular existente</Text>
-                                </TouchableOpacity>
-                            </View>
-                        </View>
-                    )}
-                </VeyraSurface>
-            </ScrollView>
-
-            {/* Modal para Vincular Nota Existente */}
-            <Modal
-                visible={isLinkNoteModalVisible}
-                transparent
-                animationType="slide"
-                onRequestClose={() => setIsLinkNoteModalVisible(false)}
-            >
-                <View style={styles.modalBackdrop}>
-                    <TouchableOpacity style={styles.backdropDismiss} activeOpacity={1} onPress={() => setIsLinkNoteModalVisible(false)} />
-                    <VeyraSurface level={2} radius="xl" style={[styles.modalSheet, { paddingBottom: Math.max(insets.bottom, 16) + 16 }]}>
-                        <View style={styles.modalHeader}>
-                            <Text style={[styles.modalTitle, { color: colors.textPrimary }]}>Vincular Nota</Text>
-                            <TouchableOpacity onPress={() => setIsLinkNoteModalVisible(false)}>
-                                <X size={20} color={colors.textSecondary as any} />
-                            </TouchableOpacity>
-                        </View>
-
-                        <View style={[styles.searchBox, { backgroundColor: isDark ? '#1E293B' : '#F1F5F9' }]}>
-                            <Search size={16} color={colors.textMuted} />
-                            <TextInput
-                                placeholder="Buscar nota..."
-                                placeholderTextColor={colors.textMuted}
-                                value={noteSearchQuery}
-                                onChangeText={setNoteSearchQuery}
-                                style={[styles.searchTextInput, { color: colors.textPrimary }]}
-                            />
-                        </View>
-
-                        <ScrollView style={{ maxHeight: 320 }} showsVerticalScrollIndicator={false}>
-                            {filteredNotes.length === 0 ? (
-                                <Text style={[styles.emptyModalText, { color: colors.textMuted }]}>
-                                    No se encontraron notas.
-                                </Text>
-                            ) : (
-                                filteredNotes.map(n => (
-                                    <TouchableOpacity
-                                        key={n.id}
-                                        activeOpacity={0.7}
-                                        onPress={() => {
-                                            setLinkedNoteId(n.id);
-                                            setIsLinkNoteModalVisible(false);
-                                        }}
-                                        style={[styles.noteRowItem, { borderBottomColor: colors.borderSubtle }]}
-                                    >
-                                        <FileText size={16} color="#3B82F6" />
-                                        <Text style={[styles.noteRowText, { color: colors.textPrimary }]} numberOfLines={1}>
-                                            {n.title || 'Sin título'}
-                                        </Text>
-                                    </TouchableOpacity>
-                                ))
-                            )}
-                        </ScrollView>
-                    </VeyraSurface>
-                </View>
-            </Modal>
-
-            {/* Modal BottomSheet: Agregar Aviso Preventivo */}
-            <Modal
-                visible={isAddAvisoModalOpen}
-                transparent
-                animationType="slide"
-                onRequestClose={() => setIsAddAvisoModalOpen(false)}
-            >
-                <View style={styles.modalBackdrop}>
-                    <TouchableOpacity
-                        style={styles.backdropDismiss}
-                        activeOpacity={1}
-                        onPress={() => setIsAddAvisoModalOpen(false)}
-                    />
-                    <VeyraSurface level={2} radius="xl" style={[styles.modalSheet, { paddingBottom: Math.max(insets.bottom, 16) + 16 }]}>
-                        <View style={styles.modalHeader}>
-                            <View style={styles.rowIconLabel}>
-                                <Bell size={18} color={accent.primary as any} />
-                                <Text style={[styles.modalTitle, { color: colors.textPrimary }]}>
-                                    Agregar Aviso Preventivo
-                                </Text>
-                            </View>
-                            <TouchableOpacity onPress={() => setIsAddAvisoModalOpen(false)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                                <X size={20} color={colors.textSecondary as any} />
-                            </TouchableOpacity>
-                        </View>
-
-                        <ScrollView style={{ maxHeight: 360, marginTop: 10 }} showsVerticalScrollIndicator={false}>
-                            {AVAILABLE_OFFSETS.map(item => {
-                                const isAlreadyAdded = selectedOffsets.includes(item.value);
-                                return (
-                                    <TouchableOpacity
-                                        key={item.value}
-                                        activeOpacity={0.7}
-                                        disabled={isAlreadyAdded}
-                                        onPress={() => {
-                                            handleAddOffset(item.value);
-                                            setIsAddAvisoModalOpen(false);
-                                        }}
+                                    {/* Ubicación rápida */}
+                                    <View
                                         style={[
-                                            styles.avisoOptionRow,
+                                            styles.flatBoxInputRow,
                                             {
-                                                borderBottomColor: colors.borderSubtle,
-                                                opacity: isAlreadyAdded ? 0.45 : 1,
+                                                backgroundColor: controlBgColor,
+                                                borderColor: controlBorderColor,
                                             },
                                         ]}
                                     >
-                                        <View style={styles.rowIconLabel}>
-                                            <Bell size={15} color={isAlreadyAdded ? (colors.textMuted as any) : (accent.primary as any)} />
-                                            <Text
+                                        <MapPin size={16} color={selectedColor as any} />
+                                        <TextInput
+                                            placeholder="Ubicación o enlace (ej: Aula 302, Meet/Zoom...)"
+                                            placeholderTextColor={colors.textMuted}
+                                            value={location}
+                                            onChangeText={setLocation}
+                                            style={[styles.flatBoxTextInput, { color: colors.textPrimary }]}
+                                        />
+                                        {location.length > 0 && (
+                                            <TouchableOpacity onPress={() => setLocation('')} style={{ padding: 4 }}>
+                                                <X size={14} color={colors.textMuted as any} />
+                                            </TouchableOpacity>
+                                        )}
+                                    </View>
+
+                                    <View style={[styles.cardInternalDivider, { backgroundColor: colors.borderSubtle }]} />
+
+                                    {/* Paleta de Color Horizontal Compacta */}
+                                    <View>
+                                        <View style={styles.colorHeaderRow}>
+                                            <Text style={[styles.microLabel, { color: colors.textMuted, marginBottom: 0 }]}>
+                                                COLOR DEL EVENTO
+                                            </Text>
+                                            <Text style={[styles.selectedColorLabel, { color: selectedColor }]}>
+                                                {selectedColorObj.label}
+                                            </Text>
+                                        </View>
+                                        <ScrollView
+                                            horizontal
+                                            showsHorizontalScrollIndicator={false}
+                                            contentContainerStyle={styles.colorPaletteRow}
+                                        >
+                                            {EVENT_COLORS.map(c => {
+                                                const isSelected = selectedColor === c.color;
+                                                return (
+                                                    <TouchableOpacity
+                                                        key={c.color}
+                                                        activeOpacity={0.75}
+                                                        onPress={() => setSelectedColor(c.color)}
+                                                        style={[
+                                                            styles.colorSwatchItem,
+                                                            {
+                                                                backgroundColor: isSelected ? `${c.color}18` : controlBgColor,
+                                                                borderColor: isSelected ? c.color : controlBorderColor,
+                                                            },
+                                                        ]}
+                                                    >
+                                                        <View style={[styles.colorBall, { backgroundColor: c.color }]}>
+                                                            {isSelected && <Check size={12} color="#FFFFFF" strokeWidth={3} />}
+                                                        </View>
+                                                        <Text
+                                                            style={[
+                                                                styles.colorSwatchName,
+                                                                {
+                                                                    color: isSelected ? colors.textPrimary : colors.textSecondary,
+                                                                    fontWeight: isSelected ? '700' : '500',
+                                                                },
+                                                            ]}
+                                                        >
+                                                            {c.label}
+                                                        </Text>
+                                                    </TouchableOpacity>
+                                                );
+                                            })}
+                                        </ScrollView>
+                                    </View>
+                                </View>
+
+                                {/* ─── 2. SECCIÓN BÁSICA: FECHA Y HORARIO ─── */}
+                                <View style={styles.sectionWrapper}>
+                                    <View style={styles.sectionHeader}>
+                                        <View style={styles.sectionHeaderLeft}>
+                                            <View style={[styles.sectionIconBadge, { backgroundColor: `${accent.primary}18` }]}>
+                                                <CalendarIcon size={15} color={accent.primary as any} strokeWidth={2.3} />
+                                            </View>
+                                            <View>
+                                                <Text style={[styles.sectionTitle, { color: colors.textPrimary }]}>
+                                                    Fecha y Horario
+                                                </Text>
+                                                <Text style={[styles.sectionSubtitle, { color: colors.textMuted }]}>
+                                                    Define el día y la duración del evento
+                                                </Text>
+                                            </View>
+                                        </View>
+                                    </View>
+
+                                    <View
+                                        style={[
+                                            styles.sectionCard,
+                                            {
+                                                backgroundColor: cardBgColor,
+                                                borderColor: cardBorderColor,
+                                            },
+                                        ]}
+                                    >
+                                        {/* Toggle: Todo el día */}
+                                        <TouchableOpacity
+                                            activeOpacity={0.75}
+                                            onPress={() => setIsAllDay(!isAllDay)}
+                                            style={styles.interactiveRow}
+                                        >
+                                            <View style={styles.rowIconLabel}>
+                                                <View style={[styles.rowMiniIcon, { backgroundColor: controlBgColor }]}>
+                                                    <Sun size={16} color={isAllDay ? '#F59E0B' : (colors.textMuted as any)} />
+                                                </View>
+                                                <View>
+                                                    <Text style={[styles.rowLabel, { color: colors.textPrimary }]}>
+                                                        Evento de todo el día
+                                                    </Text>
+                                                    <Text style={[styles.rowHint, { color: colors.textMuted }]}>
+                                                        Sin hora de inicio ni fin específica
+                                                    </Text>
+                                                </View>
+                                            </View>
+                                            <View
                                                 style={[
-                                                    styles.avisoOptionLabel,
+                                                    styles.switchBtn,
                                                     {
-                                                        color: isAlreadyAdded ? colors.textMuted : colors.textPrimary,
-                                                        fontWeight: isAlreadyAdded ? '400' : '600',
+                                                        backgroundColor: isAllDay ? accent.primary : (isDark ? '#334155' : '#E2E8F0'),
                                                     },
                                                 ]}
                                             >
-                                                {item.label}
+                                                <View
+                                                    style={[
+                                                        styles.switchThumb,
+                                                        {
+                                                            transform: [{ translateX: isAllDay ? 20 : 2 }],
+                                                            backgroundColor: '#FFFFFF',
+                                                        },
+                                                    ]}
+                                                />
+                                            </View>
+                                        </TouchableOpacity>
+
+                                        <View style={[styles.cardInternalDivider, { backgroundColor: colors.borderSubtle }]} />
+
+                                        {/* Selector de Fecha */}
+                                        <TouchableOpacity
+                                            activeOpacity={0.7}
+                                            onPress={() => setShowDatePicker(true)}
+                                            style={styles.interactiveRow}
+                                        >
+                                            <View style={styles.rowIconLabel}>
+                                                <View style={[styles.rowMiniIcon, { backgroundColor: controlBgColor }]}>
+                                                    <CalendarIcon size={16} color={accent.primary as any} />
+                                                </View>
+                                                <View>
+                                                    <Text style={[styles.rowLabel, { color: colors.textPrimary }]}>Fecha</Text>
+                                                    <Text style={[styles.rowHint, { color: colors.textMuted }]}>Día en el calendario</Text>
+                                                </View>
+                                            </View>
+                                            <View style={[styles.valuePill, { backgroundColor: controlBgColor, borderColor: controlBorderColor }]}>
+                                                <Text style={[styles.valuePillText, { color: accent.primary }]}>
+                                                    {getFormattedDateBadge(eventDate)}
+                                                </Text>
+                                                <ChevronRight size={14} color={colors.textMuted as any} />
+                                            </View>
+                                        </TouchableOpacity>
+
+                                        {/* Horas de inicio y fin en bloques lado a lado cuando no es todo el día */}
+                                        {!isAllDay && (
+                                            <>
+                                                <View style={[styles.cardInternalDivider, { backgroundColor: colors.borderSubtle }]} />
+                                                <View style={styles.timeRangeGrid}>
+                                                    <TouchableOpacity
+                                                        activeOpacity={0.75}
+                                                        onPress={() => setShowStartTimePicker(true)}
+                                                        style={[
+                                                            styles.timeRangeBox, {
+                                                                backgroundColor: controlBgColor,
+                                                                borderColor: controlBorderColor,
+                                                            },
+                                                        ]}
+                                                    >
+                                                        <View style={styles.timeRangeHeader}>
+                                                            <Clock size={13} color={accent.primary as any} />
+                                                            <Text style={[styles.timeRangeLabel, { color: colors.textMuted }]}>
+                                                                HORA INICIO
+                                                            </Text>
+                                                        </View>
+                                                        <Text style={[styles.timeRangeValue, { color: colors.textPrimary }]}>
+                                                            {format(startTime, 'HH:mm')}
+                                                        </Text>
+                                                    </TouchableOpacity>
+
+                                                    <TouchableOpacity
+                                                        activeOpacity={0.75}
+                                                        onPress={() => setShowEndTimePicker(true)}
+                                                        style={[
+                                                            styles.timeRangeBox, {
+                                                                backgroundColor: controlBgColor,
+                                                                borderColor: controlBorderColor,
+                                                            },
+                                                        ]}
+                                                    >
+                                                        <View style={styles.timeRangeHeader}>
+                                                            <Clock size={13} color={accent.primary as any} />
+                                                            <Text style={[styles.timeRangeLabel, { color: colors.textMuted }]}>
+                                                                HORA FIN
+                                                            </Text>
+                                                        </View>
+                                                        <Text style={[styles.timeRangeValue, { color: colors.textPrimary }]}>
+                                                            {format(endTime, 'HH:mm')}
+                                                        </Text>
+                                                    </TouchableOpacity>
+                                                </View>
+                                            </>
+                                        )}
+                                    </View>
+                                </View>
+
+                                {/* ─── BOTÓN / HEADER ACORDEÓN: OPCIONES AVANZADAS ─── */}
+                                <TouchableOpacity
+                                    activeOpacity={0.75}
+                                    onPress={() => setIsAdvancedOpen(prev => !prev)}
+                                    style={[
+                                        styles.advancedAccordionHeader,
+                                        {
+                                            backgroundColor: cardBgColor,
+                                            borderColor: isAdvancedOpen ? accent.primary : cardBorderColor,
+                                        },
+                                    ]}
+                                >
+                                    <View style={styles.advancedAccordionLeft}>
+                                        <View style={[styles.advancedIconBadge, { backgroundColor: isAdvancedOpen ? `${accent.primary}25` : `${accent.primary}15` }]}>
+                                            <Sliders size={16} color={accent.primary as any} strokeWidth={2.3} />
+                                        </View>
+                                        <View style={{ flex: 1 }}>
+                                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 7 }}>
+                                                <Text style={[styles.advancedTitle, { color: colors.textPrimary }]}>
+                                                    Opciones avanzadas
+                                                </Text>
+                                                {activeAdvancedCount > 0 && (
+                                                    <View style={[styles.advancedCountBadge, { backgroundColor: `${accent.primary}20`, borderColor: `${accent.primary}40` }]}>
+                                                        <Text style={[styles.advancedCountText, { color: accent.primary }]}>
+                                                            {activeAdvancedCount} {activeAdvancedCount === 1 ? 'activa' : 'activas'}
+                                                        </Text>
+                                                    </View>
+                                                )}
+                                            </View>
+                                            <Text style={[styles.advancedSubtitle, { color: colors.textMuted }]} numberOfLines={1}>
+                                                {isAdvancedOpen ? 'Toca para contraer' : 'Repetición, avisos, notas, etiquetas...'}
                                             </Text>
                                         </View>
-                                        {isAlreadyAdded ? (
-                                            <Text style={[styles.alreadyAddedBadge, { color: colors.textMuted }]}>
-                                                Agregado
-                                            </Text>
-                                        ) : (
-                                            <Plus size={16} color={accent.primary as any} strokeWidth={2.5} />
-                                        )}
-                                    </TouchableOpacity>
-                                );
-                            })}
-                        </ScrollView>
-                    </VeyraSurface>
-                </View>
-            </Modal>
+                                    </View>
+                                    <View style={[styles.advancedChevronCircle, { backgroundColor: controlBgColor }]}>
+                                        <ChevronDown
+                                            size={16}
+                                            color={colors.textSecondary as any}
+                                            style={{
+                                                transform: [{ rotate: isAdvancedOpen ? '180deg' : '0deg' }],
+                                            }}
+                                        />
+                                    </View>
+                                </TouchableOpacity>
 
-            {/* Modales de Fecha y Hora Personalizados (estilo Veyra) */}
-            <DatePickerModal
-                visible={showDatePicker}
-                value={eventDate}
-                title="Fecha del Evento"
-                onClose={() => setShowDatePicker(false)}
-                onConfirm={(selectedDate) => {
-                    setEventDate(selectedDate);
-                }}
-            />
+                                {/* ─── CONTENIDO AVANZADO (COLAPSABLE) ─── */}
+                                {isAdvancedOpen && (
+                                    <View style={styles.advancedContentBlock}>
+                                        {/* ─── 3. SECCIÓN: REPETICIÓN Y FRECUENCIA ─── */}
+                                        <View style={styles.sectionWrapper}>
+                                            <View style={styles.sectionHeader}>
+                                                <View style={styles.sectionHeaderLeft}>
+                                                    <View style={[styles.sectionIconBadge, { backgroundColor: `${accent.primary}18` }]}>
+                                                        <Repeat size={15} color={accent.primary as any} strokeWidth={2.3} />
+                                                    </View>
+                                                    <View>
+                                                        <Text style={[styles.sectionTitle, { color: colors.textPrimary }]}>
+                                                            Repetición
+                                                        </Text>
+                                                        <Text style={[styles.sectionSubtitle, { color: colors.textMuted }]}>
+                                                            {currentRecurrenceObj.desc}
+                                                        </Text>
+                                                    </View>
+                                                </View>
+                                            </View>
 
-            <TimePickerModal
-                visible={showStartTimePicker}
-                value={startTime}
-                title="Hora de Inicio"
-                onClose={() => setShowStartTimePicker(false)}
-                onConfirm={(selectedTime) => {
-                    setStartTime(selectedTime);
-                    // Si la hora de fin es menor o igual a la nueva hora de inicio, ajustar fin automáticamente a +1h
-                    if (endTime.getTime() <= selectedTime.getTime()) {
-                        const nextHour = new Date(selectedTime);
-                        nextHour.setHours(nextHour.getHours() + 1);
-                        setEndTime(nextHour);
-                    }
-                }}
-            />
+                                            <View
+                                                style={[
+                                                    styles.sectionCard,
+                                                    {
+                                                        backgroundColor: cardBgColor,
+                                                        borderColor: cardBorderColor,
+                                                    },
+                                                ]}
+                                            >
+                                                <View style={styles.recurrenceGrid}>
+                                                    {RECURRENCE_TYPES.map(r => {
+                                                        const isSelected = extendedRecurrenceType === r.key;
+                                                        return (
+                                                            <TouchableOpacity
+                                                                key={r.key}
+                                                                activeOpacity={0.75}
+                                                                onPress={() => handleSelectRecurrenceType(r.key)}
+                                                                style={[
+                                                                    styles.recurrenceOptionPill,
+                                                                    {
+                                                                        backgroundColor: isSelected ? `${accent.primary}18` : controlBgColor,
+                                                                        borderColor: isSelected ? accent.primary : controlBorderColor,
+                                                                    },
+                                                                ]}
+                                                            >
+                                                                <Text
+                                                                    style={[
+                                                                        styles.recurrenceOptionText,
+                                                                        {
+                                                                            color: isSelected ? accent.primary : colors.textSecondary,
+                                                                            fontWeight: isSelected ? '700' : '500',
+                                                                        },
+                                                                    ]}
+                                                                >
+                                                                    {r.label}
+                                                                </Text>
+                                                            </TouchableOpacity>
+                                                        );
+                                                    })}
+                                                </View>
 
-            <TimePickerModal
-                visible={showEndTimePicker}
-                value={endTime}
-                title="Hora de Fin"
-                onClose={() => setShowEndTimePicker(false)}
-                onConfirm={(selectedTime) => {
-                    setEndTime(selectedTime);
-                }}
-            />
+                                                {extendedRecurrenceType === 'weekly' && (
+                                                    <View style={styles.daysSelectorBlock}>
+                                                        <View style={[styles.cardInternalDivider, { backgroundColor: colors.borderSubtle, marginBottom: 10 }]} />
+                                                        <Text style={[styles.microLabel, { color: colors.textMuted }]}>
+                                                            DÍAS DE LA SEMANA QUE SE REPITE
+                                                        </Text>
+                                                        <View style={styles.daysRow}>
+                                                            {WEEKDAYS.map(w => {
+                                                                const selected = selectedDays.includes(w.day);
+                                                                return (
+                                                                    <TouchableOpacity
+                                                                        key={w.day}
+                                                                        activeOpacity={0.75}
+                                                                        onPress={() => toggleDay(w.day)}
+                                                                        style={[
+                                                                            styles.dayButton,
+                                                                            {
+                                                                                backgroundColor: selected ? accent.primary : controlBgColor,
+                                                                                borderColor: selected ? accent.primary : controlBorderColor,
+                                                                            },
+                                                                        ]}
+                                                                    >
+                                                                        <Text
+                                                                            style={[
+                                                                                styles.dayLetter,
+                                                                                {
+                                                                                    color: selected ? colors.textInverse : colors.textPrimary,
+                                                                                    fontWeight: selected ? '800' : '600',
+                                                                                },
+                                                                            ]}
+                                                                        >
+                                                                            {w.label}
+                                                                        </Text>
+                                                                        <Text
+                                                                            style={[
+                                                                                styles.dayShortName,
+                                                                                {
+                                                                                    color: selected ? colors.textInverse : colors.textMuted,
+                                                                                    opacity: selected ? 0.9 : 1,
+                                                                                },
+                                                                            ]}
+                                                                        >
+                                                                            {w.name}
+                                                                        </Text>
+                                                                    </TouchableOpacity>
+                                                                );
+                                                            })}
+                                                        </View>
+                                                    </View>
+                                                )}
+                                            </View>
+                                        </View>
 
-            <RecurringDeleteModal
-                visible={isRecurringDeleteModalVisible}
-                eventTitle={title || existingEvent?.title}
-                occurrenceDate={eventDate}
-                onClose={() => setIsRecurringDeleteModalVisible(false)}
-                onConfirm={handleConfirmRecurringDelete}
-            />
+                                        {/* ─── 4. SECCIÓN: PRIORIDAD Y AVISOS PREVENTIVOS ─── */}
+                                        <View style={styles.sectionWrapper}>
+                                            <View style={styles.sectionHeader}>
+                                                <View style={styles.sectionHeaderLeft}>
+                                                    <View style={[styles.sectionIconBadge, { backgroundColor: `${currentControlLevel.color}20` }]}>
+                                                        <Bell size={15} color={currentControlLevel.color as any} strokeWidth={2.3} />
+                                                    </View>
+                                                    <View>
+                                                        <Text style={[styles.sectionTitle, { color: colors.textPrimary }]}>
+                                                            Prioridad y Avisos
+                                                        </Text>
+                                                        <Text style={[styles.sectionSubtitle, { color: colors.textMuted }]}>
+                                                            Configura el nivel de alerta y los recordatorios previos
+                                                        </Text>
+                                                    </View>
+                                                </View>
+                                                {selectedOffsets.length > 0 && (
+                                                    <View style={[styles.counterPill, { backgroundColor: `${accent.primary}18` }]}>
+                                                        <Text style={[styles.counterPillText, { color: accent.primary }]}>
+                                                            {selectedOffsets.length} {selectedOffsets.length === 1 ? 'aviso' : 'avisos'}
+                                                        </Text>
+                                                    </View>
+                                                )}
+                                            </View>
 
-            {/* Modal de Compartir Evento */}
-            {isEditing && existingEvent && (
-                <ShareModal
-                    visible={isShareModalVisible}
-                    onClose={() => setIsShareModalVisible(false)}
-                    targetType="event"
-                    targetId={existingEvent.id}
-                    targetTitle={title.trim() || existingEvent.title || 'Evento'}
-                    isOwner={existingEvent.is_shared !== 1}
-                />
-            )}
-                </SafeAreaView>
+                                            <View
+                                                style={[
+                                                    styles.sectionCard,
+                                                    {
+                                                        backgroundColor: cardBgColor,
+                                                        borderColor: cardBorderColor,
+                                                    },
+                                                ]}
+                                            >
+                                                <Text style={[styles.microLabel, { color: colors.textMuted, marginBottom: -4 }]}>
+                                                    NIVEL DE CONTROL DE LA ALARMA
+                                                </Text>
+                                                <View style={styles.priorityCardsGrid}>
+                                                    {CONTROL_LEVELS.map(item => {
+                                                        const isSelected = controlLevel === item.key;
+                                                        const ItemIcon = item.icon;
+                                                        return (
+                                                            <TouchableOpacity
+                                                                key={item.key}
+                                                                activeOpacity={0.75}
+                                                                onPress={() => setControlLevel(item.key)}
+                                                                style={[
+                                                                    styles.priorityOptionCard,
+                                                                    {
+                                                                        backgroundColor: isSelected
+                                                                            ? (isDark ? `${item.color}22` : `${item.color}12`)
+                                                                            : controlBgColor,
+                                                                        borderColor: isSelected ? item.color : controlBorderColor,
+                                                                        borderWidth: isSelected ? 1.5 : 1,
+                                                                    },
+                                                                ]}
+                                                            >
+                                                                <View style={styles.priorityCardTop}>
+                                                                    <View
+                                                                        style={[
+                                                                            styles.priorityIconCircle,
+                                                                            {
+                                                                                backgroundColor: isSelected ? `${item.color}28` : controlBgColor,
+                                                                            },
+                                                                        ]}
+                                                                    >
+                                                                        <ItemIcon
+                                                                            size={15}
+                                                                            color={isSelected ? item.color : (colors.textMuted as any)}
+                                                                            strokeWidth={isSelected ? 2.5 : 2}
+                                                                        />
+                                                                    </View>
+                                                                    {isSelected && (
+                                                                        <View style={[styles.priorityCheckDot, { backgroundColor: item.color }]}>
+                                                                            <Check size={10} color="#FFFFFF" strokeWidth={3} />
+                                                                        </View>
+                                                                    )}
+                                                                </View>
+
+                                                                <Text
+                                                                    style={[
+                                                                        styles.priorityOptionTitle,
+                                                                        {
+                                                                            color: isSelected ? (isDark ? '#FFFFFF' : item.color) : colors.textPrimary,
+                                                                            fontWeight: isSelected ? '700' : '600',
+                                                                        },
+                                                                    ]}
+                                                                >
+                                                                    {item.label}
+                                                                </Text>
+                                                                <Text
+                                                                    style={[
+                                                                        styles.priorityOptionSub,
+                                                                        {
+                                                                            color: isSelected ? colors.textSecondary : colors.textMuted,
+                                                                        },
+                                                                    ]}
+                                                                    numberOfLines={1}
+                                                                >
+                                                                    {item.shortDesc}
+                                                                </Text>
+                                                            </TouchableOpacity>
+                                                        );
+                                                    })}
+                                                </View>
+
+                                                <View
+                                                    style={[
+                                                        styles.priorityInfoBanner,
+                                                        {
+                                                            backgroundColor: controlBgColor,
+                                                            borderColor: `${currentControlLevel.color}40`,
+                                                            borderLeftColor: currentControlLevel.color,
+                                                        },
+                                                    ]}
+                                                >
+                                                    <Text style={[styles.priorityInfoText, { color: colors.textSecondary }]}>
+                                                        <Text style={{ fontWeight: '700', color: currentControlLevel.color }}>
+                                                            {currentControlLevel.label}:{' '}
+                                                        </Text>
+                                                        {currentControlLevel.desc}
+                                                    </Text>
+                                                </View>
+
+                                                <View style={[styles.cardInternalDivider, { backgroundColor: colors.borderSubtle }]} />
+
+                                                {/* Pila de avisos preventivos */}
+                                                <View style={{ gap: 8 }}>
+                                                    <Text style={[styles.microLabel, { color: colors.textMuted, marginBottom: 0 }]}>
+                                                        AVISOS ANTES DEL EVENTO
+                                                    </Text>
+
+                                                    {selectedOffsets.length === 0 ? (
+                                                        <Text style={[styles.emptyHintText, { color: colors.textMuted }]}>
+                                                            Sin avisos configurados para este evento.
+                                                        </Text>
+                                                    ) : (
+                                                        <View style={styles.avisosList}>
+                                                            {selectedOffsets.map(offset => (
+                                                                <View
+                                                                    key={offset}
+                                                                    style={[
+                                                                        styles.avisoItemRow,
+                                                                        {
+                                                                            backgroundColor: controlBgColor,
+                                                                            borderColor: controlBorderColor,
+                                                                        },
+                                                                    ]}
+                                                                >
+                                                                    <View style={styles.avisoLeft}>
+                                                                        <Bell size={14} color={accent.primary as any} />
+                                                                        <Text style={[styles.avisoText, { color: colors.textPrimary }]}>
+                                                                            {getOffsetLabel(offset)}
+                                                                        </Text>
+                                                                    </View>
+                                                                    <TouchableOpacity
+                                                                        activeOpacity={0.7}
+                                                                        onPress={() => handleRemoveOffset(offset)}
+                                                                        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                                                                        style={{ padding: 2 }}
+                                                                    >
+                                                                        <X size={15} color={colors.textMuted as any} />
+                                                                    </TouchableOpacity>
+                                                                </View>
+                                                            ))}
+                                                        </View>
+                                                    )}
+
+                                                    <TouchableOpacity
+                                                        activeOpacity={0.75}
+                                                        onPress={() => setIsAddAvisoModalOpen(true)}
+                                                        style={[
+                                                            styles.addFullBtn,
+                                                            {
+                                                                backgroundColor: `${accent.primary}14`,
+                                                                borderColor: `${accent.primary}35`,
+                                                            },
+                                                        ]}
+                                                    >
+                                                        <Plus size={15} color={accent.primary as any} strokeWidth={2.5} />
+                                                        <Text style={[styles.addFullBtnText, { color: accent.primary }]}>
+                                                            Agregar aviso preventivo
+                                                        </Text>
+                                                    </TouchableOpacity>
+                                                </View>
+                                            </View>
+                                        </View>
+
+                                        {/* ─── 5. SECCIÓN: DESCRIPCIÓN Y NOTAS EXTENSAS ─── */}
+                                        <View style={styles.sectionWrapper}>
+                                            <View style={styles.sectionHeader}>
+                                                <View style={styles.sectionHeaderLeft}>
+                                                    <View style={[styles.sectionIconBadge, { backgroundColor: `${accent.primary}18` }]}>
+                                                        <FileText size={15} color={accent.primary as any} strokeWidth={2.3} />
+                                                    </View>
+                                                    <View>
+                                                        <Text style={[styles.sectionTitle, { color: colors.textPrimary }]}>
+                                                            Descripción y Notas
+                                                        </Text>
+                                                        <Text style={[styles.sectionSubtitle, { color: colors.textMuted }]}>
+                                                            Detalles, temario o enlaces adicionales
+                                                        </Text>
+                                                    </View>
+                                                </View>
+                                            </View>
+
+                                            <View
+                                                style={[
+                                                    styles.sectionCard,
+                                                    {
+                                                        backgroundColor: cardBgColor,
+                                                        borderColor: cardBorderColor,
+                                                    },
+                                                ]}
+                                            >
+                                                <TextInput
+                                                    placeholder="Escribe aquí temario, detalles o enlaces para el evento..."
+                                                    placeholderTextColor={colors.textMuted}
+                                                    value={description}
+                                                    onChangeText={setDescription}
+                                                    style={[styles.descInputStandalone, { color: colors.textPrimary }]}
+                                                    multiline
+                                                    scrollEnabled={false}
+                                                />
+                                            </View>
+                                        </View>
+
+                                        {/* ─── 6. SECCIÓN: ETIQUETAS / CATEGORÍAS ─── */}
+                                        <View style={styles.sectionWrapper}>
+                                            <View style={styles.sectionHeader}>
+                                                <View style={styles.sectionHeaderLeft}>
+                                                    <View style={[styles.sectionIconBadge, { backgroundColor: `${accent.primary}18` }]}>
+                                                        <TagIcon size={15} color={accent.primary as any} strokeWidth={2.3} />
+                                                    </View>
+                                                    <View style={{ flex: 1 }}>
+                                                        <Text style={[styles.sectionTitle, { color: colors.textPrimary }]}>
+                                                            Etiquetas y Categorías
+                                                        </Text>
+                                                        <Text style={[styles.sectionSubtitle, { color: colors.textMuted }]}>
+                                                            Usa <Text style={{ color: accent.primary, fontWeight: '700' }}>#clase</Text> para sincronizar con el Horario
+                                                        </Text>
+                                                    </View>
+                                                </View>
+                                                {tags.length > 0 && (
+                                                    <View style={[styles.counterPill, { backgroundColor: `${accent.primary}18` }]}>
+                                                        <Text style={[styles.counterPillText, { color: accent.primary }]}>
+                                                            {tags.length}
+                                                        </Text>
+                                                    </View>
+                                                )}
+                                            </View>
+
+                                            <View
+                                                style={[
+                                                    styles.sectionCard,
+                                                    {
+                                                        backgroundColor: cardBgColor,
+                                                        borderColor: cardBorderColor,
+                                                    },
+                                                ]}
+                                            >
+                                                <View
+                                                    style={[
+                                                        styles.flatBoxInputRow,
+                                                        {
+                                                            backgroundColor: controlBgColor,
+                                                            borderColor: controlBorderColor,
+                                                        },
+                                                    ]}
+                                                >
+                                                    <TagIcon size={15} color={colors.textMuted as any} />
+                                                    <TextInput
+                                                        placeholder="Nueva etiqueta (ej: examen, proyecto)..."
+                                                        placeholderTextColor={colors.textMuted}
+                                                        value={customTagInput}
+                                                        onChangeText={setCustomTagInput}
+                                                        onSubmitEditing={() => handleAddTag(customTagInput)}
+                                                        returnKeyType="done"
+                                                        style={[styles.flatBoxTextInput, { color: colors.textPrimary }]}
+                                                    />
+                                                    <TouchableOpacity
+                                                        activeOpacity={0.7}
+                                                        disabled={!customTagInput.trim()}
+                                                        onPress={() => handleAddTag(customTagInput)}
+                                                        style={[
+                                                            styles.inlineAddBtn,
+                                                            {
+                                                                backgroundColor: customTagInput.trim() ? accent.primary : controlBgColor,
+                                                                opacity: customTagInput.trim() ? 1 : 0.5,
+                                                            },
+                                                        ]}
+                                                    >
+                                                        <Text
+                                                            style={[
+                                                                styles.inlineAddBtnText,
+                                                                {
+                                                                    color: customTagInput.trim() ? colors.textInverse : colors.textMuted,
+                                                                },
+                                                            ]}
+                                                        >
+                                                            Añadir
+                                                        </Text>
+                                                    </TouchableOpacity>
+                                                </View>
+
+                                                {tags.length > 0 && (
+                                                    <View style={styles.activeTagsBlock}>
+                                                        <Text style={[styles.microLabel, { color: colors.textMuted }]}>
+                                                            ACTIVAS
+                                                        </Text>
+                                                        <View style={styles.tagsContainer}>
+                                                            {tags.map(tagItem => (
+                                                                <View
+                                                                    key={tagItem}
+                                                                    style={[
+                                                                        styles.tagBadgeActive,
+                                                                        {
+                                                                            backgroundColor: `${accent.primary}18`,
+                                                                            borderColor: `${accent.primary}45`,
+                                                                        },
+                                                                    ]}
+                                                                >
+                                                                    <Text style={[styles.tagBadgeText, { color: accent.primary, fontWeight: '700' }]}>
+                                                                        #{tagItem}
+                                                                    </Text>
+                                                                    <TouchableOpacity
+                                                                        activeOpacity={0.7}
+                                                                        onPress={() => handleRemoveTag(tagItem)}
+                                                                        style={styles.tagRemoveBtn}
+                                                                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                                                                    >
+                                                                        <X size={12} color={accent.primary as any} />
+                                                                    </TouchableOpacity>
+                                                                </View>
+                                                            ))}
+                                                        </View>
+                                                    </View>
+                                                )}
+
+                                                <View style={styles.suggestedTagsBlock}>
+                                                    <Text style={[styles.microLabel, { color: colors.textMuted }]}>
+                                                        SUGERENCIAS RÁPIDAS
+                                                    </Text>
+                                                    <View style={styles.tagChipsWrap}>
+                                                        {PRESET_TAGS.map(preset => {
+                                                            const isSelected = tags.includes(preset);
+                                                            return (
+                                                                <TouchableOpacity
+                                                                    key={preset}
+                                                                    activeOpacity={0.7}
+                                                                    onPress={() => (isSelected ? handleRemoveTag(preset) : handleAddTag(preset))}
+                                                                    style={[
+                                                                        styles.tagChipPreset,
+                                                                        {
+                                                                            backgroundColor: isSelected ? `${accent.primary}20` : controlBgColor,
+                                                                            borderColor: isSelected ? accent.primary : controlBorderColor,
+                                                                        },
+                                                                    ]}
+                                                                >
+                                                                    <Text
+                                                                        style={[
+                                                                            styles.tagChipPresetText,
+                                                                            {
+                                                                                color: isSelected ? accent.primary : colors.textSecondary,
+                                                                                fontWeight: isSelected ? '700' : '500',
+                                                                            },
+                                                                        ]}
+                                                                    >
+                                                                        #{preset}
+                                                                    </Text>
+                                                                    {isSelected && <Check size={11} color={accent.primary as any} style={{ marginLeft: 4 }} />}
+                                                                </TouchableOpacity>
+                                                            );
+                                                        })}
+                                                    </View>
+                                                </View>
+                                            </View>
+                                        </View>
+
+                                        {/* ─── 7. SECCIÓN: CUADERNO Y APUNTES ─── */}
+                                        <View style={styles.sectionWrapper}>
+                                            <View style={styles.sectionHeader}>
+                                                <View style={styles.sectionHeaderLeft}>
+                                                    <View style={[styles.sectionIconBadge, { backgroundColor: 'rgba(59, 130, 246, 0.16)' }]}>
+                                                        <FileText size={15} color="#3B82F6" strokeWidth={2.3} />
+                                                    </View>
+                                                    <View>
+                                                        <Text style={[styles.sectionTitle, { color: colors.textPrimary }]}>
+                                                            Cuaderno de Apuntes
+                                                        </Text>
+                                                        <Text style={[styles.sectionSubtitle, { color: colors.textMuted }]}>
+                                                            Vincula una página de notas para esta clase o reunión
+                                                        </Text>
+                                                    </View>
+                                                </View>
+                                            </View>
+
+                                            <View
+                                                style={[
+                                                    styles.sectionCard,
+                                                    {
+                                                        backgroundColor: cardBgColor,
+                                                        borderColor: cardBorderColor,
+                                                        gap: 12,
+                                                    },
+                                                ]}
+                                            >
+                                                {/* Carpeta Vinculada */}
+                                                {linkedFolder ? (
+                                                    <View
+                                                        style={[
+                                                            styles.linkedNoteBox,
+                                                            {
+                                                                backgroundColor: controlBgColor,
+                                                                borderColor: controlBorderColor,
+                                                            },
+                                                        ]}
+                                                    >
+                                                        <View style={styles.linkedCardContent}>
+                                                            <View style={[styles.sectionIconBadge, { backgroundColor: `${linkedFolder.color || selectedColor}22` }]}>
+                                                                <FolderIconRenderer
+                                                                    name={linkedFolder.icon || 'folder'}
+                                                                    size={16}
+                                                                    color={linkedFolder.color || selectedColor}
+                                                                />
+                                                            </View>
+                                                            <View style={{ flex: 1 }}>
+                                                                <Text style={[styles.linkedNoteTitle, { color: colors.textPrimary }]} numberOfLines={1}>
+                                                                    {linkedFolder.name}
+                                                                </Text>
+                                                                <Text style={[styles.linkedNoteDate, { color: colors.textMuted }]}>
+                                                                    Carpeta vinculada al evento
+                                                                </Text>
+                                                            </View>
+                                                        </View>
+                                                        <View style={styles.linkedCardActions}>
+                                                            <TouchableOpacity
+                                                                onPress={() => setLinkedFolderId(null)}
+                                                                style={[styles.noteSmallPill, { backgroundColor: 'rgba(239, 68, 68, 0.12)' }]}
+                                                            >
+                                                                <Unlink size={14} color="#EF4444" />
+                                                            </TouchableOpacity>
+                                                        </View>
+                                                    </View>
+                                                ) : (
+                                                    <View style={styles.noteOptionsGrid}>
+                                                        <TouchableOpacity
+                                                            activeOpacity={0.75}
+                                                            onPress={handleCreateNewFolderForEvent}
+                                                            style={[
+                                                                styles.noteOptionTile,
+                                                                {
+                                                                    backgroundColor: `${selectedColor}12`,
+                                                                    borderColor: `${selectedColor}40`,
+                                                                },
+                                                            ]}
+                                                        >
+                                                            <View style={[styles.attachTileIcon, { backgroundColor: `${selectedColor}20` }]}>
+                                                                <FolderPlus size={17} color={selectedColor as any} strokeWidth={2.3} />
+                                                            </View>
+                                                            <Text style={[styles.noteTileTitle, { color: selectedColor }]}>
+                                                                Crear carpeta
+                                                            </Text>
+                                                            <Text style={[styles.noteTileSub, { color: colors.textMuted }]}>
+                                                                Cuaderno para todas las notas del evento
+                                                            </Text>
+                                                        </TouchableOpacity>
+
+                                                        <TouchableOpacity
+                                                            activeOpacity={0.75}
+                                                            onPress={() => setIsLinkFolderModalVisible(true)}
+                                                            style={[
+                                                                styles.noteOptionTile,
+                                                                {
+                                                                    backgroundColor: controlBgColor,
+                                                                    borderColor: controlBorderColor,
+                                                                },
+                                                            ]}
+                                                        >
+                                                            <View style={[styles.attachTileIcon, { backgroundColor: controlBgColor }]}>
+                                                                <FolderIcon size={16} color={colors.textPrimary as any} />
+                                                            </View>
+                                                            <Text style={[styles.noteTileTitle, { color: colors.textPrimary }]}>
+                                                                Vincular carpeta
+                                                            </Text>
+                                                            <Text style={[styles.noteTileSub, { color: colors.textMuted }]}>
+                                                                Usa una carpeta existente
+                                                            </Text>
+                                                        </TouchableOpacity>
+                                                    </View>
+                                                )}
+
+                                                {/* Nota Vinculada */}
+                                                {linkedNote ? (
+                                                    <View
+                                                        style={[
+                                                            styles.linkedNoteBox,
+                                                            {
+                                                                backgroundColor: controlBgColor,
+                                                                borderColor: controlBorderColor,
+                                                            },
+                                                        ]}
+                                                    >
+                                                        <View style={styles.linkedCardContent}>
+                                                            <View style={[styles.sectionIconBadge, { backgroundColor: 'rgba(59, 130, 246, 0.16)' }]}>
+                                                                <FileText size={16} color="#3B82F6" />
+                                                            </View>
+                                                            <View style={{ flex: 1 }}>
+                                                                <Text style={[styles.linkedNoteTitle, { color: colors.textPrimary }]} numberOfLines={1}>
+                                                                    {linkedNote.title || 'Sin título'}
+                                                                </Text>
+                                                                <Text style={[styles.linkedNoteDate, { color: colors.textMuted }]}>
+                                                                    Nota vinculada al evento
+                                                                </Text>
+                                                            </View>
+                                                        </View>
+                                                        <View style={styles.linkedCardActions}>
+                                                            <TouchableOpacity
+                                                                onPress={() => router.push({ pathname: '/notes/[id]', params: { id: linkedNote.id } })}
+                                                                style={[styles.noteSmallPill, { backgroundColor: `${accent.primary}18` }]}
+                                                            >
+                                                                <Text style={[styles.noteSmallPillText, { color: accent.primary }]}>Abrir</Text>
+                                                            </TouchableOpacity>
+                                                            <TouchableOpacity
+                                                                onPress={() => setLinkedNoteId(null)}
+                                                                style={[styles.noteSmallPill, { backgroundColor: 'rgba(239, 68, 68, 0.12)' }]}
+                                                            >
+                                                                <Unlink size={14} color="#EF4444" />
+                                                            </TouchableOpacity>
+                                                        </View>
+                                                    </View>
+                                                ) : (
+                                                    <View style={styles.noteOptionsGrid}>
+                                                        <TouchableOpacity
+                                                            activeOpacity={0.75}
+                                                            onPress={handleCreateNewNoteForEvent}
+                                                            style={[
+                                                                styles.noteOptionTile,
+                                                                {
+                                                                    backgroundColor: `${accent.primary}12`,
+                                                                    borderColor: `${accent.primary}40`,
+                                                                },
+                                                            ]}
+                                                        >
+                                                            <View style={[styles.attachTileIcon, { backgroundColor: `${accent.primary}20` }]}>
+                                                                <Plus size={17} color={accent.primary as any} strokeWidth={2.5} />
+                                                            </View>
+                                                            <Text style={[styles.noteTileTitle, { color: accent.primary }]}>
+                                                                Crear nueva nota
+                                                            </Text>
+                                                            <Text style={[styles.noteTileSub, { color: colors.textMuted }]}>
+                                                                Genera una hoja con el nombre del evento
+                                                            </Text>
+                                                        </TouchableOpacity>
+
+                                                        <TouchableOpacity
+                                                            activeOpacity={0.75}
+                                                            onPress={() => setIsLinkNoteModalVisible(true)}
+                                                            style={[
+                                                                styles.noteOptionTile,
+                                                                {
+                                                                    backgroundColor: controlBgColor,
+                                                                    borderColor: controlBorderColor,
+                                                                },
+                                                            ]}
+                                                        >
+                                                            <View style={[styles.attachTileIcon, { backgroundColor: controlBgColor }]}>
+                                                                <Link size={16} color={colors.textPrimary as any} />
+                                                            </View>
+                                                            <Text style={[styles.noteTileTitle, { color: colors.textPrimary }]}>
+                                                                Vincular nota
+                                                            </Text>
+                                                            <Text style={[styles.noteTileSub, { color: colors.textMuted }]}>
+                                                                Elige una nota de tu cuaderno
+                                                            </Text>
+                                                        </TouchableOpacity>
+                                                    </View>
+                                                )}
+                                            </View>
+                                        </View>
+                                    </View>
+                                )}
+                            </ScrollView>
+
+                            {/* Modal para Vincular Carpeta Existente */}
+                            <Modal
+                                visible={isLinkFolderModalVisible}
+                                transparent
+                                animationType="slide"
+                                onRequestClose={() => setIsLinkFolderModalVisible(false)}
+                            >
+                                <View style={styles.modalBackdrop}>
+                                    <TouchableOpacity
+                                        style={styles.backdropDismiss}
+                                        activeOpacity={1}
+                                        onPress={() => setIsLinkFolderModalVisible(false)}
+                                    />
+                                    <VeyraSurface
+                                        level={2}
+                                        radius="xl"
+                                        style={[styles.modalSheet, { paddingBottom: Math.max(insets.bottom, 16) + 16 }]}
+                                    >
+                                        <View style={styles.modalHeader}>
+                                            <View style={styles.rowIconLabel}>
+                                                <FolderIcon size={18} color={selectedColor} />
+                                                <Text style={[styles.modalTitle, { color: colors.textPrimary }]}>Vincular Carpeta</Text>
+                                            </View>
+                                            <TouchableOpacity onPress={() => setIsLinkFolderModalVisible(false)}>
+                                                <X size={20} color={colors.textSecondary as any} />
+                                            </TouchableOpacity>
+                                        </View>
+
+                                        <View style={[styles.searchBox, { backgroundColor: controlBgColor, borderColor: controlBorderColor, borderWidth: 1 }]}>
+                                            <Search size={16} color={colors.textMuted as any} />
+                                            <TextInput
+                                                placeholder="Buscar carpeta..."
+                                                placeholderTextColor={colors.textMuted}
+                                                value={folderSearchQuery}
+                                                onChangeText={setFolderSearchQuery}
+                                                style={[styles.searchTextInput, { color: colors.textPrimary }]}
+                                            />
+                                        </View>
+
+                                        <ScrollView style={{ maxHeight: 320 }} showsVerticalScrollIndicator={false}>
+                                            {filteredFolders.length === 0 ? (
+                                                <Text style={[styles.emptyModalText, { color: colors.textMuted }]}>
+                                                    No se encontraron carpetas.
+                                                </Text>
+                                            ) : (
+                                                filteredFolders.map(f => (
+                                                    <TouchableOpacity
+                                                        key={f.id}
+                                                        activeOpacity={0.7}
+                                                        onPress={() => {
+                                                            setLinkedFolderId(f.id);
+                                                            setIsLinkFolderModalVisible(false);
+                                                        }}
+                                                        style={[styles.noteRowItem, { borderBottomColor: colors.borderSubtle }]}
+                                                    >
+                                                        <FolderIconRenderer
+                                                            name={f.icon || 'folder'}
+                                                            size={16}
+                                                            color={f.color || selectedColor}
+                                                        />
+                                                        <Text style={[styles.noteRowText, { color: colors.textPrimary }]} numberOfLines={1}>
+                                                            {f.name}
+                                                        </Text>
+                                                        <ChevronRight size={15} color={colors.textMuted as any} />
+                                                    </TouchableOpacity>
+                                                ))
+                                            )}
+                                        </ScrollView>
+                                    </VeyraSurface>
+                                </View>
+                            </Modal>
+
+                            {/* Modal para Vincular Nota Existente */}
+                            <Modal
+                                visible={isLinkNoteModalVisible}
+                                transparent
+                                animationType="slide"
+                                onRequestClose={() => setIsLinkNoteModalVisible(false)}
+                            >
+                                <View style={styles.modalBackdrop}>
+                                    <TouchableOpacity
+                                        style={styles.backdropDismiss}
+                                        activeOpacity={1}
+                                        onPress={() => setIsLinkNoteModalVisible(false)}
+                                    />
+                                    <VeyraSurface
+                                        level={2}
+                                        radius="xl"
+                                        style={[styles.modalSheet, { paddingBottom: Math.max(insets.bottom, 16) + 16 }]}
+                                    >
+                                        <View style={styles.modalHeader}>
+                                            <View style={styles.rowIconLabel}>
+                                                <FileText size={18} color="#3B82F6" />
+                                                <Text style={[styles.modalTitle, { color: colors.textPrimary }]}>Vincular Nota</Text>
+                                            </View>
+                                            <TouchableOpacity onPress={() => setIsLinkNoteModalVisible(false)}>
+                                                <X size={20} color={colors.textSecondary as any} />
+                                            </TouchableOpacity>
+                                        </View>
+
+                                        <View style={[styles.searchBox, { backgroundColor: controlBgColor, borderColor: controlBorderColor, borderWidth: 1 }]}>
+                                            <Search size={16} color={colors.textMuted as any} />
+                                            <TextInput
+                                                placeholder="Buscar nota por título..."
+                                                placeholderTextColor={colors.textMuted}
+                                                value={noteSearchQuery}
+                                                onChangeText={setNoteSearchQuery}
+                                                style={[styles.searchTextInput, { color: colors.textPrimary }]}
+                                            />
+                                        </View>
+
+                                        <ScrollView style={{ maxHeight: 320 }} showsVerticalScrollIndicator={false}>
+                                            {filteredNotes.length === 0 ? (
+                                                <Text style={[styles.emptyModalText, { color: colors.textMuted }]}>
+                                                    No se encontraron notas.
+                                                </Text>
+                                            ) : (
+                                                filteredNotes.map(n => (
+                                                    <TouchableOpacity
+                                                        key={n.id}
+                                                        activeOpacity={0.7}
+                                                        onPress={() => {
+                                                            setLinkedNoteId(n.id);
+                                                            setIsLinkNoteModalVisible(false);
+                                                        }}
+                                                        style={[styles.noteRowItem, { borderBottomColor: colors.borderSubtle }]}
+                                                    >
+                                                        <FileText size={16} color="#3B82F6" />
+                                                        <Text style={[styles.noteRowText, { color: colors.textPrimary }]} numberOfLines={1}>
+                                                            {n.title || 'Sin título'}
+                                                        </Text>
+                                                        <ChevronRight size={15} color={colors.textMuted as any} />
+                                                    </TouchableOpacity>
+                                                ))
+                                            )}
+                                        </ScrollView>
+                                    </VeyraSurface>
+                                </View>
+                            </Modal>
+
+                            {/* Modal BottomSheet: Agregar Aviso Preventivo */}
+                            <Modal
+                                visible={isAddAvisoModalOpen}
+                                transparent
+                                animationType="slide"
+                                onRequestClose={() => setIsAddAvisoModalOpen(false)}
+                            >
+                                <View style={styles.modalBackdrop}>
+                                    <TouchableOpacity
+                                        style={styles.backdropDismiss}
+                                        activeOpacity={1}
+                                        onPress={() => setIsAddAvisoModalOpen(false)}
+                                    />
+                                    <VeyraSurface
+                                        level={2}
+                                        radius="xl"
+                                        style={[styles.modalSheet, { paddingBottom: Math.max(insets.bottom, 16) + 16 }]}
+                                    >
+                                        <View style={styles.modalHeader}>
+                                            <View style={styles.rowIconLabel}>
+                                                <Bell size={18} color={accent.primary as any} />
+                                                <Text style={[styles.modalTitle, { color: colors.textPrimary }]}>
+                                                    Agregar Aviso Preventivo
+                                                </Text>
+                                            </View>
+                                            <TouchableOpacity
+                                                onPress={() => setIsAddAvisoModalOpen(false)}
+                                                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                                            >
+                                                <X size={20} color={colors.textSecondary as any} />
+                                            </TouchableOpacity>
+                                        </View>
+
+                                        <ScrollView style={{ maxHeight: 360, marginTop: 6 }} showsVerticalScrollIndicator={false}>
+                                            {AVAILABLE_OFFSETS.map(item => {
+                                                const isAlreadyAdded = selectedOffsets.includes(item.value);
+                                                return (
+                                                    <TouchableOpacity
+                                                        key={item.value}
+                                                        activeOpacity={0.7}
+                                                        disabled={isAlreadyAdded}
+                                                        onPress={() => {
+                                                            handleAddOffset(item.value);
+                                                            setIsAddAvisoModalOpen(false);
+                                                        }}
+                                                        style={[
+                                                            styles.avisoOptionRow,
+                                                            {
+                                                                borderBottomColor: colors.borderSubtle,
+                                                                opacity: isAlreadyAdded ? 0.45 : 1,
+                                                            },
+                                                        ]}
+                                                    >
+                                                        <View style={styles.rowIconLabel}>
+                                                            <Bell
+                                                                size={15}
+                                                                color={isAlreadyAdded ? (colors.textMuted as any) : (accent.primary as any)}
+                                                            />
+                                                            <Text
+                                                                style={[
+                                                                    styles.avisoOptionLabel,
+                                                                    {
+                                                                        color: isAlreadyAdded ? colors.textMuted : colors.textPrimary,
+                                                                        fontWeight: isAlreadyAdded ? '400' : '600',
+                                                                    },
+                                                                ]}
+                                                            >
+                                                                {item.label}
+                                                            </Text>
+                                                        </View>
+                                                        {isAlreadyAdded ? (
+                                                            <Text style={[styles.alreadyAddedBadge, { color: colors.textMuted }]}>
+                                                                Agregado
+                                                            </Text>
+                                                        ) : (
+                                                            <Plus size={16} color={accent.primary as any} strokeWidth={2.5} />
+                                                        )}
+                                                    </TouchableOpacity>
+                                                );
+                                            })}
+                                        </ScrollView>
+                                    </VeyraSurface>
+                                </View>
+                            </Modal>
+
+                            {/* Modales de Fecha y Hora Personalizados */}
+                            <DatePickerModal
+                                visible={showDatePicker}
+                                value={eventDate}
+                                title="Fecha del Evento"
+                                onClose={() => setShowDatePicker(false)}
+                                onConfirm={(selectedDate) => {
+                                    setEventDate(selectedDate);
+                                }}
+                            />
+
+                            <TimePickerModal
+                                visible={showStartTimePicker}
+                                value={startTime}
+                                title="Hora de Inicio"
+                                onClose={() => setShowStartTimePicker(false)}
+                                onConfirm={(selectedTime) => {
+                                    setStartTime(selectedTime);
+                                    if (endTime.getTime() <= selectedTime.getTime()) {
+                                        const nextHour = new Date(selectedTime);
+                                        nextHour.setHours(nextHour.getHours() + 1);
+                                        setEndTime(nextHour);
+                                    }
+                                }}
+                            />
+
+                            <TimePickerModal
+                                visible={showEndTimePicker}
+                                value={endTime}
+                                title="Hora de Fin"
+                                onClose={() => setShowEndTimePicker(false)}
+                                onConfirm={(selectedTime) => {
+                                    setEndTime(selectedTime);
+                                }}
+                            />
+
+                            <RecurringDeleteModal
+                                visible={isRecurringDeleteModalVisible}
+                                eventTitle={title || existingEvent?.title}
+                                occurrenceDate={eventDate}
+                                onClose={() => setIsRecurringDeleteModalVisible(false)}
+                                onConfirm={handleConfirmRecurringDelete}
+                            />
+
+                            {isEditing && existingEvent && (
+                                <ShareModal
+                                    visible={isShareModalVisible}
+                                    onClose={() => setIsShareModalVisible(false)}
+                                    targetType="event"
+                                    targetId={existingEvent.id}
+                                    targetTitle={title.trim() || existingEvent.title || 'Evento'}
+                                    isOwner={existingEvent.is_shared !== 1}
+                                />
+                            )}
+                        </Reanimated.View>
+                    </View>
+                </Reanimated.View>
             </Reanimated.View>
-
-            {/* Vista previa de la barra inferior (se fusiona hacia la barra inferior al colapsar) */}
-            <Reanimated.View
-                pointerEvents="none"
-                style={[
-                    styles.morphBottomBar,
-                    {
-                        height: barHeight,
-                        paddingBottom: bottomPadding,
-                        backgroundColor: barBgColor,
-                    },
-                    morphPreviewAnimatedStyle,
-                ]}
-            >
-                <View style={styles.morphBarContent}>
-                    {/* 1. Tab Recordatorios */}
-                    <View style={styles.morphTabButton}>
-                        <View style={styles.morphIconContainer}>
-                            <Bell size={22} color={colors.textMuted as any} strokeWidth={2} />
-                        </View>
-                        <Text style={[styles.morphTabLabel, { color: colors.textMuted }]}>
-                            {language === 'es' ? 'Recordatorios' : 'Reminders'}
-                        </Text>
-                    </View>
-
-                    {/* 2. FAB Central (+) */}
-                    <View style={styles.morphFabSlot}>
-                        <View style={[styles.morphFabButton, { backgroundColor: accent.primary }]}>
-                            <Plus size={24} color="#FFFFFF" strokeWidth={2.5} />
-                        </View>
-                    </View>
-
-                    {/* 3. Tab Notas */}
-                    <View style={styles.morphTabButton}>
-                        <View style={styles.morphIconContainer}>
-                            <Notebook size={22} color={colors.textMuted as any} strokeWidth={2} />
-                        </View>
-                        <Text style={[styles.morphTabLabel, { color: colors.textMuted }]}>
-                            {language === 'es' ? 'Notas' : 'Notes'}
-                        </Text>
-                    </View>
-                </View>
-            </Reanimated.View>
-        </Reanimated.View>
-    </View>
-);
+        </View>
+    );
 }
 
 const styles = StyleSheet.create({
@@ -1329,28 +2296,27 @@ const styles = StyleSheet.create({
         top: 0,
         left: 0,
         right: 0,
-        borderTopLeftRadius: 24,
-        borderTopRightRadius: 24,
+        justifyContent: 'center',
+        zIndex: 20,
     },
     morphBarContent: {
-        height: 58,
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-around',
-        paddingHorizontal: 24,
+        height: 58,
+        paddingHorizontal: 12,
     },
     morphTabButton: {
-        minWidth: 80,
+        flex: 1,
         alignItems: 'center',
         justifyContent: 'center',
         gap: 3,
-        paddingVertical: 4,
     },
     morphIconContainer: {
-        position: 'relative',
+        width: 36,
+        height: 28,
         alignItems: 'center',
         justifyContent: 'center',
-        height: 24,
     },
     morphTabLabel: {
         fontSize: 11,
@@ -1368,11 +2334,6 @@ const styles = StyleSheet.create({
         borderRadius: 26,
         alignItems: 'center',
         justifyContent: 'center',
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.25,
-        shadowRadius: 8,
-        elevation: 6,
     },
     header: {
         flexDirection: 'row',
@@ -1381,6 +2342,10 @@ const styles = StyleSheet.create({
         paddingHorizontal: 16,
         paddingVertical: 10,
         borderBottomWidth: 1,
+    },
+    headerCenter: {
+        flex: 1,
+        paddingHorizontal: 8,
     },
     headerTitle: {
         fontSize: 17,
@@ -1396,7 +2361,7 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         gap: 5,
         paddingHorizontal: 14,
-        paddingVertical: 7,
+        paddingVertical: 8,
         borderRadius: 20,
     },
     headerSaveText: {
@@ -1408,57 +2373,146 @@ const styles = StyleSheet.create({
         flex: 1,
     },
     scrollContent: {
-        padding: 16,
-        gap: 14,
+        paddingHorizontal: 16,
+        paddingTop: 16,
+        gap: 20,
     },
-    section: {
-        padding: 16,
+    sectionWrapper: {
+        gap: 10,
     },
-    titleInput: {
-        fontSize: 18,
-        fontWeight: '700',
-        paddingVertical: 4,
+    sectionHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        paddingHorizontal: 2,
     },
-    descInput: {
-        fontSize: 14,
-        marginTop: 8,
-        minHeight: 40,
-        textAlignVertical: 'top',
+    sectionHeaderLeft: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 10,
+        flex: 1,
+    },
+    sectionIconBadge: {
+        width: 32,
+        height: 32,
+        borderRadius: 10,
+        alignItems: 'center',
+        justifyContent: 'center',
     },
     sectionTitle: {
-        fontSize: 11,
+        fontSize: 15,
         fontWeight: '700',
-        letterSpacing: 0.8,
-        marginBottom: 10,
+        letterSpacing: -0.2,
     },
-    sectionTitleNoMargin: {
-        fontSize: 11,
+    sectionSubtitle: {
+        fontSize: 12,
+        marginTop: 1,
+    },
+    counterPill: {
+        paddingHorizontal: 9,
+        paddingVertical: 4,
+        borderRadius: 10,
+    },
+    counterPillText: {
+        fontSize: 12,
         fontWeight: '700',
-        letterSpacing: 0.8,
     },
-    sectionHeaderRow: {
+    sectionCard: {
+        borderRadius: 16,
+        borderWidth: 1,
+        padding: 14,
+        gap: 12,
+    },
+    heroTopMeta: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+    },
+    typePill: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 5,
+        paddingHorizontal: 8,
+        paddingVertical: 4,
+        borderRadius: 8,
+    },
+    typePillText: {
+        fontSize: 10.5,
+        fontWeight: '800',
+        letterSpacing: 0.5,
+    },
+    statusDot: {
+        width: 6,
+        height: 6,
+        borderRadius: 3,
+    },
+    titleInput: {
+        fontSize: 21,
+        fontWeight: '700',
+        paddingVertical: 4,
+        paddingHorizontal: 0,
+    },
+    notesFieldWrapper: {
+        flexDirection: 'row',
+        alignItems: 'flex-start',
+        gap: 8,
+    },
+    descInput: {
+        flex: 1,
+        fontSize: 14.5,
+        lineHeight: 21,
+        minHeight: 46,
+        paddingVertical: 0,
+        paddingHorizontal: 0,
+        textAlignVertical: 'top',
+    },
+    cardInternalDivider: {
+        height: 1,
+        width: '100%',
+    },
+    microLabel: {
+        fontSize: 10.5,
+        fontWeight: '700',
+        letterSpacing: 0.7,
+        marginBottom: 6,
+    },
+    interactiveRow: {
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
-    },
-    rowSelector: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        paddingVertical: 12,
-        borderBottomWidth: 1,
+        paddingVertical: 2,
     },
     rowIconLabel: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
+        gap: 10,
+    },
+    rowMiniIcon: {
+        width: 34,
+        height: 34,
+        borderRadius: 10,
+        alignItems: 'center',
+        justifyContent: 'center',
     },
     rowLabel: {
         fontSize: 14,
         fontWeight: '600',
     },
-    rowValue: {
-        fontSize: 14,
+    rowHint: {
+        fontSize: 11.5,
+        marginTop: 1,
+    },
+    valuePill: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+        paddingHorizontal: 11,
+        paddingVertical: 7,
+        borderRadius: 10,
+        borderWidth: 1,
+    },
+    valuePillText: {
+        fontSize: 13,
         fontWeight: '700',
     },
     switchBtn: {
@@ -1472,96 +2526,200 @@ const styles = StyleSheet.create({
         height: 20,
         borderRadius: 10,
     },
-    daysContainer: {
-        marginTop: 12,
+    timeRangeGrid: {
+        flexDirection: 'row',
+        gap: 10,
     },
-    helperText: {
-        fontSize: 12,
-        marginBottom: 8,
+    timeRangeBox: {
+        flex: 1,
+        paddingVertical: 10,
+        paddingHorizontal: 12,
+        borderRadius: 12,
+        borderWidth: 1,
+        gap: 4,
+    },
+    timeRangeHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 5,
+    },
+    timeRangeLabel: {
+        fontSize: 10.5,
+        fontWeight: '700',
+        letterSpacing: 0.5,
+    },
+    timeRangeValue: {
+        fontSize: 18,
+        fontWeight: '800',
+        letterSpacing: -0.3,
+    },
+    recurrenceGrid: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        gap: 8,
+    },
+    recurrenceOptionPill: {
+        paddingVertical: 8,
+        paddingHorizontal: 12,
+        borderRadius: 10,
+        borderWidth: 1,
+    },
+    recurrenceOptionText: {
+        fontSize: 13,
+    },
+    daysSelectorBlock: {
+        marginTop: 2,
     },
     daysRow: {
         flexDirection: 'row',
         justifyContent: 'space-between',
-        marginTop: 4,
+        gap: 6,
     },
-    dayCircle: {
-        width: 38,
-        height: 38,
-        borderRadius: 19,
+    dayButton: {
+        flex: 1,
+        paddingVertical: 8,
+        borderRadius: 10,
         alignItems: 'center',
         justifyContent: 'center',
         borderWidth: 1,
+        gap: 2,
     },
-    dayText: {
+    dayLetter: {
         fontSize: 13,
     },
-    inputField: {
-        borderWidth: 1,
-        borderRadius: 8,
-        paddingHorizontal: 12,
-        paddingVertical: 10,
-        marginTop: 10,
-        fontSize: 14,
-    },
-    colorPaletteRow: {
-        flexDirection: 'row',
-        gap: 12,
-        marginTop: 12,
-        paddingVertical: 4,
-    },
-    colorBall: {
-        width: 36,
-        height: 36,
-        borderRadius: 18,
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    badgeText: {
-        fontSize: 12,
+    dayShortName: {
+        fontSize: 9.5,
         fontWeight: '600',
     },
-    emptyAvisoBox: {
-        paddingVertical: 14,
+    flatBoxInputRow: {
+        flexDirection: 'row',
         alignItems: 'center',
-        justifyContent: 'center',
-    },
-    emptyAvisoText: {
-        fontSize: 13,
-    },
-    avisosStackContainer: {
         gap: 8,
-        marginTop: 10,
+        paddingLeft: 12,
+        paddingRight: 8,
+        paddingVertical: 6,
+        borderRadius: 12,
+        borderWidth: 1,
     },
-    avisoStackedRow: {
+    flatBoxTextInput: {
+        flex: 1,
+        fontSize: 13.5,
+        paddingVertical: 4,
+        paddingHorizontal: 0,
+    },
+    inlineAddBtn: {
+        paddingHorizontal: 12,
+        paddingVertical: 6,
+        borderRadius: 8,
+    },
+    inlineAddBtnText: {
+        fontSize: 12,
+        fontWeight: '700',
+    },
+    colorHeaderRow: {
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
-        paddingHorizontal: 12,
-        paddingVertical: 10,
-        borderRadius: 10,
-        borderWidth: 1,
+        marginBottom: 8,
     },
-    avisoStackedLeft: {
+    selectedColorLabel: {
+        fontSize: 12,
+        fontWeight: '700',
+    },
+    colorPaletteRow: {
+        flexDirection: 'row',
+        gap: 8,
+        paddingVertical: 2,
+    },
+    colorSwatchItem: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 10,
-        flex: 1,
+        gap: 7,
+        paddingVertical: 6,
+        paddingHorizontal: 10,
+        borderRadius: 12,
+        borderWidth: 1,
     },
-    avisoStackedIcon: {
-        width: 28,
-        height: 28,
-        borderRadius: 14,
+    colorBall: {
+        width: 22,
+        height: 22,
+        borderRadius: 11,
         alignItems: 'center',
         justifyContent: 'center',
     },
-    avisoStackedText: {
-        fontSize: 13,
-        fontWeight: '600',
+    colorSwatchName: {
+        fontSize: 12.5,
     },
-    avisoStackedDelete: {
-        padding: 4,
+    priorityCardsGrid: {
+        flexDirection: 'row',
+        gap: 8,
     },
-    addAvisoBtn: {
+    priorityOptionCard: {
+        flex: 1,
+        padding: 11,
+        borderRadius: 12,
+        gap: 4,
+    },
+    priorityCardTop: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        marginBottom: 4,
+    },
+    priorityIconCircle: {
+        width: 28,
+        height: 28,
+        borderRadius: 8,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    priorityCheckDot: {
+        width: 18,
+        height: 18,
+        borderRadius: 9,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    priorityOptionTitle: {
+        fontSize: 13.5,
+    },
+    priorityOptionSub: {
+        fontSize: 11,
+    },
+    priorityInfoBanner: {
+        paddingVertical: 10,
+        paddingHorizontal: 12,
+        borderRadius: 10,
+        borderWidth: 1,
+        borderLeftWidth: 3.5,
+    },
+    priorityInfoText: {
+        fontSize: 12.5,
+        lineHeight: 18,
+    },
+    avisosList: {
+        gap: 6,
+    },
+    avisoItemRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        paddingVertical: 10,
+        paddingHorizontal: 12,
+        borderRadius: 10,
+        borderWidth: 1,
+    },
+    avisoLeft: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        flex: 1,
+    },
+    avisoText: {
+        fontSize: 13.5,
+        fontWeight: '500',
+    },
+    addFullBtn: {
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
@@ -1570,12 +2728,122 @@ const styles = StyleSheet.create({
         paddingHorizontal: 14,
         borderRadius: 10,
         borderWidth: 1,
-        borderStyle: 'dashed',
-        marginTop: 10,
     },
-    addAvisoBtnText: {
+    addFullBtnText: {
         fontSize: 13,
         fontWeight: '700',
+    },
+    emptyHintText: {
+        fontSize: 12.5,
+        textAlign: 'center',
+        paddingVertical: 4,
+    },
+    activeTagsBlock: {
+        gap: 2,
+    },
+    tagsContainer: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        gap: 8,
+    },
+    tagBadgeActive: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingHorizontal: 10,
+        paddingVertical: 6,
+        borderRadius: 10,
+        borderWidth: 1,
+        gap: 6,
+    },
+    tagBadgeText: {
+        fontSize: 12.5,
+    },
+    tagRemoveBtn: {
+        padding: 2,
+    },
+    suggestedTagsBlock: {
+        gap: 2,
+    },
+    tagChipsWrap: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        gap: 8,
+    },
+    tagChipPreset: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingHorizontal: 11,
+        paddingVertical: 6,
+        borderRadius: 10,
+        borderWidth: 1,
+    },
+    tagChipPresetText: {
+        fontSize: 12.5,
+    },
+    linkedNoteBox: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        padding: 12,
+        borderRadius: 12,
+        borderWidth: 1,
+    },
+    linkedCardContent: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 10,
+        flex: 1,
+    },
+    linkedNoteTitle: {
+        fontSize: 14,
+        fontWeight: '700',
+    },
+    linkedNoteDate: {
+        fontSize: 11.5,
+        marginTop: 2,
+    },
+    linkedCardActions: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+    },
+    noteSmallPill: {
+        paddingHorizontal: 10,
+        paddingVertical: 6,
+        borderRadius: 8,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    noteSmallPillText: {
+        fontSize: 12.5,
+        fontWeight: '700',
+    },
+    noteOptionsGrid: {
+        flexDirection: 'row',
+        gap: 10,
+    },
+    noteOptionTile: {
+        flex: 1,
+        padding: 12,
+        borderRadius: 12,
+        borderWidth: 1,
+        gap: 4,
+    },
+    attachTileIcon: {
+        width: 34,
+        height: 34,
+        borderRadius: 10,
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginBottom: 2,
+    },
+    noteTileTitle: {
+        fontSize: 13.5,
+        fontWeight: '700',
+    },
+    noteTileSub: {
+        fontSize: 11.5,
+        lineHeight: 15,
     },
     avisoOptionRow: {
         flexDirection: 'row',
@@ -1591,78 +2859,18 @@ const styles = StyleSheet.create({
         fontSize: 12,
         fontWeight: '500',
     },
-    linkedCard: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        padding: 12,
-        borderRadius: 10,
-        borderWidth: 1,
-        marginTop: 10,
-    },
-    linkedCardContent: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 8,
-        flex: 1,
-    },
-    linkedNoteTitle: {
-        fontSize: 13,
-        fontWeight: '700',
-    },
-    linkedNoteDate: {
-        fontSize: 11,
-        marginTop: 2,
-    },
-    linkedCardActions: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 6,
-    },
-    smallBtn: {
-        paddingHorizontal: 10,
-        paddingVertical: 6,
-        borderRadius: 6,
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    smallBtnText: {
-        fontSize: 12,
-        fontWeight: '700',
-    },
-    noNoteContainer: {
-        marginTop: 8,
-    },
-    noNoteBtnRow: {
-        flexDirection: 'row',
-        gap: 10,
-        marginTop: 6,
-    },
-    noteActionBtn: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        paddingHorizontal: 12,
-        paddingVertical: 8,
-        borderRadius: 8,
-        gap: 6,
-    },
-    noteActionBtnText: {
-        color: '#FFFFFF',
-        fontSize: 12,
-        fontWeight: '700',
-    },
     modalBackdrop: {
         flex: 1,
-        backgroundColor: 'rgba(0,0,0,0.5)',
+        backgroundColor: 'rgba(0,0,0,0.55)',
         justifyContent: 'flex-end',
     },
     backdropDismiss: {
         flex: 1,
     },
     modalSheet: {
-        borderTopLeftRadius: 20,
-        borderTopRightRadius: 20,
-        padding: 16,
+        borderTopLeftRadius: 24,
+        borderTopRightRadius: 24,
+        padding: 20,
     },
     modalHeader: {
         flexDirection: 'row',
@@ -1671,15 +2879,15 @@ const styles = StyleSheet.create({
         marginBottom: 12,
     },
     modalTitle: {
-        fontSize: 16,
+        fontSize: 17,
         fontWeight: '700',
     },
     searchBox: {
         flexDirection: 'row',
         alignItems: 'center',
         paddingHorizontal: 12,
-        paddingVertical: 8,
-        borderRadius: 8,
+        paddingVertical: 9,
+        borderRadius: 12,
         gap: 8,
         marginBottom: 12,
     },
@@ -1705,61 +2913,65 @@ const styles = StyleSheet.create({
         paddingVertical: 24,
         fontSize: 13,
     },
-    tagsContainer: {
-        flexDirection: 'row',
-        flexWrap: 'wrap',
-        gap: 8,
-        marginBottom: 12,
+    descInputStandalone: {
+        fontSize: 14,
+        lineHeight: 21,
+        minHeight: 70,
+        textAlignVertical: 'top',
+        padding: 4,
     },
-    tagBadgeActive: {
+    advancedAccordionHeader: {
         flexDirection: 'row',
         alignItems: 'center',
-        paddingHorizontal: 10,
-        paddingVertical: 5,
+        justifyContent: 'space-between',
+        paddingHorizontal: 16,
+        paddingVertical: 14,
         borderRadius: 16,
         borderWidth: 1,
-        gap: 6,
+        marginTop: 6,
     },
-    tagBadgeText: {
-        fontSize: 13,
-    },
-    tagRemoveBtn: {
-        padding: 2,
-    },
-    tagInputRow: {
+    advancedAccordionLeft: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
-        marginBottom: 12,
-    },
-    tagInputField: {
+        gap: 12,
         flex: 1,
-        borderWidth: 1,
-        borderRadius: 10,
-        paddingHorizontal: 12,
-        paddingVertical: 8,
-        fontSize: 14,
     },
-    tagAddBtn: {
+    advancedIconBadge: {
         width: 36,
         height: 36,
         borderRadius: 10,
         alignItems: 'center',
         justifyContent: 'center',
     },
-    tagChipsRow: {
-        gap: 8,
-        paddingVertical: 2,
+    advancedTitle: {
+        fontSize: 15,
+        fontWeight: '700',
+        letterSpacing: -0.2,
     },
-    tagChipPreset: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        paddingHorizontal: 12,
-        paddingVertical: 6,
-        borderRadius: 14,
+    advancedSubtitle: {
+        fontSize: 12,
+        marginTop: 2,
+    },
+    advancedCountBadge: {
+        paddingHorizontal: 7,
+        paddingVertical: 2,
+        borderRadius: 10,
         borderWidth: 1,
     },
-    tagChipPresetText: {
-        fontSize: 12,
+    advancedCountText: {
+        fontSize: 11,
+        fontWeight: '700',
+    },
+    advancedChevronCircle: {
+        width: 28,
+        height: 28,
+        borderRadius: 14,
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginLeft: 8,
+    },
+    advancedContentBlock: {
+        gap: 16,
+        marginTop: 4,
     },
 });

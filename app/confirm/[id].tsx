@@ -260,6 +260,22 @@ export default function ConfirmScreen() {
 
         async function startSound() {
             try {
+                // 1. Intentar reproducir prioritariamente en el canal nativo STREAM_ALARM.
+                // Esto asegura que la alarma suene al volumen de alarmas del sistema
+                // aunque el volumen multimedia esté en 0 o el teléfono en silencio/DND.
+                if (VeyraAlarm.isAvailable()) {
+                    const started = await VeyraAlarm.startAlarmSound(
+                        soundId,
+                        isCritical || isStrict,
+                        isCritical || isStrict
+                    );
+                    if (started && !isCancelled) {
+                        setIsMuted(false);
+                        return;
+                    }
+                }
+
+                // 2. Fallback con expo-audio (iOS / Web / Entornos sin módulo nativo)
                 await setAudioModeAsync({
                     playsInSilentMode: true,
                     interruptionMode: 'mixWithOthers',
@@ -287,6 +303,7 @@ export default function ConfirmScreen() {
             try {
                 Vibration.cancel();
             } catch (_) {}
+            VeyraAlarm.stopAlarmSound().catch(() => {});
             if (activePlayer) {
                 try {
                     activePlayer.pause();
@@ -301,6 +318,7 @@ export default function ConfirmScreen() {
         try {
             Vibration.cancel();
         } catch (_) {}
+        await VeyraAlarm.stopAlarmSound().catch(() => {});
         if (playerRef.current) {
             try {
                 playerRef.current.pause();
@@ -602,37 +620,6 @@ export default function ConfirmScreen() {
                             </Text>
                         </View>
                     )}
-
-                    {/* Botón Silenciar Alarma acústica */}
-                    <TouchableOpacity
-                        onPress={isMuted ? undefined : stopAlarmSound}
-                        activeOpacity={0.7}
-                        style={[
-                            styles.muteBtn,
-                            {
-                                backgroundColor: isMuted
-                                    ? (isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)')
-                                    : `${themeColor}1E`,
-                                borderColor: isMuted ? colors.borderSubtle : `${themeColor}60`,
-                            },
-                        ]}
-                    >
-                        {isMuted ? (
-                            <>
-                                <VolumeX size={15} color={colors.textMuted} />
-                                <Text style={[styles.muteBtnText, { color: colors.textMuted }]}>
-                                    {language === 'es' ? 'Alarma silenciada' : 'Alarm silenced'}
-                                </Text>
-                            </>
-                        ) : (
-                            <>
-                                <Volume2 size={16} color={themeColor} />
-                                <Text style={[styles.muteBtnText, { color: themeColor, fontWeight: '700' }]}>
-                                    {language === 'es' ? 'Silenciar sonido' : 'Silence sound'}
-                                </Text>
-                            </>
-                        )}
-                    </TouchableOpacity>
                 </View>
 
                 {/* ─── 3. TÍTULO Y DESCRIPCIÓN ─── */}
@@ -643,7 +630,7 @@ export default function ConfirmScreen() {
 
                     {plainDescription ? (
                         <VeyraSurface level={1} radius="md" style={styles.descriptionCard}>
-                            <Text style={[styles.descriptionText, { color: colors.textSecondary }]}>
+                            <Text style={[styles.descriptionText, { color: colors.textPrimary }]}>
                                 {plainDescription}
                             </Text>
                         </VeyraSurface>
@@ -662,7 +649,7 @@ export default function ConfirmScreen() {
                             </Text>
                         </View>
 
-                        <View style={[styles.progressTrack, { backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)' }]}>
+                        <View style={[styles.progressTrack, { backgroundColor: colors.borderSubtle }]}>
                             <View
                                 style={[
                                     styles.progressFill,
@@ -751,15 +738,18 @@ export default function ConfirmScreen() {
                                         style={[
                                             styles.fileRow,
                                             {
-                                                backgroundColor: isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.03)',
+                                                backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)',
                                                 borderColor: colors.borderSubtle,
                                             },
                                         ]}
                                     >
+                                        <View style={[styles.fileIconContainer, { backgroundColor: `${themeColor}18` }]}>
+                                            <Paperclip size={18} color={themeColor} />
+                                        </View>
                                         <Text style={[styles.fileName, { color: colors.textPrimary }]} numberOfLines={1}>
                                             {file.name}
                                         </Text>
-                                        <ChevronRight size={14} color={colors.textMuted} />
+                                        <ChevronRight size={16} color={colors.textSecondary} />
                                     </TouchableOpacity>
                                 ))}
                             </View>
@@ -814,8 +804,8 @@ export default function ConfirmScreen() {
             >
                 {/* Snooze Options Bar */}
                 <View style={styles.snoozeBar}>
-                    <Text style={[styles.snoozeLabel, { color: colors.textMuted }]}>
-                        {language === 'es' ? 'Posponer:' : 'Snooze:'}
+                    <Text style={[styles.snoozeLabel, { color: colors.textSecondary }]}>
+                        {language === 'es' ? 'Posponer alarma:' : 'Snooze alarm:'}
                     </Text>
                     <View style={styles.snoozePillsRow}>
                         {SNOOZE_OPTIONS.map(mins => (
@@ -826,12 +816,12 @@ export default function ConfirmScreen() {
                                 style={[
                                     styles.snoozeChip,
                                     {
-                                        backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.05)',
+                                        backgroundColor: colors.borderSubtle,
                                         borderColor: colors.borderSubtle,
                                     },
                                 ]}
                             >
-                                <Clock size={11} color={colors.textSecondary} />
+                                <Clock size={14} color={themeColor} />
                                 <Text style={[styles.snoozeChipText, { color: colors.textPrimary }]}>
                                     +{mins}m
                                 </Text>
@@ -912,19 +902,20 @@ const styles = StyleSheet.create({
     },
     clockHeader: {
         alignItems: 'center',
-        paddingVertical: 6,
+        paddingVertical: 10,
     },
     clockTimeText: {
-        fontSize: 54,
+        fontSize: 78,
         fontWeight: '900',
-        letterSpacing: -1.5,
-        lineHeight: 60,
+        letterSpacing: -2.5,
+        lineHeight: 82,
     },
     clockDateText: {
-        fontSize: 13.5,
-        fontWeight: '600',
+        fontSize: 15,
+        fontWeight: '700',
         textTransform: 'capitalize',
-        marginTop: 2,
+        marginTop: 4,
+        letterSpacing: 0.2,
     },
     heroSection: {
         alignItems: 'center',
@@ -982,37 +973,26 @@ const styles = StyleSheet.create({
         fontSize: 11,
         fontWeight: '700',
     },
-    muteBtn: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 7,
-        paddingHorizontal: 16,
-        paddingVertical: 8,
-        borderRadius: 20,
-        borderWidth: 1,
-        marginTop: 4,
-    },
-    muteBtnText: {
-        fontSize: 12.5,
-    },
     titleSection: {
-        gap: 10,
+        gap: 12,
     },
     title: {
-        fontSize: 24,
-        fontWeight: '800',
+        fontSize: 28,
+        fontWeight: '900',
         textAlign: 'center',
-        letterSpacing: -0.4,
-        lineHeight: 30,
+        letterSpacing: -0.5,
+        lineHeight: 36,
     },
     descriptionCard: {
-        padding: 14,
-        borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.06)',
+        padding: 18,
+        borderRadius: 18,
+        borderWidth: 1.5,
+        borderColor: 'rgba(255,255,255,0.12)',
     },
     descriptionText: {
-        fontSize: 14,
-        lineHeight: 22,
+        fontSize: 16,
+        lineHeight: 26,
+        fontWeight: '500',
     },
     subtasksCard: {
         padding: 14,
@@ -1072,41 +1052,51 @@ const styles = StyleSheet.create({
         gap: 7,
     },
     attachmentsCard: {
-        padding: 14,
-        gap: 12,
-        borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.06)',
+        padding: 18,
+        gap: 14,
+        borderRadius: 18,
+        borderWidth: 1.5,
+        borderColor: 'rgba(255,255,255,0.12)',
     },
     imageScroll: {
         flexDirection: 'row',
-        gap: 10,
+        gap: 12,
+        paddingVertical: 2,
     },
     imageWrapper: {
-        width: 76,
-        height: 76,
-        borderRadius: 12,
+        width: 104,
+        height: 104,
+        borderRadius: 16,
         overflow: 'hidden',
-        borderWidth: 1,
+        borderWidth: 1.5,
     },
     imageThumb: {
         width: '100%',
         height: '100%',
     },
     filesList: {
-        gap: 6,
+        gap: 8,
     },
     fileRow: {
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
-        paddingHorizontal: 12,
-        paddingVertical: 10,
+        paddingHorizontal: 16,
+        paddingVertical: 14,
+        borderRadius: 16,
+        borderWidth: 1.5,
+    },
+    fileIconContainer: {
+        width: 38,
+        height: 38,
         borderRadius: 10,
-        borderWidth: 1,
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginRight: 12,
     },
     fileName: {
-        fontSize: 13,
-        fontWeight: '600',
+        fontSize: 15,
+        fontWeight: '700',
         flex: 1,
         marginRight: 8,
     },
@@ -1136,35 +1126,37 @@ const styles = StyleSheet.create({
     },
     fixedFooter: {
         paddingHorizontal: 20,
-        paddingTop: 10,
+        paddingTop: 12,
         borderTopWidth: StyleSheet.hairlineWidth,
-        gap: 12,
+        gap: 14,
     },
     snoozeBar: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
+        gap: 8,
     },
     snoozeLabel: {
-        fontSize: 12,
-        fontWeight: '600',
+        fontSize: 13,
+        fontWeight: '700',
+        letterSpacing: 0.2,
     },
     snoozePillsRow: {
         flexDirection: 'row',
-        gap: 6,
+        gap: 8,
+        width: '100%',
     },
     snoozeChip: {
+        flex: 1,
+        height: 48,
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 4,
-        paddingHorizontal: 10,
-        paddingVertical: 5,
-        borderRadius: 12,
-        borderWidth: 1,
+        justifyContent: 'center',
+        gap: 6,
+        paddingHorizontal: 6,
+        borderRadius: 16,
+        borderWidth: 1.5,
     },
     snoozeChipText: {
-        fontSize: 11.5,
-        fontWeight: '700',
+        fontSize: 14.5,
+        fontWeight: '800',
     },
     dismissBtn: {
         alignItems: 'center',

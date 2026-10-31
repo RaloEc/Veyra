@@ -4,6 +4,7 @@ import { AIActionProposal, ReminderIntent, EventIntent, NoteIntent } from '../li
 import { dispatchToolCall } from '../lib/ai/tools';
 import { AIError } from '../lib/ai/types';
 import { detectIsEditIntent } from '../lib/ai/utils/intentDetector';
+import { looksLikeBirthday } from '../utils/birthdayDetector';
 
 export interface UseAIQuickAddReturn {
   isLoading: boolean;
@@ -118,8 +119,23 @@ export function useAIQuickAdd(): UseAIQuickAddReturn {
     setSuccessMessage(null);
 
     try {
-      const result = await aiService.parseQuickAdd(text);
+      let result = await aiService.parseQuickAdd(text);
       if (currentRequestIdRef.current !== reqId) return;
+
+      // Si detecta cumpleaños/aniversario y hay fecha, proponer Evento de todo el día anual
+      if (result.action === 'create_reminder' && result.data && (looksLikeBirthday(result.data.title) || looksLikeBirthday(text))) {
+        result = {
+          action: 'create_event',
+          data: {
+            title: result.data.title,
+            startDate: result.data.date,
+            endDate: result.data.date,
+            isAllDay: true,
+            recurrence: 'yearly',
+            description: result.data.description,
+          } as any,
+        };
+      }
       if (result.action === 'unknown') {
         setError(result.reason || 'No pudimos interpretar una acción clara. Intenta reformularlo.');
         setProposal(null);

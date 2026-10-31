@@ -7,6 +7,7 @@ import {
     StyleSheet,
     ScrollView,
     Dimensions,
+    Alert,
 } from 'react-native';
 import { X, FolderPlus, Inbox, Check, ChevronRight, ChevronLeft, CornerDownRight, Folder as FolderIcon } from '@tamagui/lucide-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -21,9 +22,11 @@ interface MoveToFolderModalProps {
     onClose: () => void;
     folders: Folder[];
     currentFolderId?: string | null;
-    noteCount: number;
+    noteCount?: number;
     onSelectFolder: (folderId: string | null) => Promise<void>;
     onCreateNewFolder: (parentId?: string | null) => void;
+    type?: 'note' | 'folder';
+    movingFolderId?: string | null;
 }
 
 export const MoveToFolderModal: React.FC<MoveToFolderModalProps> = ({
@@ -31,9 +34,11 @@ export const MoveToFolderModal: React.FC<MoveToFolderModalProps> = ({
     onClose,
     folders,
     currentFolderId,
-    noteCount,
+    noteCount = 0,
     onSelectFolder,
     onCreateNewFolder,
+    type = 'note',
+    movingFolderId = null,
 }) => {
     const { colors, typography, isDark, accent } = useVeyraTheme();
     const language = useStore(state => state.language);
@@ -47,6 +52,26 @@ export const MoveToFolderModal: React.FC<MoveToFolderModalProps> = ({
             setBrowseFolderId(null);
         }
     }, [visible]);
+
+    const movingFolder = movingFolderId ? folders.find(f => f.id === movingFolderId) : null;
+
+    // Prevención de ciclos: una carpeta no puede moverse dentro de sí misma ni de sus descendientes
+    const invalidTargetFolderIds = useMemo(() => {
+        if (type !== 'folder' || !movingFolderId) return new Set<string>();
+        const invalid = new Set<string>([movingFolderId]);
+        const queue = [movingFolderId];
+        while (queue.length > 0) {
+            const curr = queue.shift()!;
+            const children = folders.filter(f => f.parent_id === curr && f.deleted !== 1);
+            for (const child of children) {
+                if (!invalid.has(child.id)) {
+                    invalid.add(child.id);
+                    queue.push(child.id);
+                }
+            }
+        }
+        return invalid;
+    }, [type, movingFolderId, folders]);
 
     const currentBrowsedFolder = browseFolderId ? folders.find(f => f.id === browseFolderId) : null;
 
@@ -74,6 +99,15 @@ export const MoveToFolderModal: React.FC<MoveToFolderModalProps> = ({
     );
 
     const handleSelect = async (folderId: string | null) => {
+        if (type === 'folder' && folderId && invalidTargetFolderIds.has(folderId)) {
+            Alert.alert(
+                language === 'es' ? 'Acción no permitida' : 'Action not allowed',
+                language === 'es'
+                    ? 'No puedes mover una carpeta dentro de sí misma o de una de sus subcarpetas.'
+                    : 'You cannot move a folder into itself or one of its subfolders.'
+            );
+            return;
+        }
         await onSelectFolder(folderId);
         onClose();
     };
@@ -109,12 +143,16 @@ export const MoveToFolderModal: React.FC<MoveToFolderModalProps> = ({
                     <View style={styles.header}>
                         <View style={styles.titleContainer}>
                             <Text style={[styles.headerTitle, { color: colors.textPrimary }]}>
-                                {language === 'es' ? 'Mover a carpeta' : 'Move to folder'}
+                                {type === 'folder'
+                                    ? (language === 'es' ? 'Mover carpeta' : 'Move folder')
+                                    : (language === 'es' ? 'Mover a carpeta' : 'Move to folder')}
                             </Text>
                             <Text style={[styles.headerSubtitle, { color: colors.textMuted }]}>
-                                {language === 'es'
-                                    ? `${noteCount} nota${noteCount > 1 ? 's' : ''} seleccionada${noteCount > 1 ? 's' : ''}`
-                                    : `${noteCount} note${noteCount > 1 ? 's' : ''} selected`}
+                                {type === 'folder'
+                                    ? (movingFolder?.name ? `"${movingFolder.name}"` : (language === 'es' ? '1 carpeta seleccionada' : '1 folder selected'))
+                                    : (language === 'es'
+                                        ? `${noteCount} nota${noteCount > 1 ? 's' : ''} seleccionada${noteCount > 1 ? 's' : ''}`
+                                        : `${noteCount} note${noteCount > 1 ? 's' : ''} selected`)}
                             </Text>
                         </View>
                         <TouchableOpacity
@@ -172,7 +210,7 @@ export const MoveToFolderModal: React.FC<MoveToFolderModalProps> = ({
                         showsVerticalScrollIndicator={false}
                         contentContainerStyle={styles.scrollContent}
                     >
-                        {/* Opción en Raíz: Sin carpeta / General */}
+                        {/* Opción en Raíz: Sin carpeta / General o Nivel Principal */}
                         {browseFolderId === null && (
                             <TouchableOpacity
                                 style={[
@@ -192,7 +230,9 @@ export const MoveToFolderModal: React.FC<MoveToFolderModalProps> = ({
                                 </View>
                                 <View style={styles.folderTextCol}>
                                     <Text style={[styles.folderName, { color: colors.textPrimary }]}>
-                                        {language === 'es' ? 'Sin carpeta (General)' : 'No folder (General)'}
+                                        {type === 'folder'
+                                            ? (language === 'es' ? 'Nivel Principal (Sin carpeta padre)' : 'Root Level (No parent folder)')
+                                            : (language === 'es' ? 'Sin carpeta (General)' : 'No folder (General)')}
                                     </Text>
                                 </View>
                                 {(currentFolderId === null || currentFolderId === undefined) && (
@@ -212,6 +252,7 @@ export const MoveToFolderModal: React.FC<MoveToFolderModalProps> = ({
                                             ? (currentBrowsedFolder.color || accent.primary)
                                             : colors.borderSubtle,
                                         borderWidth: 1.5,
+                                        opacity: (type === 'folder' && invalidTargetFolderIds.has(currentBrowsedFolder.id)) ? 0.45 : 1,
                                     },
                                 ]}
                                 onPress={() => handleSelect(currentBrowsedFolder.id)}
@@ -231,10 +272,19 @@ export const MoveToFolderModal: React.FC<MoveToFolderModalProps> = ({
                                 </View>
                                 <View style={styles.folderTextCol}>
                                     <Text style={[styles.folderName, { color: colors.textPrimary, fontWeight: '700' }]}>
-                                        {language === 'es'
-                                            ? `Mover directamente a "${currentBrowsedFolder.name}"`
-                                            : `Move directly into "${currentBrowsedFolder.name}"`}
+                                        {type === 'folder'
+                                            ? (language === 'es'
+                                                ? `Mover dentro de "${currentBrowsedFolder.name}"`
+                                                : `Move into "${currentBrowsedFolder.name}"`)
+                                            : (language === 'es'
+                                                ? `Mover directamente a "${currentBrowsedFolder.name}"`
+                                                : `Move directly into "${currentBrowsedFolder.name}"`)}
                                     </Text>
+                                    {type === 'folder' && invalidTargetFolderIds.has(currentBrowsedFolder.id) && (
+                                        <Text style={[styles.folderChildSubtext, { color: isDark ? '#F87171' : '#EF4444' }]}>
+                                            {language === 'es' ? 'No disponible (carpeta actual o subcarpeta)' : 'Unavailable (current or subfolder)'}
+                                        </Text>
+                                    )}
                                 </View>
                                 {currentFolderId === currentBrowsedFolder.id && (
                                     <Check size={18} color={(currentBrowsedFolder.color || accent.primary) as any} />
@@ -245,8 +295,9 @@ export const MoveToFolderModal: React.FC<MoveToFolderModalProps> = ({
                         {/* Lista de carpetas del nivel actual */}
                         {visibleFolders.map((folder) => {
                             const isCurrent = currentFolderId === folder.id;
+                            const isInvalid = type === 'folder' && invalidTargetFolderIds.has(folder.id);
                             const folderColor = folder.color || '#8B5CF6';
-                            const childCount = folders.filter(f => f.parent_id === folder.id).length;
+                            const childCount = folders.filter(f => f.parent_id === folder.id && f.deleted !== 1).length;
 
                             return (
                                 <View
@@ -256,6 +307,7 @@ export const MoveToFolderModal: React.FC<MoveToFolderModalProps> = ({
                                         {
                                             backgroundColor: isDark ? '#20232B' : '#F8FAFC',
                                             borderColor: isCurrent ? folderColor : colors.borderSubtle,
+                                            opacity: isInvalid ? 0.45 : 1,
                                         },
                                     ]}
                                 >
@@ -281,13 +333,19 @@ export const MoveToFolderModal: React.FC<MoveToFolderModalProps> = ({
                                             <Text numberOfLines={1} style={[styles.folderName, { color: colors.textPrimary }]}>
                                                 {folder.name}
                                             </Text>
-                                            {childCount > 0 && (
+                                            {isInvalid ? (
+                                                <Text style={[styles.folderChildSubtext, { color: isDark ? '#F87171' : '#EF4444' }]}>
+                                                    {folder.id === movingFolderId
+                                                        ? (language === 'es' ? 'Carpeta actual' : 'Current folder')
+                                                        : (language === 'es' ? 'Subcarpeta descendiente' : 'Descendant subfolder')}
+                                                </Text>
+                                            ) : childCount > 0 ? (
                                                 <Text style={[styles.folderChildSubtext, { color: colors.textMuted }]}>
                                                     {childCount === 1
                                                         ? (language === 'es' ? '1 subcarpeta' : '1 subfolder')
                                                         : (language === 'es' ? `${childCount} subcarpetas` : `${childCount} subfolders`)}
                                                 </Text>
-                                            )}
+                                            ) : null}
                                         </View>
                                         {isCurrent && <Check size={18} color={folderColor as any} />}
                                     </TouchableOpacity>

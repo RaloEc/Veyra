@@ -238,4 +238,36 @@ export const VeyraAlarm = {
             return false;
         }
     },
+
+    /**
+     * Reproduce el sonido de alarma a través del canal nativo de ALARMAS de Android (STREAM_ALARM).
+     * Garantiza que suene aunque el volumen multimedia esté en cero o el teléfono en silencio/DND.
+     * Si ensureAudible es true, asegura un volumen mínimo seguro del canal de alarma (85%).
+     */
+    async startAlarmSound(soundFileName: string, loop: boolean = true, ensureAudible: boolean = true): Promise<boolean> {
+        if (!this.isAvailable() || typeof VeyraAlarmModule.startAlarmSound !== 'function') {
+            return false;
+        }
+        try {
+            return await VeyraAlarmModule.startAlarmSound(soundFileName, loop, ensureAudible);
+        } catch (error) {
+            console.warn('[VeyraAlarm] Error reproduciendo sonido de alarma en STREAM_ALARM:', error);
+            return false;
+        }
+    },
+
+    /**
+     * Detiene la reproducción del sonido nativo de alarma, la vibración de hardware y restaura el volumen previo.
+     */
+    async stopAlarmSound(): Promise<boolean> {
+        if (!this.isAvailable() || typeof VeyraAlarmModule.stopAlarmSound !== 'function') {
+            return false;
+        }
+        try {
+            return await VeyraAlarmModule.stopAlarmSound();
+        } catch (error) {
+            console.warn('[VeyraAlarm] Error deteniendo sonido nativo de alarma:', error);
+            return false;
+        }
+    },
 };

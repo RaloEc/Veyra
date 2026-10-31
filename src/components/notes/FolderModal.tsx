@@ -29,7 +29,7 @@ interface FolderModalProps {
     folderToEdit?: Folder | null;
     parentFolder?: Folder | null;
     onSave: (name: string, icon: string, color: string, isPinned?: boolean, parentId?: string | null) => Promise<void>;
-    onDelete?: (folderId: string) => void;
+    onDelete?: (folderId: string, deleteNotes?: boolean) => void;
 }
 
 export const FolderModal: React.FC<FolderModalProps> = ({
@@ -126,7 +126,7 @@ export const FolderModal: React.FC<FolderModalProps> = ({
                 {
                     text: language === 'es' ? 'Conservar notas' : 'Keep notes',
                     onPress: () => {
-                        onDelete(folderToEdit.id);
+                        onDelete(folderToEdit.id, false);
                         onClose();
                     },
                 },
@@ -134,7 +134,7 @@ export const FolderModal: React.FC<FolderModalProps> = ({
                     text: language === 'es' ? 'Eliminar notas' : 'Delete notes',
                     style: 'destructive',
                     onPress: () => {
-                        onDelete(folderToEdit.id);
+                        onDelete(folderToEdit.id, true);
                         onClose();
                     },
                 },

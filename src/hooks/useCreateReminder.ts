@@ -1,6 +1,9 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { useStore } from '../store/useStore';
-import { ControlLevel, Subtask } from '../types/db';
+import { ControlLevel, Subtask, CalendarEvent } from '../types/db';
+import { TagService } from '../services/TagService';
+import { EventService } from '../services/eventService';
+import { extractHashtags, normalizeTagSlug } from '../utils/hashtagParser';
 import { RecurrenceType } from '../components/create/RecurrenceSelector';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
@@ -106,6 +109,11 @@ export const useCreateReminder = (id?: string, initialDateMs?: number | string) 
         }
     });
     const [status, setStatus] = useState<string>(() => cachedReminder?.status || 'pending');
+    const [tags, setTags] = useState<string[]>([]);
+    const [eventId, setEventId] = useState<string | null>(() => cachedReminder?.event_id || null);
+    const [offsetMinutes, setOffsetMinutes] = useState<number | null>(() => cachedReminder?.offset_minutes !== undefined ? cachedReminder.offset_minutes : null);
+    const [linkedEvent, setLinkedEvent] = useState<CalendarEvent | null>(null);
+    const [availableEvents, setAvailableEvents] = useState<CalendarEvent[]>([]);
 
     const [date, setDate] = useState(() => {
         if (cachedReminder) return new Date(cachedReminder.due_date_ms);
@@ -159,6 +167,40 @@ export const useCreateReminder = (id?: string, initialDateMs?: number | string) 
             useNativeDriver: false,
         }).start();
     }, [showPicker]);
+
+    // Cargar tags y eventos disponibles
+    useEffect(() => {
+        EventService.getAllEvents(false).then(evs => setAvailableEvents(evs)).catch(() => { });
+        if (id) {
+            TagService.getTagsForItem('reminder', id).then(loaded => {
+                setTags(loaded.map(t => t.name));
+            }).catch(() => { });
+        }
+    }, [id]);
+
+    useEffect(() => {
+        if (eventId) {
+            EventService.getEventById(eventId).then(ev => setLinkedEvent(ev)).catch(() => { });
+        } else {
+            setLinkedEvent(null);
+        }
+    }, [eventId]);
+
+    const handleTitleBlur = () => {
+        const { cleanText, tags: extracted } = extractHashtags(title);
+        if (extracted.length > 0) {
+            setTitle(cleanText);
+            setTags(prev => {
+                const next = [...prev];
+                for (const t of extracted) {
+                    if (!next.some(e => normalizeTagSlug(e) === normalizeTagSlug(t))) {
+                        next.push(t);
+                    }
+                }
+                return next;
+            });
+        }
+    };
 
     // Sincronizar si el recordatorio cambia en background
     useEffect(() => {
@@ -331,28 +373,66 @@ export const useCreateReminder = (id?: string, initialDateMs?: number | string) 
         setAttachments(attachments.filter((_, i) => i !== index));
     };
 
-    const handleSave = async () => {
-        if (!title.trim()) return;
+    const handleSave = async (options?: { skipNavigateBack?: boolean }) => {
+        const { cleanText, tags: extracted } = extractHashtags(title);
+        const finalTitle = (extracted.length > 0 ? cleanText : title).trim() || title.trim();
+        if (!finalTitle) return;
+
+        const finalTags = [...tags];
+        for (const t of extracted) {
+            if (!finalTags.some(e => normalizeTagSlug(e) === normalizeTagSlug(t))) {
+                finalTags.push(t);
+            }
+        }
+        if (extracted.length > 0) {
+            setTitle(finalTitle);
+            setTags(finalTags);
+        }
 
         const repeatRule = recurrenceType !== 'none'
             ? JSON.stringify({ type: recurrenceType })
             : undefined;
 
-        if (isEditing && id) {
-            await updateReminder(id, {
-                title,
-                description,
-                due_date_ms: date.getTime(),
-                control_level: controlLevel,
-                repeat_rule: repeatRule || undefined,
-                attachments: JSON.stringify(attachments),
-                links: JSON.stringify(links),
-                subtasks: JSON.stringify(subtasks),
-            });
-        } else {
-            await addReminder(title, date.getTime(), controlLevel, description, repeatRule, JSON.stringify(attachments), JSON.stringify(links), JSON.stringify(subtasks));
+        let calculatedDueDate = date.getTime();
+        if (eventId && linkedEvent) {
+            calculatedDueDate = linkedEvent.start_time_ms + (offsetMinutes || 0) * 60000;
         }
-        router.back();
+
+        if (isEditing && id) {
+            await updateReminder(
+                id,
+                {
+                    title: finalTitle,
+                    description,
+                    due_date_ms: calculatedDueDate,
+                    control_level: controlLevel,
+                    repeat_rule: repeatRule || undefined,
+                    attachments: JSON.stringify(attachments),
+                    links: JSON.stringify(links),
+                    subtasks: JSON.stringify(subtasks),
+                    event_id: eventId || null,
+                    offset_minutes: offsetMinutes !== null ? offsetMinutes : null,
+                },
+                finalTags
+            );
+        } else {
+            await addReminder(
+                finalTitle,
+                calculatedDueDate,
+                controlLevel,
+                description,
+                repeatRule,
+                JSON.stringify(attachments),
+                JSON.stringify(links),
+                JSON.stringify(subtasks),
+                eventId || null,
+                offsetMinutes !== null ? offsetMinutes : null,
+                finalTags
+            );
+        }
+        if (!options?.skipNavigateBack) {
+            router.back();
+        }
     };
 
     const handleDelete = async () => {
@@ -409,6 +489,15 @@ export const useCreateReminder = (id?: string, initialDateMs?: number | string) 
         MAX_ATTACHMENTS,
         alertVisible,
         setAlertVisible,
-        alertConfig
+        alertConfig,
+        tags,
+        setTags,
+        eventId,
+        setEventId,
+        offsetMinutes,
+        setOffsetMinutes,
+        linkedEvent,
+        availableEvents,
+        handleTitleBlur,
     };
 };

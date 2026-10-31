@@ -66,10 +66,28 @@ const builtThemes = createV5Theme({
     },
 })
 
-export type Themes = typeof builtThemes
+// AMOLED theme: hereda de builtThemes.dark y sobrescribe fondo y superficies con negro puro
+const dark_amoled = {
+    ...builtThemes.dark,
+    background: '#000000',
+    backgroundHover: '#121212',
+    backgroundPress: '#181818',
+    backgroundFocus: '#121212',
+    borderColor: 'rgba(255, 255, 255, 0.12)',
+    borderColorHover: 'rgba(255, 255, 255, 0.18)',
+    borderColorPress: 'rgba(255, 255, 255, 0.26)',
+    borderColorFocus: 'rgba(255, 255, 255, 0.18)',
+}
+
+const allThemes = {
+    ...builtThemes,
+    dark_amoled,
+}
+
+export type Themes = typeof allThemes
 
 export const themes: Themes =
     process.env.TAMAGUI_ENVIRONMENT === 'client' &&
         process.env.NODE_ENV === 'production'
         ? ({} as any)
-        : (builtThemes as any)
+        : (allThemes as any)

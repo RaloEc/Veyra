@@ -4,6 +4,20 @@ import { getDB } from '../db';
 import { EventService, isEventOccurringOnDate } from './eventService';
 import { extractPlainTextFromPages } from '../utils/pageUtils';
 
+export interface WidgetStoreCallbacks {
+    getReminders?: () => Reminder[];
+    getEvents?: () => CalendarEvent[];
+    getNotes?: () => Note[];
+    markAsCompleted?: (id: string) => Promise<void>;
+    snoozeReminder?: (id: string, minutes: number) => Promise<void>;
+}
+
+let storeCallbacks: WidgetStoreCallbacks = {};
+
+export function registerWidgetStoreCallbacks(callbacks: Partial<WidgetStoreCallbacks>) {
+    storeCallbacks = { ...storeCallbacks, ...callbacks };
+}
+
 const { VeyraWidgetModule } = NativeModules;
 
 export interface WidgetAgendaItem {
@@ -140,10 +154,10 @@ export const WidgetService = {
             return Promise.resolve(false);
         }
 
-        if (reminders && reminders.length > 0) {
+        if (reminders !== undefined) {
             cachedRemindersForSync = reminders;
         }
-        if (events && events.length > 0) {
+        if (events !== undefined) {
             cachedEventsForSync = events;
         }
 
@@ -185,27 +199,20 @@ export const WidgetService = {
             return false;
         }
 
+        // Si había una sincronización encolada por debounce, cancelarla para evitar sobrescribir con datos obsoletos
+        if (agendaDebounceTimer) {
+            clearTimeout(agendaDebounceTimer);
+            agendaDebounceTimer = null;
+            cachedRemindersForSync = undefined;
+            cachedEventsForSync = undefined;
+        }
+
         try {
             let reminderList: Reminder[];
-            if (reminders && reminders.length > 0) {
+            if (reminders !== undefined && Array.isArray(reminders)) {
                 reminderList = reminders;
             } else {
                 try {
-                    const { useStore } = await import('../store/useStore');
-                    const storeReminders = useStore.getState().reminders;
-                    if (storeReminders && storeReminders.length > 0) {
-                        reminderList = storeReminders;
-                    } else {
-                        const db = await getDB();
-                        reminderList = await db.getAllAsync<Reminder>(
-                            `SELECT id, title, due_date_ms, control_level, status, priority, deleted
-                             FROM reminders 
-                             WHERE (status = 'pending' OR status = 'snoozed') AND deleted = 0 
-                             ORDER BY due_date_ms ASC 
-                             LIMIT 50`
-                        );
-                    }
-                } catch {
                     const db = await getDB();
                     reminderList = await db.getAllAsync<Reminder>(
                         `SELECT id, title, due_date_ms, control_level, status, priority, deleted
@@ -214,24 +221,20 @@ export const WidgetService = {
                          ORDER BY due_date_ms ASC 
                          LIMIT 50`
                     );
+                } catch {
+                    reminderList = storeCallbacks.getReminders?.() || [];
                 }
             }
 
             let allRawEvents: CalendarEvent[];
-            if (events && events.length > 0) {
+            if (events !== undefined && Array.isArray(events)) {
                 allRawEvents = events;
             } else {
                 try {
-                    const { useEventsStore } = await import('../store/useEventsStore');
-                    const storeEvents = useEventsStore.getState().events;
-                    if (storeEvents && storeEvents.length > 0) {
-                        allRawEvents = storeEvents;
-                    } else {
-                        allRawEvents = await EventService.getAllEvents(false);
-                    }
+                    allRawEvents = await EventService.getAllEvents(false);
                 } catch {
                     try {
-                        allRawEvents = await EventService.getAllEvents(false);
+                        allRawEvents = storeCallbacks.getEvents?.() || [];
                     } catch {
                         allRawEvents = [];
                     }
@@ -281,10 +284,19 @@ export const WidgetService = {
                         // Incluir si el evento no ha concluido (en curso o en los próximos 7 días)
                         if (occurrenceEndMs >= nowMs && occurrenceStartMs <= sevenDaysLater) {
                             seenEventOccurrences.add(occurrenceKey);
+                            const isAllDay = event.is_all_day === 1 || Boolean(event.is_all_day);
+                            const isBday = event.is_birthday_like === 1 || Boolean(event.is_birthday_like);
+                            let titleWithIcon = event.title;
+                            if (isBday) {
+                                titleWithIcon = `🎂 ${event.title}`;
+                            } else if (isAllDay) {
+                                titleWithIcon = `📅 ${event.title}`;
+                            }
+
                             eventItems.push({
                                 id: event.id,
                                 type: 'event' as const,
-                                title: event.title,
+                                title: titleWithIcon,
                                 timeMs: occurrenceStartMs,
                                 endTimeMs: occurrenceEndMs,
                                 color: event.color || '',
@@ -328,6 +340,11 @@ export const WidgetService = {
                 const aOverdue = (a.type === 'reminder' && a.timeMs > 0 && a.timeMs < nowMs) ? 0 : 1;
                 const bOverdue = (b.type === 'reminder' && b.timeMs > 0 && b.timeMs < nowMs) ? 0 : 1;
                 if (aOverdue !== bOverdue) return aOverdue - bOverdue;
+
+                // Priorizar eventos de todo el día del día actual arriba
+                const aIsAllDayToday = (a.title.startsWith('🎂') || a.title.startsWith('📅')) && a.dayLabel === 'Hoy' ? 0 : 1;
+                const bIsAllDayToday = (b.title.startsWith('🎂') || b.title.startsWith('📅')) && b.dayLabel === 'Hoy' ? 0 : 1;
+                if (aIsAllDayToday !== bIsAllDayToday) return aIsAllDayToday - bIsAllDayToday;
 
                 return a.timeMs - b.timeMs;
             }).slice(0, 30);
@@ -394,14 +411,13 @@ export const WidgetService = {
                 noteList = notes;
             } else {
                 try {
-                    const { useNotesStore } = await import('../store/useNotesStore');
-                    const storeNotes = useNotesStore.getState().notes;
+                    const storeNotes = storeCallbacks.getNotes?.();
                     if (storeNotes && storeNotes.length > 0) {
                         noteList = storeNotes;
                     } else {
                         const db = await getDB();
                         noteList = await db.getAllAsync<Note>(
-                            `SELECT id, title, content, attachments, updated_at_ms, is_pinned, folder_id 
+                            `SELECT id, title, content, preview_text, attachments, updated_at_ms, is_pinned, folder_id 
                              FROM notes 
                              WHERE deleted = 0 
                              ORDER BY is_pinned DESC, updated_at_ms DESC 
@@ -411,7 +427,7 @@ export const WidgetService = {
                 } catch {
                     const db = await getDB();
                     noteList = await db.getAllAsync<Note>(
-                        `SELECT id, title, content, attachments, updated_at_ms, is_pinned, folder_id 
+                        `SELECT id, title, content, preview_text, attachments, updated_at_ms, is_pinned, folder_id 
                          FROM notes 
                          WHERE deleted = 0 
                          ORDER BY is_pinned DESC, updated_at_ms DESC 
@@ -424,7 +440,9 @@ export const WidgetService = {
                 .filter(n => !n.deleted)
                 .slice(0, 25)
                 .map(n => {
-                    let snippet = createTextSnippet(n.content, 140);
+                    let snippet = n.preview_text?.trim()
+                        ? createTextSnippet(n.preview_text, 140)
+                        : createTextSnippet(n.content, 140);
                     if (!snippet && n.attachments) {
                         try {
                             const att = JSON.parse(n.attachments);
@@ -505,15 +523,13 @@ export const WidgetService = {
     async processPendingActions(): Promise<void> {
         if (!this.isAvailable()) return;
         try {
-            const { useStore } = await import('../store/useStore');
-
             // 1. Completados pendientes
             if (typeof VeyraWidgetModule.getPendingCompletions === 'function') {
                 const pendingIds: string[] = await VeyraWidgetModule.getPendingCompletions();
                 if (pendingIds && pendingIds.length > 0) {
                     for (const id of pendingIds) {
                         try {
-                            await useStore.getState().markAsCompleted(id);
+                            await storeCallbacks.markAsCompleted?.(id);
                         } catch (err) {
                             console.warn('[WidgetService] Error completando recordatorio pendiente del widget:', id, err);
                         }
@@ -530,7 +546,7 @@ export const WidgetService = {
                 if (pendingSnoozes && pendingSnoozes.length > 0) {
                     for (const item of pendingSnoozes) {
                         try {
-                            await useStore.getState().snoozeReminder(item.id, item.minutes || 30);
+                            await storeCallbacks.snoozeReminder?.(item.id, item.minutes || 30);
                         } catch (err) {
                             console.warn('[WidgetService] Error posponiendo recordatorio pendiente del widget:', item, err);
                         }
@@ -572,9 +588,9 @@ export const WidgetService = {
     },
 
     /**
-     * Sincroniza el modo de tema ('system', 'light', 'dark') y color de acento con todos los widgets nativos
+     * Sincroniza el modo de tema ('system', 'light', 'dark'), color de acento y modo amoled con todos los widgets nativos
      */
-    async syncTheme(themeMode?: 'system' | 'light' | 'dark', accentTheme?: string): Promise<boolean> {
+    async syncTheme(themeMode?: 'system' | 'light' | 'dark', accentTheme?: string, amoled?: boolean): Promise<boolean> {
         if (!this.isAvailable()) {
             return false;
         }
@@ -587,6 +603,9 @@ export const WidgetService = {
             }
             if (accentTheme && typeof VeyraWidgetModule.setWidgetAccentTheme === 'function') {
                 await VeyraWidgetModule.setWidgetAccentTheme(accentTheme);
+            }
+            if (typeof amoled === 'boolean' && typeof VeyraWidgetModule.setWidgetAmoled === 'function') {
+                await VeyraWidgetModule.setWidgetAmoled(amoled);
             }
             return ok;
         } catch (error) {
@@ -634,9 +653,47 @@ export const WidgetService = {
     },
 
     /**
-     * Sincroniza las preferencias de accesibilidad (escala de texto y alto contraste)
+     * Habilita o deshabilita el estilo Glassmorphic / Cristal translúcido para los widgets
      */
-    async syncAccessibility(scale: number = 1.0, highContrast: boolean = false): Promise<boolean> {
+    async setGlassmorphic(enabled: boolean): Promise<boolean> {
+        if (!this.isAvailable()) {
+            return false;
+        }
+
+        try {
+            if (typeof VeyraWidgetModule.setWidgetGlassmorphic === 'function') {
+                return await VeyraWidgetModule.setWidgetGlassmorphic(enabled);
+            }
+            return false;
+        } catch (error) {
+            console.warn('[WidgetService] Error estableciendo estilo glassmorphic:', error);
+            return false;
+        }
+    },
+
+    /**
+     * Habilita o deshabilita el efecto de cristal esmerilado (gradiente satinado + bisel reflectivo)
+     */
+    async setFrostedGlass(enabled: boolean): Promise<boolean> {
+        if (!this.isAvailable()) {
+            return false;
+        }
+
+        try {
+            if (typeof VeyraWidgetModule.setWidgetFrostedGlass === 'function') {
+                return await VeyraWidgetModule.setWidgetFrostedGlass(enabled);
+            }
+            return false;
+        } catch (error) {
+            console.warn('[WidgetService] Error estableciendo efecto frosted glass:', error);
+            return false;
+        }
+    },
+
+    /**
+     * Sincroniza las preferencias de accesibilidad y diseño (escala de texto, alto contraste, glassmorphic, frostedGlass)
+     */
+    async syncAccessibility(scale: number = 1.0, highContrast: boolean = false, glassmorphic: boolean = false, frostedGlass: boolean = false): Promise<boolean> {
         if (!this.isAvailable()) {
             return false;
         }
@@ -644,6 +701,8 @@ export const WidgetService = {
         try {
             await this.setTextScale(scale);
             await this.setHighContrast(highContrast);
+            await this.setGlassmorphic(glassmorphic);
+            await this.setFrostedGlass(frostedGlass);
             return true;
         } catch (error) {
             console.warn('[WidgetService] Error sincronizando accesibilidad de widgets:', error);
@@ -654,7 +713,7 @@ export const WidgetService = {
     /**
      * Obtiene la configuración actual de los widgets desde SharedPreferences nativo
      */
-    async getWidgetConfig(): Promise<{ textScale: number; highContrast: boolean; themeMode: string; accentTheme: string } | null> {
+    async getWidgetConfig(): Promise<{ textScale: number; highContrast: boolean; glassmorphic?: boolean; frostedGlass?: boolean; themeMode: string; accentTheme: string } | null> {
         if (!this.isAvailable()) {
             return null;
         }
@@ -740,24 +799,6 @@ export const WidgetService = {
         }
     },
 
-    /**
-     * Solicita al sistema anclar el widget Combinado (Agenda + Notas) en la pantalla de inicio (Android 8.0+)
-     */
-    async requestPinCombo(): Promise<boolean> {
-        if (!this.isAvailable()) {
-            return false;
-        }
-
-        try {
-            if (typeof VeyraWidgetModule.requestPinComboWidget === 'function') {
-                return await VeyraWidgetModule.requestPinComboWidget();
-            }
-            return false;
-        } catch (error) {
-            console.warn('[WidgetService] Error solicitando anclar el widget combinado:', error);
-            return false;
-        }
-    },
 
     /**
      * Solicita al sistema anclar el widget de Acciones Rápidas en la pantalla de inicio (Android 8.0+)

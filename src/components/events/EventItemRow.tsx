@@ -96,6 +96,7 @@ export function EventItemRow({
                     pathname: '/notes/create',
                     params: {
                         eventId: event.id,
+                        folderId: event.folder_id || undefined,
                         initialTitle: `${event.title} - ${format(startDate, 'dd/MM/yyyy')}`,
                     },
                 });
@@ -123,7 +124,7 @@ export function EventItemRow({
                 radius="lg"
                 bordered={true}
                 borderLevel={isHappeningNow ? 'medium' : 'subtle'}
-                onPress={onPress || (() => router.push({ pathname: '/events/create', params: { id: event.id } }))}
+                onPress={onPress || (() => router.push({ pathname: '/events/[id]', params: { id: event.id } }))}
                 contentContainerStyle={[
                     styles.itemContent,
                     {

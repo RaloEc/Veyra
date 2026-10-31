@@ -2,8 +2,9 @@ import { Alert } from 'react-native';
 import { create } from 'zustand';
 import { FolderService } from '../services/folderService';
 import { Folder } from '../types/db';
-import { useStore } from './useStore';
-import { useNotesStore } from './useNotesStore';
+import { useStore, registerExternalStoreReloader } from './useStore';
+import { useNotesStore, registerFolderLookup } from './useNotesStore';
+import { registerSyncStoreHandlers } from '../services/syncService';
 
 interface FoldersState {
     folders: Folder[];
@@ -35,7 +36,16 @@ interface FoldersState {
     setIsFolderMenuVisible: (visible: boolean) => void;
     onShareNotesRequest?: () => void;
     setOnShareNotesRequest: (fn?: () => void) => void;
+
+    // Morph de creación/edición de carpetas en BottomTabBar
+    isFolderMorphOpen: boolean;
+    folderMorphParent: Folder | null;
+    folderMorphEdit: Folder | null;
+    openFolderMorph: (parent?: Folder | null, editFolder?: Folder | null) => void;
+    closeFolderMorph: () => void;
 }
+
+let loadFoldersInFlight: Promise<void> | null = null;
 
 export const useFoldersStore = create<FoldersState>((set, get) => ({
     folders: [],
@@ -49,6 +59,25 @@ export const useFoldersStore = create<FoldersState>((set, get) => ({
     setIsFolderMenuVisible: (visible) => set({ isFolderMenuVisible: visible }),
     onShareNotesRequest: undefined,
     setOnShareNotesRequest: (fn) => set({ onShareNotesRequest: fn }),
+
+    // Morph de carpetas en dock
+    isFolderMorphOpen: false,
+    folderMorphParent: null,
+    folderMorphEdit: null,
+    openFolderMorph: (parent = null, editFolder = null) => {
+        set({
+            isFolderMorphOpen: true,
+            folderMorphParent: parent || null,
+            folderMorphEdit: editFolder || null,
+        });
+    },
+    closeFolderMorph: () => {
+        set({
+            isFolderMorphOpen: false,
+            folderMorphParent: null,
+            folderMorphEdit: null,
+        });
+    },
 
     // Pila de navegación
     folderStack: [],
@@ -104,43 +133,52 @@ export const useFoldersStore = create<FoldersState>((set, get) => ({
     },
 
     loadFolders: async () => {
-        set({ isLoading: true });
-        try {
-            const rawFolders = await FolderService.getFolders();
-            const seen = new Set<string>();
-            const folders = rawFolders.filter(f => {
-                if (!f?.id || seen.has(f.id)) return false;
-                seen.add(f.id);
-                return true;
-            });
-
-            // Sincronizar folderStack con datos actualizados de las carpetas
-            const currentStack = get().folderStack;
-            if (currentStack.length > 0) {
-                const updatedStack: Folder[] = [];
-                for (const item of currentStack) {
-                    const fresh = folders.find(f => f.id === item.id);
-                    if (fresh) {
-                        updatedStack.push(fresh);
-                    } else {
-                        break; // Si se eliminó algún ancestro, cortar la pila aquí
-                    }
-                }
-                const last = updatedStack.length > 0 ? updatedStack[updatedStack.length - 1] : null;
-                set({
-                    folders,
-                    isFoldersDirty: false,
-                    folderStack: updatedStack,
-                    currentParentId: last ? last.id : null,
-                });
-            } else {
-                set({ folders, isFoldersDirty: false });
-            }
-        } catch (error) {
-            console.error('Failed to load folders', error);
-        } finally {
-            set({ isLoading: false });
+        if (loadFoldersInFlight) {
+            return loadFoldersInFlight;
         }
+        if (get().folders.length === 0) {
+            set({ isLoading: true });
+        }
+        loadFoldersInFlight = (async () => {
+            try {
+                const rawFolders = await FolderService.getFolders();
+                const seen = new Set<string>();
+                const folders = rawFolders.filter(f => {
+                    if (!f?.id || seen.has(f.id)) return false;
+                    seen.add(f.id);
+                    return true;
+                });
+
+                // Sincronizar folderStack con datos actualizados de las carpetas
+                const currentStack = get().folderStack;
+                if (currentStack.length > 0) {
+                    const updatedStack: Folder[] = [];
+                    for (const item of currentStack) {
+                        const fresh = folders.find(f => f.id === item.id);
+                        if (fresh) {
+                            updatedStack.push(fresh);
+                        } else {
+                            break; // Si se eliminó algún ancestro, cortar la pila aquí
+                        }
+                    }
+                    const last = updatedStack.length > 0 ? updatedStack[updatedStack.length - 1] : null;
+                    set({
+                        folders,
+                        isFoldersDirty: false,
+                        folderStack: updatedStack,
+                        currentParentId: last ? last.id : null,
+                    });
+                } else {
+                    set({ folders, isFoldersDirty: false });
+                }
+            } catch (error) {
+                console.error('Failed to load folders', error);
+            } finally {
+                set({ isLoading: false });
+                loadFoldersInFlight = null;
+            }
+        })();
+        return loadFoldersInFlight;
     },
 
     createFolder: async (name, icon = 'folder', color = '#8B5CF6', isPinned = false, parentId = null) => {
@@ -364,3 +402,12 @@ export const useFoldersStore = create<FoldersState>((set, get) => ({
         }
     },
 }));
+
+registerFolderLookup((id) => useFoldersStore.getState().folders.find(f => f.id === id));
+
+registerSyncStoreHandlers({
+    loadFolders: () => useFoldersStore.getState().loadFolders(),
+});
+
+registerExternalStoreReloader(() => useFoldersStore.getState().loadFolders());
+

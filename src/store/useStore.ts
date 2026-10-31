@@ -5,20 +5,24 @@ import { LayoutAnimation } from 'react-native';
 import { ReminderService } from '../services/reminderService';
 import { NotificationService } from '../services/notificationService';
 import { ComplianceService } from '../services/complianceService';
-import { WidgetService } from '../services/widgetService';
+import { WidgetService, registerWidgetStoreCallbacks } from '../services/widgetService';
+import { updateTodayWidget, updateWidgetTheme } from '../widgets/widgetUpdater';
 import { CollaborationService } from '../services/collaborationService';
-import { Reminder, ControlLevel, ReminderStatus } from '../types/db';
+import { SyncService, registerSyncStoreHandlers } from '../services/syncService';
+import { TagService, registerTagsChangedListener } from '../services/TagService';
+import { supabase } from '../lib/supabase';
+import { parseRepeatRule, getNextRecurrenceDate } from '../utils/recurrence';
+import { Reminder, ControlLevel, ReminderStatus, Tag } from '../types/db';
 import { AccentTheme } from '../theme/accentColors';
 import { defaultLanguage } from '../lib/i18n';
+import { PREMIUM_WHITELIST_EMAILS, isWhitelistedPremiumEmail } from '../constants/premium';
 
-export const PREMIUM_WHITELIST_EMAILS = [
-    'ricardo.lopez.18.ralo@gmail.com',
-];
+export { PREMIUM_WHITELIST_EMAILS, isWhitelistedPremiumEmail };
 
-export const isWhitelistedPremiumEmail = (email?: string | null): boolean => {
-    if (!email) return false;
-    return PREMIUM_WHITELIST_EMAILS.includes(email.toLowerCase().trim());
-};
+const externalStoreReloaders: Array<() => Promise<any>> = [];
+export function registerExternalStoreReloader(fn: () => Promise<any>) {
+    externalStoreReloaders.push(fn);
+}
 
 const safeParseArray = (jsonString: string | null | undefined): string[] => {
     if (!jsonString) return [];
@@ -33,16 +37,19 @@ const safeParseArray = (jsonString: string | null | undefined): string[] => {
 interface AppState {
     reminders: Reminder[];
     history: Reminder[];
+    allTags: Tag[];
+    itemTagsMap: Record<string, Tag[]>;
+    loadTags: () => Promise<void>;
     isRemindersDirty: boolean;
     markRemindersDirty: (dirty: boolean) => void;
     isLoading: boolean;
     loadReminders: () => Promise<void>;
     loadHistory: () => Promise<void>;
-    addReminder: (title: string, dueDate: number, controlLevel: ControlLevel, description?: string, repeatRule?: string, attachments?: string, links?: string, subtasks?: string) => Promise<void>;
+    addReminder: (title: string, dueDate: number, controlLevel: ControlLevel, description?: string, repeatRule?: string, attachments?: string, links?: string, subtasks?: string, eventId?: string | null, offsetMinutes?: number | null, tagNames?: string[]) => Promise<Reminder | void>;
     markAsCompleted: (id: string) => Promise<void>;
     markRemindersAsCompleted: (ids: string[]) => Promise<void>;
     markAsPending: (id: string) => Promise<void>;
-    updateReminder: (id: string, updates: Partial<Reminder>) => Promise<void>;
+    updateReminder: (id: string, updates: Partial<Reminder>, tagNames?: string[]) => Promise<void>;
     toggleSubtask: (reminderId: string, subtaskId: string) => Promise<void>;
     deleteReminder: (id: string) => Promise<void>;
     deleteReminders: (ids: string[]) => Promise<void>;
@@ -58,6 +65,8 @@ interface AppState {
     toggleTheme: () => void;
     theme: 'system' | 'light' | 'dark';
     setTheme: (theme: 'system' | 'light' | 'dark') => void;
+    amoledEnabled: boolean;
+    setAmoledEnabled: (enabled: boolean) => void;
     onboardingCompleted: boolean;
     userProfile: 'student' | 'work' | 'personal' | 'custom' | null;
     userName: string | null;
@@ -106,35 +115,71 @@ interface AppState {
     setWidgetTextScale: (scale: number) => void;
     widgetHighContrast: boolean;
     setWidgetHighContrast: (enabled: boolean) => void;
+    widgetGlassmorphic: boolean;
+    setWidgetGlassmorphic: (enabled: boolean) => void;
+    widgetFrostedGlass: boolean;
+    setWidgetFrostedGlass: (enabled: boolean) => void;
     vibrationEnabled: boolean;
     setVibrationEnabled: (enabled: boolean) => void;
 }
 
 let currentSyncStartTime = 0;
+let pendingFollowUpSync = false;
+let loadRemindersInFlight: Promise<void> | null = null;
+let loadTagsInFlight: Promise<void> | null = null;
 
 export const useStore = create<AppState>()(
     persist(
         (set, get) => ({
             reminders: [],
             history: [],
+            allTags: [],
+            itemTagsMap: {},
+            loadTags: async () => {
+                if (loadTagsInFlight) return loadTagsInFlight;
+                loadTagsInFlight = (async () => {
+                    try {
+                        const [allTags, itemTagsMap] = await Promise.all([
+                            TagService.getAllTags(),
+                            TagService.getAllItemTagsMap(),
+                        ]);
+                        set({ allTags, itemTagsMap });
+                    } catch (err: any) {
+                        if (!err?.message?.includes('no such table')) {
+                            console.warn('[useStore] Error loading tags:', err);
+                        }
+                    } finally {
+                        loadTagsInFlight = null;
+                    }
+                })();
+                return loadTagsInFlight;
+            },
             isRemindersDirty: true,
             markRemindersDirty: (dirty: boolean) => set({ isRemindersDirty: dirty }),
             theme: 'system',
             isLoading: false,
 
             loadReminders: async () => {
+                if (loadRemindersInFlight) {
+                    return loadRemindersInFlight;
+                }
                 if (get().reminders.length === 0) {
                     set({ isLoading: true });
                 }
-                try {
-                    const reminders = await ReminderService.getReminders();
-                    set({ reminders, isRemindersDirty: false, isLoading: false });
-                    WidgetService.sync(reminders).catch(() => {});
-                    WidgetService.syncSchedule().catch(() => {});
-                } catch (error: any) {
-                    if (!error.message?.includes('no such table')) console.error(error);
-                    set({ isLoading: false });
-                }
+                loadRemindersInFlight = (async () => {
+                    try {
+                        const reminders = await ReminderService.getReminders();
+                        set({ reminders, isRemindersDirty: false, isLoading: false });
+                        get().loadTags().catch(() => { });
+                        updateTodayWidget(reminders).catch(() => { });
+                    } catch (error: any) {
+                        if (!error.message?.includes('no such table')) console.error(error);
+                        set({ isLoading: false });
+                    } finally {
+                        loadRemindersInFlight = null;
+                    }
+                })();
+                return loadRemindersInFlight;
             },
 
             loadHistory: async () => {
@@ -146,28 +191,30 @@ export const useStore = create<AppState>()(
                 }
             },
 
-            addReminder: async (title, dueDate, controlLevel, description, repeatRule, attachments, links, subtasks) => {
+            addReminder: async (title, dueDate, controlLevel, description, repeatRule, attachments, links, subtasks, eventId, offsetMinutes, tagNames) => {
                 const isPremium = get().isPremium;
                 const activeCount = get().reminders.filter(r => r.status === 'pending').length;
                 if (!isPremium && activeCount >= 5) {
-                    set({
-                        // Podríamos activar el modal aquí si tuviéramos acceso a la UI, 
-                        // por ahora mantenemos el alert hasta integrar el modal en la Home
-                    });
+                    set({});
                     alert("Has alcanzado el límite de 5 recordatorios activos gratuitos. Pásate a Premium para crear recordatorios ilimitados.");
                     return;
                 }
                 try {
                     const userId = get().session?.user?.id || 'local_user';
-                    const reminder = await ReminderService.createReminder(title, dueDate, controlLevel, userId, description, repeatRule, attachments, links, subtasks);
+                    const reminder = await ReminderService.createReminder(title, dueDate, controlLevel, userId, description, repeatRule, attachments, links, subtasks, eventId, offsetMinutes);
+                    if (tagNames !== undefined) {
+                        await TagService.setTagsForItem('reminder', reminder.id, tagNames);
+                    }
                     const notifIds = await NotificationService.scheduleReminderNotification(reminder, get().soundSettings);
                     if (notifIds.length > 0) {
                         await ReminderService.updateReminder(reminder.id, { notification_ids: JSON.stringify(notifIds) });
                     }
                     await get().loadReminders();
+                    await get().loadTags();
                     if (get().session?.user?.id && get().cloudSyncEnabled) {
                         get().triggerSync();
                     }
+                    return reminder;
                 } catch (error) {
                     console.error('Failed to create reminder', error);
                 }
@@ -198,7 +245,6 @@ export const useStore = create<AppState>()(
 
                     // Handle recurrence: create next occurrence
                     if (reminder.repeat_rule) {
-                        const { parseRepeatRule, getNextRecurrenceDate } = await import('../utils/recurrence');
                         const rule = parseRepeatRule(reminder.repeat_rule);
                         if (rule) {
                             const nextDate = getNextRecurrenceDate(reminder.due_date_ms, rule);
@@ -288,9 +334,12 @@ export const useStore = create<AppState>()(
                 }
             },
 
-            updateReminder: async (id, updates) => {
+            updateReminder: async (id, updates, tagNames) => {
                 try {
                     await ReminderService.updateReminder(id, updates);
+                    if (tagNames !== undefined) {
+                        await TagService.setTagsForItem('reminder', id, tagNames);
+                    }
                     const reminder = get().reminders.find(r => r.id === id);
 
                     if (reminder) {
@@ -316,6 +365,7 @@ export const useStore = create<AppState>()(
                         }
                     }
                     await get().loadReminders();
+                    await get().loadTags();
                     if (get().session?.user?.id && get().cloudSyncEnabled) {
                         get().triggerSync();
                     }
@@ -450,7 +500,7 @@ export const useStore = create<AppState>()(
                         update: { type: LayoutAnimation.Types.spring, springDamping: 0.82 },
                         delete: { type: LayoutAnimation.Types.easeInEaseOut, property: LayoutAnimation.Properties.opacity },
                     });
-                } catch {}
+                } catch { }
                 set(state => ({
                     history: state.history.filter(r => r.id !== id)
                 }));
@@ -484,7 +534,7 @@ export const useStore = create<AppState>()(
                         update: { type: LayoutAnimation.Types.spring, springDamping: 0.82 },
                         delete: { type: LayoutAnimation.Types.easeInEaseOut, property: LayoutAnimation.Properties.opacity },
                     });
-                } catch {}
+                } catch { }
                 set(state => ({
                     history: state.history.filter(r => !idsSet.has(r.id))
                 }));
@@ -509,7 +559,6 @@ export const useStore = create<AppState>()(
                     await ReminderService.deleteForever(id);
                     if (get().session?.user?.id && get().cloudSyncEnabled) {
                         try {
-                            const { supabase } = await import('../lib/supabase');
                             await supabase.from('reminders').delete().eq('id', id);
                         } catch (cloudErr) {
                             console.warn('[Sync] Could not delete reminder from cloud:', cloudErr);
@@ -535,7 +584,6 @@ export const useStore = create<AppState>()(
                     await ReminderService.deleteRemindersForever(ids);
                     if (get().session?.user?.id && get().cloudSyncEnabled) {
                         try {
-                            const { supabase } = await import('../lib/supabase');
                             await supabase.from('reminders').delete().in('id', ids);
                         } catch (cloudErr) {
                             console.warn('[Sync] Could not delete reminders from cloud:', cloudErr);
@@ -560,7 +608,6 @@ export const useStore = create<AppState>()(
                     await ReminderService.emptyRemindersTrash();
                     if (deletedIds.length > 0 && get().session?.user?.id && get().cloudSyncEnabled) {
                         try {
-                            const { supabase } = await import('../lib/supabase');
                             await supabase.from('reminders').delete().in('id', deletedIds);
                         } catch (cloudErr) {
                             console.warn('[Sync] Could not delete trash reminders from cloud:', cloudErr);
@@ -646,14 +693,31 @@ export const useStore = create<AppState>()(
             toggleTheme: () => {
                 set((state) => {
                     const next = state.theme === 'dark' ? 'light' : 'dark';
-                    WidgetService.syncTheme(next, state.accentTheme).catch(() => {});
+                    updateWidgetTheme(next, state.accentTheme, state.amoledEnabled).catch(() => { });
                     return { theme: next };
                 });
             },
 
             setTheme: (theme) => {
                 set({ theme });
-                WidgetService.syncTheme(theme, get().accentTheme).catch(() => {});
+                updateWidgetTheme(theme, get().accentTheme, get().amoledEnabled).catch(() => { });
+            },
+
+            amoledEnabled: false,
+            setAmoledEnabled: (enabled: boolean) => {
+                set({ amoledEnabled: enabled });
+                updateWidgetTheme(get().theme || 'system', get().accentTheme, enabled).catch(() => { });
+                const session = get().session;
+                if (session?.user?.id) {
+                    supabase.auth.updateUser({
+                        data: {
+                            settings: {
+                                ...(session.user?.user_metadata?.settings || {}),
+                                amoledEnabled: enabled,
+                            },
+                        },
+                    }).catch((e) => console.warn('[AMOLED] Could not sync amoledEnabled to cloud:', e));
+                }
             },
 
             onboardingCompleted: false,
@@ -680,14 +744,19 @@ export const useStore = create<AppState>()(
             setSession: (session) => {
                 const email = session?.user?.email ?? null;
                 const isOwner = isWhitelistedPremiumEmail(email);
+                const prevUserId = get().session?.user?.id;
+                const newUserId = session?.user?.id;
+                const sameUser = Boolean(prevUserId && prevUserId === newUserId);
                 set({
                     session,
                     userEmail: email,
-                    isPremium: isOwner ? true : false,
+                    // En TOKEN_REFRESHED / USER_UPDATED del mismo usuario no resetear el estado premium
+                    isPremium: isOwner ? true : (sameUser ? get().isPremium : false),
                 });
 
-                if (session?.user?.id) {
-                    NotificationService.registerPushToken(session.user.id).catch(err => {
+                // Registrar push token solo cuando cambia el usuario (login), no en cada evento de auth
+                if (newUserId && !sameUser) {
+                    NotificationService.registerPushToken(newUserId).catch(err => {
                         console.warn('[useStore] Error registering push token on session change:', err);
                     });
                 }
@@ -695,9 +764,8 @@ export const useStore = create<AppState>()(
             signOut: async () => {
                 const currentUserId = get().session?.user?.id;
                 if (currentUserId) {
-                    await NotificationService.unregisterPushToken(currentUserId).catch(() => {});
+                    await NotificationService.unregisterPushToken(currentUserId).catch(() => { });
                 }
-                const { supabase } = await import('../lib/supabase');
                 await supabase.auth.signOut();
                 set({ session: null, userEmail: null, isPremium: false, lastSyncTime: null });
             },
@@ -725,19 +793,17 @@ export const useStore = create<AppState>()(
             accentTheme: 'blue' as AccentTheme,
             setAccentTheme: (accentTheme: AccentTheme) => {
                 set({ accentTheme });
-                WidgetService.syncTheme(get().theme || 'system', accentTheme).catch(() => {});
+                updateWidgetTheme(get().theme || 'system', accentTheme, get().amoledEnabled).catch(() => { });
                 const session = get().session;
                 if (session?.user?.id) {
-                    import('../lib/supabase').then(({ supabase }) => {
-                        supabase.auth.updateUser({
-                            data: {
-                                settings: {
-                                    ...(session.user?.user_metadata?.settings || {}),
-                                    accentTheme,
-                                },
+                    supabase.auth.updateUser({
+                        data: {
+                            settings: {
+                                ...(session.user?.user_metadata?.settings || {}),
+                                accentTheme,
                             },
-                        }).catch((e) => console.warn('[Accent] Could not sync accentTheme to cloud:', e));
-                    });
+                        },
+                    }).catch((e) => console.warn('[Accent] Could not sync accentTheme to cloud:', e));
                 }
             },
             cloudSyncEnabled: true,
@@ -749,12 +815,15 @@ export const useStore = create<AppState>()(
                 const state = get();
                 if (!state.session?.user?.id) return;
 
-                // Timeout adaptativo: 45s para primer inicio de sesión (descarga masiva), 35s para uso cotidiano
-                const SYNC_TIMEOUT_MS = isInitialLogin ? 45000 : 35000;
-                // Si ya está sincronizando, verificar si la sincronización previa lleva más del tiempo límite (watchdog adaptativo)
+                // Watchdog global: debe ser MAYOR que la suma de timeouts internos de syncAll
+                const SYNC_TIMEOUT_MS = isInitialLogin ? 150000 : 120000;
+                // Si ya está sincronizando, encolar un seguimiento si es mutación explícita y salir
                 if (state.isSyncing) {
                     const elapsedSinceStart = Date.now() - currentSyncStartTime;
                     if (currentSyncStartTime > 0 && elapsedSinceStart < SYNC_TIMEOUT_MS) {
+                        if (!isBackground) {
+                            pendingFollowUpSync = true;
+                        }
                         return;
                     }
                     console.warn(`[Sync] Previous sync exceeded ${SYNC_TIMEOUT_MS}ms watchdog or was stuck; releasing sync lock.`);
@@ -772,51 +841,53 @@ export const useStore = create<AppState>()(
                 }
 
                 currentSyncStartTime = Date.now();
+                pendingFollowUpSync = false;
                 set({ isSyncing: true, syncError: null });
 
                 try {
-                    const { SyncService } = await import('../services/syncService');
-                    
-                    // Promise.race con timeout adaptativo para que nunca se congele la interfaz
+                    // Promise.race con timeout adaptativo y limpieza garantizada de timers
+                    let timeoutTimer: any;
                     const syncPromise = SyncService.syncAll(state.session.user.id, isInitialLogin);
-                    const timeoutPromise = new Promise<{ success: boolean; errors: string[] }>((_, reject) =>
-                        setTimeout(() => reject(new Error(`La sincronización tardó demasiado (timeout ${SYNC_TIMEOUT_MS / 1000}s)`)), SYNC_TIMEOUT_MS)
-                    );
+                    const timeoutPromise = new Promise<{ success: boolean; errors: string[] }>((_, reject) => {
+                        timeoutTimer = setTimeout(() => reject(new Error(`La sincronización tardó demasiado (timeout ${SYNC_TIMEOUT_MS / 1000}s)`)), SYNC_TIMEOUT_MS);
+                    });
 
-                    const result = await Promise.race([syncPromise, timeoutPromise]);
+                    const result = await Promise.race([
+                        syncPromise.finally(() => {
+                            if (timeoutTimer) clearTimeout(timeoutTimer);
+                        }),
+                        timeoutPromise
+                    ]);
 
                     if (result.success) {
                         set({ lastSyncTime: Date.now(), syncError: null });
                     } else {
-                        set({ syncError: result.errors.join(', ') });
+                        set({ lastSyncTime: Date.now(), syncError: result.errors.join(', ') });
                     }
                 } catch (e: any) {
                     console.error('[Sync] Sync failed or timed out:', e);
                     set({ syncError: e?.message || 'Error de sincronización' });
                 } finally {
-                    // Recargar datos locales de forma resiliente tanto si tuvo éxito como si hubo error parcial/timeout,
-                    // garantizando que la UI muestre cualquier dato descargado en SQLite.
-                    await Promise.allSettled([
-                        get().loadReminders().catch(() => {}),
-                        get().loadHistory().catch(() => {}),
-                        get().loadStreak().catch(() => {}),
-                        (async () => {
-                            const { useNotesStore } = await import('./useNotesStore');
-                            await useNotesStore.getState().loadNotes();
-                        })().catch(() => {}),
-                        (async () => {
-                            const { useFoldersStore } = await import('./useFoldersStore');
-                            await useFoldersStore.getState().loadFolders();
-                        })().catch(() => {}),
-                        (async () => {
-                            const { useEventsStore } = await import('./useEventsStore');
-                            await useEventsStore.getState().loadAllEvents();
-                        })().catch(() => {}),
-                    ]);
-
-                    // GARANTÍA ABSOLUTA: isSyncing NUNCA puede quedarse en true
+                    // GARANTÍA ABSOLUTA: Liberar el estado de sincronización de la UI inmediatamente
                     currentSyncStartTime = 0;
                     set({ isSyncing: false });
+
+                    // Recargar datos locales de forma resiliente tanto si tuvo éxito como si hubo error parcial/timeout,
+                    // garantizando que la UI muestre cualquier dato descargado en SQLite.
+                    Promise.allSettled([
+                        get().loadReminders().catch(() => { }),
+                        get().loadTags().catch(() => { }),
+                        get().loadHistory().catch(() => { }),
+                        get().loadStreak().catch(() => { }),
+                        ...externalStoreReloaders.map(fn => fn().catch(() => { })),
+                    ]).catch(() => { });
+
+                    if (pendingFollowUpSync) {
+                        pendingFollowUpSync = false;
+                        setTimeout(() => {
+                            get().triggerSync(false, false).catch(() => { });
+                        }, 600);
+                    }
                 }
             },
             streak: 0,
@@ -837,12 +908,22 @@ export const useStore = create<AppState>()(
             widgetTextScale: 1.0,
             setWidgetTextScale: (scale: number) => {
                 set({ widgetTextScale: scale });
-                WidgetService.setTextScale(scale).catch(() => {});
+                WidgetService.setTextScale(scale).catch(() => { });
             },
             widgetHighContrast: false,
             setWidgetHighContrast: (enabled: boolean) => {
                 set({ widgetHighContrast: enabled });
-                WidgetService.setHighContrast(enabled).catch(() => {});
+                WidgetService.setHighContrast(enabled).catch(() => { });
+            },
+            widgetGlassmorphic: false,
+            setWidgetGlassmorphic: (enabled: boolean) => {
+                set({ widgetGlassmorphic: enabled });
+                WidgetService.setGlassmorphic(enabled).catch(() => { });
+            },
+            widgetFrostedGlass: false,
+            setWidgetFrostedGlass: (enabled: boolean) => {
+                set({ widgetFrostedGlass: enabled });
+                WidgetService.setFrostedGlass(enabled).catch(() => { });
             },
             vibrationEnabled: true,
             setVibrationEnabled: (enabled: boolean) => {
@@ -851,10 +932,21 @@ export const useStore = create<AppState>()(
         }),
         {
             name: 'app-storage',
+            version: 2,
+            migrate: (persistedState: any, version: number) => {
+                if (version < 2 || !persistedState) {
+                    return {
+                        ...persistedState,
+                        amoledEnabled: false,
+                    };
+                }
+                return persistedState;
+            },
             storage: createJSONStorage(() => AsyncStorage),
             // Solo persistimos el tema y el onboarding para evitar conflictos de sincronización con SQLite
             partialize: (state) => ({
                 theme: state.theme,
+                amoledEnabled: state.amoledEnabled ?? false,
                 onboardingCompleted: state.onboardingCompleted,
                 userProfile: state.userProfile,
                 userName: state.userName,
@@ -869,6 +961,8 @@ export const useStore = create<AppState>()(
                 homeViewMode: state.homeViewMode,
                 widgetTextScale: state.widgetTextScale,
                 widgetHighContrast: state.widgetHighContrast,
+                widgetGlassmorphic: state.widgetGlassmorphic ?? false,
+                widgetFrostedGlass: state.widgetFrostedGlass ?? false,
                 vibrationEnabled: state.vibrationEnabled ?? true,
             }),
             onRehydrateStorage: () => (state) => {
@@ -886,3 +980,22 @@ export const useStore = create<AppState>()(
         }
     )
 );
+
+registerWidgetStoreCallbacks({
+    getReminders: () => useStore.getState().reminders,
+    markAsCompleted: (id) => useStore.getState().markAsCompleted(id),
+    snoozeReminder: (id, minutes) => useStore.getState().snoozeReminder(id, minutes),
+});
+
+registerSyncStoreHandlers({
+    getMainStoreState: () => useStore.getState(),
+    setMainStoreState: (partial) => useStore.setState(partial),
+    loadReminders: () => useStore.getState().loadReminders(),
+    loadStreak: () => useStore.getState().loadStreak(),
+    loadTags: () => useStore.getState().loadTags(),
+});
+
+registerTagsChangedListener(() => {
+    useStore.getState().loadTags().catch(() => { });
+});
+

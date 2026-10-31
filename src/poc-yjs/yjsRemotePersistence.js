@@ -274,6 +274,63 @@ class YjsRemotePersistence {
       error: "Compactaci\xF3n remota deshabilitada en Fase B.4: el log de deltas es la \xFAnica fuente de verdad autoritativa"
     };
   }
+  /**
+   * Invoca la RPC transaccional `activate_note_yjs_mode` de producción (Fase 3.1 / 3.3).
+   * Parámetros exactos: p_note_id, p_initial_update_data, p_initial_update_hash, p_client_id,
+   * p_expected_content_hash, p_expected_updated_at_ms, p_initial_state_vector
+   */
+  async activateNoteYjsMode(params) {
+    try {
+      if (!params.noteId || params.noteId.trim() === '') {
+        return { success: false, error: 'p_note_id no puede ser nulo o vacío' };
+      }
+      if (!params.initialUpdateData || params.initialUpdateData.trim() === '') {
+        return { success: false, error: 'p_initial_update_data no puede ser nulo o vacío' };
+      }
+      if (!params.initialUpdateHash || params.initialUpdateHash.trim().length !== 64) {
+        return { success: false, error: 'p_initial_update_hash debe ser un hash SHA-256 de 64 caracteres' };
+      }
+      if (!params.clientId || params.clientId.trim() === '') {
+        return { success: false, error: 'p_client_id no puede ser nulo o vacío' };
+      }
+      if (!params.expectedContentHash || params.expectedContentHash.trim().length !== 64) {
+        return { success: false, error: 'p_expected_content_hash debe ser un hash SHA-256 de 64 caracteres' };
+      }
+      if (params.expectedUpdatedAtMs === void 0 || params.expectedUpdatedAtMs === null || params.expectedUpdatedAtMs <= 0) {
+        return { success: false, error: 'p_expected_updated_at_ms debe ser un timestamp positivo' };
+      }
+
+      const { data, error } = await this.supabase.rpc('activate_note_yjs_mode', {
+        p_note_id: params.noteId.trim(),
+        p_initial_update_data: params.initialUpdateData,
+        p_initial_update_hash: params.initialUpdateHash.trim().toLowerCase(),
+        p_client_id: params.clientId.trim(),
+        p_expected_content_hash: params.expectedContentHash.trim().toLowerCase(),
+        p_expected_updated_at_ms: Math.floor(params.expectedUpdatedAtMs),
+        p_initial_state_vector: params.initialStateVector || null,
+      });
+
+      if (error) {
+        return {
+          success: false,
+          error: error.message || 'Error invocando activate_note_yjs_mode',
+        };
+      }
+
+      return {
+        success: Boolean(data?.success),
+        noteId: data?.note_id,
+        syncMode: data?.sync_mode,
+        initialUpdateId: data?.initial_update_id ? Number(data.initial_update_id) : void 0,
+        updatedAtMs: data?.updated_at_ms ? Number(data.updated_at_ms) : void 0,
+      };
+    } catch (err) {
+      return {
+        success: false,
+        error: err?.message || 'Excepción invocando activate_note_yjs_mode',
+      };
+    }
+  }
 }
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {

@@ -164,7 +164,7 @@ export const NOTE_FONTS: NoteFontOption[] = [
 
 export const DEFAULT_NOTE_FONT_ID = 'sans';
 
-export const GOOGLE_FONTS_CSS_IMPORT = `@import url('https://fonts.googleapis.com/css2?family=Caveat:wght@500;700&family=Cherry+Bomb+One&family=Crafty+Girls&family=Dekko&family=Fira+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=Hachi+Maru+Pop&family=JetBrains+Mono:wght@400;600&family=Lora:ital,wght@0,400;0,600;1,400&family=Noto+Serif+Khitan+Small+Script&family=Plus+Jakarta+Sans:wght@400;600;700&family=Quicksand:wght@500;700&family=Sniglet:wght@400;800&family=Noto+Sans+JP:wght@400;700&family=Noto+Sans+Math&family=Noto+Sans+Symbols:wght@400;700&display=swap');`;
+export const GOOGLE_FONTS_CSS_IMPORT = `@import url('https://fonts.googleapis.com/css2?family=Caveat:wght@500;700&family=Cherry+Bomb+One&family=Crafty+Girls&family=Dekko&family=Fira+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=Hachi+Maru+Pop&family=JetBrains+Mono:wght@400;600&family=Lora:ital,wght@0,400;0,600;1,400&family=Noto+Serif+Khitan+Small+Script&family=Plus+Jakarta+Sans:ital,wght@0,400;0,600;0,700;1,400;1,600;1,700&family=Quicksand:wght@500;700&family=Sniglet:wght@400;800&family=Noto+Sans+JP:wght@400;700&family=Noto+Sans+Math&family=Noto+Sans+Symbols:wght@400;700&display=swap');`;
 
 /**
  * Retorna la regla CSS completa para font-family dado un id o nombre de fuente.

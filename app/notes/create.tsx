@@ -133,10 +133,10 @@ export default function CreateNoteScreen() {
         maxAttachments,
         broadcastCursorMove,
         broadcastCursorRemove,
-    } = useCreateNote(id, paramFolderId, paramEventId, paramInitialTitle);
+    } = useCreateNote(id, paramFolderId, paramEventId, paramInitialTitle, undefined, { isEditMode: true });
 
     const currentFolder = folders.find(f => f.id === folderId);
-    const linkedEvent = events.find(e => e.id === eventId);
+    const linkedEvent = events.find(e => e.id === eventId || (Boolean(folderId) && e.folder_id === folderId));
 
     const [isPagesModalVisible, setIsPagesModalVisible] = useState(false);
     const [isOptionsMenuVisible, setIsOptionsMenuVisible] = useState(false);
@@ -322,6 +322,10 @@ export default function CreateNoteScreen() {
                 ref={verticalScrollRef}
                 style={{ flex: 1 }}
                 showsVerticalScrollIndicator={false}
+                showsHorizontalScrollIndicator={false}
+                alwaysBounceHorizontal={false}
+                bounces={false}
+                overScrollMode="never"
                 contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom + 110 }]}
                 keyboardShouldPersistTaps="always"
                 keyboardDismissMode="none"
@@ -478,7 +482,7 @@ export default function CreateNoteScreen() {
                     decelerationRate="fast"
                     snapToInterval={windowWidth}
                     snapToAlignment="center"
-                    scrollEnabled={!isDraggingImage}
+                    scrollEnabled={pages.length > 1 && !isDraggingImage}
                     keyExtractor={(item) => item.id}
                     contentContainerStyle={{ paddingHorizontal: 0 }}
                     onMomentumScrollEnd={ev => {
@@ -652,7 +656,9 @@ export default function CreateNoteScreen() {
 
                         {/* Evento Vinculado */}
                         {linkedEvent && (
-                            <View
+                            <TouchableOpacity
+                                activeOpacity={0.75}
+                                onPress={() => router.push({ pathname: '/events/[id]', params: { id: linkedEvent.id } })}
                                 style={[
                                     styles.headerFolderBtn,
                                     {
@@ -672,7 +678,7 @@ export default function CreateNoteScreen() {
                                 >
                                     {linkedEvent.title}
                                 </Text>
-                            </View>
+                            </TouchableOpacity>
                         )}
 
                         {/* Botones de Deshacer y Rehacer */}
@@ -718,7 +724,7 @@ export default function CreateNoteScreen() {
                         ],
                     }}
                 >
-                    {scrollLayout === 'vertical' ? renderVerticalPages() : renderHorizontalPages()}
+                    {scrollLayout === 'vertical' || pages.length <= 1 ? renderVerticalPages() : renderHorizontalPages()}
                 </Animated.View>
 
                 {/* Floating Page Switcher Pill al pie */}
@@ -754,7 +760,7 @@ export default function CreateNoteScreen() {
                             },
                         ]}
                     >
-                        <Plus size={15} color={isDark ? '#1B1B1B' : '#FFFFFF'} strokeWidth={3} />
+                        <Plus size={15} color={colors.textInverse} strokeWidth={3} />
                     </TouchableOpacity>
                 </View>
 

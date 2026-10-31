@@ -3,7 +3,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 import * as Crypto from 'expo-crypto';
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 
-const BUCKET = 'user_files';
+const BUCKET = 'attachments';
 const LOCAL_CACHE_DIR = `${FileSystem.documentDirectory}cloud_cache/`;
 // Imágenes: máximo 800px de ancho, 60% compresión JPEG  →  ~50-150KB por imagen
 const IMAGE_MAX_WIDTH = 800;
@@ -15,10 +15,18 @@ const IMAGE_QUALITY = 0.6;
  * Estrategia para minimizar Egress:
  * 1. Caché local agresivo: Una vez descargado, nunca se vuelve a pedir.
  * 2. Compresión antes de subir: Las imágenes se redimensionan y comprimen.
- * 3. Bucket privado: Las URLs firmadas tienen TTL largo (1 año).
+ * 3. Bucket público: URLs públicas directas vía getPublicUrl (sin expiración).
  * 4. Deduplicación por hash: No se sube dos veces el mismo archivo.
  */
 export const StorageService = {
+
+    /**
+     * Obtiene la URL pública directa de un archivo en Supabase Storage.
+     */
+    getPublicUrl(remotePath: string): string {
+        const { data } = supabase.storage.from(BUCKET).getPublicUrl(remotePath);
+        return data.publicUrl;
+    },
 
     /**
      * Asegura que el directorio de caché exista.
@@ -80,12 +88,6 @@ export const StorageService = {
         }
     },
 
-    /**
-     * Sube un archivo local a Supabase Storage.
-     * Retorna la ruta remota (no la URL) para poder generar signed URLs.
-     *
-     * Si el archivo ya existe en el servidor (misma ruta), no se vuelve a subir.
-     */
     /**
      * Sube un archivo local a Supabase Storage.
      * Retorna la ruta remota (no la URL) para poder generar signed URLs.
@@ -171,22 +173,63 @@ export const StorageService = {
      * Si ya está en caché, retorna directamente la ruta local (ZERO egress).
      */
     async downloadFile(remotePath: string): Promise<string | null> {
+        const result = await this.downloadFileDetailed(remotePath);
+        return result.localPath;
+    },
+
+    /**
+     * Descarga un archivo con detalle de resultado (incluyendo si no fue encontrado en el servidor).
+     */
+    async downloadFileDetailed(remotePath: string): Promise<{ localPath: string | null; notFound?: boolean }> {
         try {
             await this.ensureCacheDir();
 
+            if (!remotePath || typeof remotePath !== 'string') {
+                return { localPath: null, notFound: true };
+            }
+
+            let cleanPath = remotePath.trim();
+            if (cleanPath.startsWith('attachments/')) {
+                cleanPath = cleanPath.replace(/^attachments\//, '');
+            }
+            if (cleanPath.startsWith('/')) {
+                cleanPath = cleanPath.replace(/^\/+/, '');
+            }
+
             // Verificar caché local primero (evita egress)
-            const safeName = remotePath.replace(/\//g, '_');
+            const safeName = cleanPath.replace(/[^a-zA-Z0-9._-]/g, '_');
             const localPath = `${LOCAL_CACHE_DIR}${safeName}`;
             const cached = await FileSystem.getInfoAsync(localPath);
 
             if (cached.exists) {
-                return localPath;
+                return { localPath };
+            }
+
+            // Si es una URL http/https directa, descargar directamente sin pedir signed URL
+            if (cleanPath.startsWith('http://') || cleanPath.startsWith('https://')) {
+                const downloadPromise = FileSystem.downloadAsync(cleanPath, localPath);
+                const downloadResult = await Promise.race([
+                    downloadPromise,
+                    new Promise<any>((_, reject) =>
+                        setTimeout(() => reject(new Error('DownloadAsync timeout (8s)')), 8000)
+                    )
+                ]).catch((e) => {
+                    console.warn('[StorageService] Direct HTTP download error:', e);
+                    return null;
+                });
+                if (downloadResult && downloadResult.status === 200) {
+                    return { localPath };
+                }
+                if (downloadResult && downloadResult.status === 404) {
+                    return { localPath: null, notFound: true };
+                }
+                return { localPath: null };
             }
 
             // Generar URL firmada con TTL de 1 año (con timeout de 6s)
             const signedUrlPromise = supabase.storage
                 .from(BUCKET)
-                .createSignedUrl(remotePath, 60 * 60 * 24 * 365); // 1 año
+                .createSignedUrl(cleanPath, 60 * 60 * 24 * 365); // 1 año
 
             const { data: signedUrlData, error: signError } = await Promise.race([
                 signedUrlPromise,
@@ -196,8 +239,23 @@ export const StorageService = {
             ]).catch((e) => ({ data: null, error: e }));
 
             if (signError || !signedUrlData?.signedUrl) {
-                console.error('[StorageService] Signed URL failed:', signError);
-                return null;
+                const msg = String(signError?.message || signError?.error || '').toLowerCase();
+                const statusStr = String(signError?.statusCode || signError?.status || '');
+                const isNotFound = msg.includes('not found') ||
+                    msg.includes('object not found') ||
+                    msg.includes('not authorized') ||
+                    msg.includes('permission') ||
+                    statusStr === '404' ||
+                    statusStr === '400' ||
+                    statusStr === '403' ||
+                    signError?.error === 'not_found';
+
+                if (isNotFound) {
+                    return { localPath: null, notFound: true };
+                }
+
+                console.warn('[StorageService] Signed URL warning:', signError);
+                return { localPath: null };
             }
 
             // Descargar y guardar en caché (con timeout de 8s para no colgar el sync)
@@ -217,14 +275,18 @@ export const StorageService = {
             });
 
             if (downloadResult && downloadResult.status === 200) {
-                console.log(`[StorageService] Downloaded and cached: ${remotePath}`);
-                return localPath;
+                console.log(`[StorageService] Downloaded and cached: ${cleanPath}`);
+                return { localPath };
             }
 
-            return null;
+            if (downloadResult && downloadResult.status === 404) {
+                return { localPath: null, notFound: true };
+            }
+
+            return { localPath: null };
         } catch (error) {
-            console.error('[StorageService] Download error:', error);
-            return null;
+            console.warn('[StorageService] Download error:', error);
+            return { localPath: null };
         }
     },
 
@@ -312,23 +374,33 @@ export const StorageService = {
      * Solo descarga los que tienen remotePath y cuyo archivo local no existe.
      */
     async downloadAttachments(
-        attachments: { uri: string; name: string; remotePath?: string }[]
-    ): Promise<{ uri: string; name: string; remotePath?: string }[]> {
+        attachments: { uri: string; name: string; remotePath?: string; remoteNotFound?: boolean }[]
+    ): Promise<{ uri: string; name: string; remotePath?: string; remoteNotFound?: boolean }[]> {
         const results: any[] = [];
         if (!Array.isArray(attachments)) return results;
 
         for (const att of attachments) {
             if (!att || typeof att !== 'object') continue;
             if ((att as any).remotePath) {
+                // Si ya fue detectado como inexistente en el storage remoto, saltar para evitar bucles
+                if ((att as any).remoteNotFound) {
+                    results.push(att);
+                    continue;
+                }
+
                 // Verificar si el archivo local aún existe
                 const uri = att.uri && typeof att.uri === 'string' ? att.uri : '';
                 const localExists = uri ? (await FileSystem.getInfoAsync(uri)).exists : false;
                 if (!localExists) {
                     // Descargar del servidor
-                    const localPath = await this.downloadFile((att as any).remotePath);
-                    if (localPath) {
-                        results.push({ ...att, uri: localPath });
+                    const res = await this.downloadFileDetailed((att as any).remotePath);
+                    if (res.localPath) {
+                        results.push({ ...att, uri: res.localPath });
+                    } else if (res.notFound) {
+                        // El archivo no existe en el storage remoto: marcarlo para no reintentar en cada sync
+                        results.push({ ...att, remoteNotFound: true });
                     } else {
+                        // Fallo transitorio de red: mantener para el siguiente reintento
                         results.push(att);
                     }
                 } else {

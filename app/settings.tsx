@@ -7,13 +7,13 @@ import {
     StyleSheet,
     Switch,
     Platform,
-    Linking,
     Alert,
     Modal,
     Vibration,
+    BackHandler,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
+import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import {
     Bell,
@@ -42,9 +42,8 @@ import {
     Plus,
     X,
     SlidersHorizontal,
+    User,
 } from '@tamagui/lucide-icons';
-import * as IntentLauncher from 'expo-intent-launcher';
-import * as Application from 'expo-application';
 import Constants from 'expo-constants';
 
 import { useStore } from '../src/store/useStore';
@@ -54,14 +53,23 @@ import { useVeyraTheme } from '../src/theme/useVeyraTheme';
 import { VeyraIconButton } from '../src/components/ui/VeyraIconButton';
 import { AlarmPermissionsModal } from '../src/components/settings/AlarmPermissionsModal';
 import { WidgetService } from '../src/services/widgetService';
+import { updateTodayWidget } from '../src/widgets/widgetUpdater';
 import { useNotesStore } from '../src/store/useNotesStore';
 import { useFoldersStore } from '../src/store/useFoldersStore';
 
+type SettingsSection = 'main' | 'notifications' | 'appearance' | 'widgets' | 'cloud' | 'legal';
+
 export default function SettingsScreen() {
     const router = useRouter();
+    const params = useLocalSearchParams<{ section?: string }>();
     const { t } = useTranslation();
+
+    const [currentSection, setCurrentSection] = useState<SettingsSection>(
+        (params.section as SettingsSection) || 'main'
+    );
     const [showAlarmPermissionsModal, setShowAlarmPermissionsModal] = useState(false);
     const [showAddWidgetModal, setShowAddWidgetModal] = useState(false);
+
     const notes = useNotesStore(state => state.notes);
     const folders = useFoldersStore(state => state.folders);
     const [notesWidgetFilter, setNotesWidgetFilterState] = useState<{ mode: string; folderId?: string; noteId?: string }>({ mode: 'all' });
@@ -74,9 +82,24 @@ export default function SettingsScreen() {
         }
     }, []);
 
+    // Manejar el botón "Atrás" físico de Android para volver al Hub principal
+    useEffect(() => {
+        const onBackPress = () => {
+            if (currentSection !== 'main') {
+                setCurrentSection('main');
+                return true;
+            }
+            return false;
+        };
+        const sub = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+        return () => sub.remove();
+    }, [currentSection]);
+
     const {
         theme,
         setTheme,
+        amoledEnabled,
+        setAmoledEnabled,
         defaultControlLevel,
         setDefaultControlLevel,
         soundSettings,
@@ -88,12 +111,19 @@ export default function SettingsScreen() {
         lastSyncTime,
         triggerSync,
         session,
+        userName,
+        userEmail,
+        isPremium,
         accentTheme,
         setAccentTheme,
         widgetTextScale,
         setWidgetTextScale,
         widgetHighContrast,
         setWidgetHighContrast,
+        widgetGlassmorphic,
+        setWidgetGlassmorphic,
+        widgetFrostedGlass,
+        setWidgetFrostedGlass,
         vibrationEnabled,
         setVibrationEnabled,
     } = useStore();
@@ -108,7 +138,7 @@ export default function SettingsScreen() {
     const [notificationsEnabled, setNotificationsEnabled] = useState(true);
     const [soundEnabled, setSoundEnabled] = useState(true);
 
-    const { colors, typography, accent, isDark } = useVeyraTheme();
+    const { colors, typography, accent, isDark, isAmoled } = useVeyraTheme();
     const insets = useSafeAreaInsets();
 
     const controlLevels = [
@@ -133,14 +163,6 @@ export default function SettingsScreen() {
             icon: FileText,
             color: '#8B5CF6',
             action: WidgetService.requestPinNotes,
-        },
-        {
-            key: 'combo',
-            title: language === 'es' ? 'Widget "Agenda & Notas"' : '"Agenda & Notes" Widget',
-            subtitle: language === 'es' ? 'Dúo interactivo con pestañas' : 'Tabbed interactive duo',
-            icon: Layers,
-            color: '#EC4899',
-            action: WidgetService.requestPinCombo,
         },
         {
             key: 'quick',
@@ -180,18 +202,77 @@ export default function SettingsScreen() {
         }
     };
 
+    const handleBack = () => {
+        if (currentSection !== 'main') {
+            setCurrentSection('main');
+        } else {
+            router.back();
+        }
+    };
+
+    const getHeaderTitle = () => {
+        switch (currentSection) {
+            case 'notifications':
+                return t('settings.notifications', 'Notificaciones y Alertas');
+            case 'appearance':
+                return t('settings.general', 'Apariencia y Tema');
+            case 'widgets':
+                return language === 'es' ? 'Widgets de Inicio' : 'Home Widgets';
+            case 'cloud':
+                return t('settings.cloud_sync', 'Nube y Cuenta');
+            case 'legal':
+                return language === 'es' ? 'Información y Legal' : 'Legal & Info';
+            default:
+                return t('settings.title', 'Ajustes');
+        }
+    };
+
+    const getSectionSubtitle = () => {
+        switch (currentSection) {
+            case 'notifications':
+                return language === 'es'
+                    ? 'Avisos en pantalla, tonos audibles, vibración y niveles de control'
+                    : 'Alerts, ringtones, vibration & urgency levels';
+            case 'appearance':
+                return language === 'es'
+                    ? 'Tema oscuro/claro, color de acento, idioma y formato horario'
+                    : 'Dark/light mode, accent color, language & time format';
+            case 'widgets':
+                return language === 'es'
+                    ? 'Estilos translúcidos, efecto esmerilado, escala y filtros de notas'
+                    : 'Translucent styles, frosted glow, scaling & note filters';
+            case 'cloud':
+                return language === 'es'
+                    ? 'Sincronización en la nube y respaldo de recordatorios y notas'
+                    : 'Cloud sync and backup for reminders and notes';
+            case 'legal':
+                return language === 'es'
+                    ? 'Políticas de privacidad, términos de servicio y versión de Veyra'
+                    : 'Privacy policy, terms of service and Veyra version';
+            default:
+                return language === 'es'
+                    ? 'Personaliza tus alertas, apariencia, widgets y cuenta'
+                    : 'Customize alerts, appearance, widgets & account';
+        }
+    };
+
+    const cardBgStyle = {
+        backgroundColor: isDark ? 'rgba(255, 255, 255, 0.035)' : '#FFFFFF',
+        borderColor: isDark ? 'rgba(255, 255, 255, 0.06)' : 'rgba(0, 0, 0, 0.05)',
+    };
+
     return (
         <SafeAreaView style={[styles.screen, { backgroundColor: colors.bg }]} edges={['top', 'right', 'left']}>
-            {/* Header de navegación */}
+            {/* Header de navegación contextual */}
             <View style={styles.navHeader}>
                 <VeyraIconButton
                     variant="ghost"
                     size="sm"
                     icon={<ChevronLeft size={22} color={colors.textPrimary} />}
-                    onPress={() => router.back()}
+                    onPress={handleBack}
                 />
-                <Text style={[styles.navHeaderTitle, { color: colors.textPrimary }]}>
-                    {t('settings.title', 'Ajustes')}
+                <Text style={[styles.navHeaderTitle, { color: colors.textPrimary }]} numberOfLines={1}>
+                    {getHeaderTitle()}
                 </Text>
                 <View style={{ width: 40 }} />
             </View>
@@ -203,396 +284,555 @@ export default function SettingsScreen() {
                 {/* Visual Hero Title */}
                 <View style={styles.heroSection}>
                     <Text style={[styles.heroTitle, { color: colors.textPrimary }]}>
-                        {t('settings.title', 'Ajustes')}
+                        {getHeaderTitle()}
                     </Text>
                     <Text style={[styles.heroSubtitle, { color: colors.textSecondary }]}>
-                        {language === 'es'
-                            ? 'Personaliza tus alertas, vibración, tema y widgets'
-                            : 'Customize alerts, vibration, theme & widgets'}
+                        {getSectionSubtitle()}
                     </Text>
                 </View>
 
-                {/* Garantía de Alarma y Pantalla de Bloqueo (Android) */}
-                {Platform.OS === 'android' && (
-                    <TouchableOpacity
-                        onPress={() => setShowAlarmPermissionsModal(true)}
-                        activeOpacity={0.8}
-                        style={[
-                            styles.warrantyBanner,
-                            {
-                                backgroundColor: isDark ? 'rgba(239, 68, 68, 0.08)' : 'rgba(239, 68, 68, 0.05)',
-                                borderColor: isDark ? 'rgba(239, 68, 68, 0.25)' : 'rgba(239, 68, 68, 0.20)',
-                            },
-                        ]}
-                    >
-                        <View style={[styles.warrantyIconCircle, { backgroundColor: 'rgba(239, 68, 68, 0.15)' }]}>
-                            <ShieldAlert size={20} color="#EF4444" strokeWidth={2.4} />
-                        </View>
-                        <View style={styles.warrantyTextCol}>
-                            <View style={styles.warrantyTitleRow}>
-                                <Text style={[styles.warrantyTitle, { color: isDark ? '#F87171' : '#DC2626' }]}>
-                                    {t('settings.alarm_warranty', 'Garantía de Alarma')}
-                                </Text>
-                                <View style={styles.warrantyLiveBadge}>
-                                    <Text style={styles.warrantyLiveText}>
-                                        {language === 'es' ? 'IMPORTANTE' : 'IMPORTANT'}
+                {/* ══════════════════════════════════════════════════════════════ */}
+                {/* 1. HUB PRINCIPAL DE AJUSTES                                    */}
+                {/* ══════════════════════════════════════════════════════════════ */}
+                {currentSection === 'main' && (
+                    <>
+                        {/* Garantía de Alarma y Pantalla de Bloqueo (Android) */}
+                        {Platform.OS === 'android' && (
+                            <TouchableOpacity
+                                onPress={() => setShowAlarmPermissionsModal(true)}
+                                activeOpacity={0.8}
+                                style={[
+                                    styles.warrantyBanner,
+                                    {
+                                        backgroundColor: isDark ? 'rgba(239, 68, 68, 0.08)' : 'rgba(239, 68, 68, 0.05)',
+                                        borderColor: isDark ? 'rgba(239, 68, 68, 0.25)' : 'rgba(239, 68, 68, 0.20)',
+                                    },
+                                ]}
+                            >
+                                <View style={[styles.warrantyIconCircle, { backgroundColor: 'rgba(239, 68, 68, 0.15)' }]}>
+                                    <ShieldAlert size={20} color="#EF4444" strokeWidth={2.4} />
+                                </View>
+                                <View style={styles.warrantyTextCol}>
+                                    <View style={styles.warrantyTitleRow}>
+                                        <Text style={[styles.warrantyTitle, { color: isDark ? '#F87171' : '#DC2626' }]}>
+                                            {t('settings.alarm_warranty', 'Garantía de Alarma')}
+                                        </Text>
+                                        <View style={styles.warrantyLiveBadge}>
+                                            <Text style={styles.warrantyLiveText}>
+                                                {language === 'es' ? 'IMPORTANTE' : 'IMPORTANT'}
+                                            </Text>
+                                        </View>
+                                    </View>
+                                    <Text style={[styles.warrantyDesc, { color: colors.textSecondary }]}>
+                                        {t('settings.alarm_warranty_desc', 'Verifica permisos para que ninguna alarma se detenga sobre la pantalla de bloqueo')}
                                     </Text>
                                 </View>
-                            </View>
-                            <Text style={[styles.warrantyDesc, { color: colors.textSecondary }]}>
-                                {t('settings.alarm_warranty_desc', 'Verifica permisos para que ninguna alarma se detenga sobre la pantalla de bloqueo')}
-                            </Text>
-                        </View>
-                        <ChevronRight size={18} color={isDark ? '#F87171' : '#DC2626'} />
-                    </TouchableOpacity>
-                )}
+                                <ChevronRight size={18} color={isDark ? '#F87171' : '#DC2626'} />
+                            </TouchableOpacity>
+                        )}
 
-                {/* ══════════ SECCIÓN 1: NOTIFICACIONES Y ALERTAS ══════════ */}
-                <View style={styles.sectionHeaderWrap}>
-                    <Text style={[styles.sectionHeaderText, { color: colors.textSecondary }]}>
-                        {t('settings.notifications', 'Notificaciones y Alertas').toUpperCase()}
-                    </Text>
-                </View>
-
-                <View style={[styles.groupCard, {
-                    backgroundColor: isDark ? 'rgba(255, 255, 255, 0.035)' : '#FFFFFF',
-                    borderColor: isDark ? 'rgba(255, 255, 255, 0.06)' : 'rgba(0, 0, 0, 0.05)',
-                }]}>
-                    {/* Switch Notificaciones del Sistema */}
-                    <ModernSettingsRow
-                        icon={Bell}
-                        iconColor="#3B82F6"
-                        iconBg={isDark ? 'rgba(59, 130, 246, 0.15)' : 'rgba(59, 130, 246, 0.10)'}
-                        title={t('settings.notifications_label', 'Notificaciones')}
-                        description={language === 'es' ? 'Avisos en la barra de estado y pantalla' : 'Status bar & lock screen alerts'}
-                        rightElement={
-                            <Switch
-                                value={notificationsEnabled}
-                                onValueChange={setNotificationsEnabled}
-                                trackColor={{ false: colors.surfaceElevated, true: accent.primary }}
-                                thumbColor="#FFFFFF"
-                            />
-                        }
-                    />
-
-                    {notificationsEnabled && (
-                        <>
-                            <RowDivider />
-                            {/* Switch Sonido de Alerta */}
+                        {/* Tarjeta de Cuenta / Perfil */}
+                        <View style={[styles.groupCard, cardBgStyle]}>
                             <ModernSettingsRow
-                                icon={Volume2}
-                                iconColor="#8B5CF6"
-                                iconBg={isDark ? 'rgba(139, 92, 246, 0.15)' : 'rgba(139, 92, 246, 0.10)'}
-                                title={t('settings.sound', 'Sonidos de alerta')}
-                                description={language === 'es' ? 'Reproducir tonos audibles' : 'Play audio ringtones'}
-                                rightElement={
-                                    <Switch
-                                        value={soundEnabled}
-                                        onValueChange={setSoundEnabled}
-                                        trackColor={{ false: colors.surfaceElevated, true: accent.primary }}
-                                        thumbColor="#FFFFFF"
-                                    />
-                                }
-                            />
-
-                            <RowDivider />
-                            {/* Switch Vibración Táctil (Hardware) */}
-                            <ModernSettingsRow
-                                icon={Vibrate}
-                                iconColor="#10B981"
-                                iconBg={isDark ? 'rgba(16, 185, 129, 0.15)' : 'rgba(16, 185, 129, 0.10)'}
-                                title={language === 'es' ? 'Vibración del teléfono' : 'Device vibration'}
-                                description={language === 'es' ? 'Vibración física en recordatorios y pantalla completa' : 'Hardware haptic vibration on alerts'}
-                                rightElement={
-                                    <Switch
-                                        value={vibrationEnabled ?? true}
-                                        onValueChange={(val) => {
-                                            setVibrationEnabled(val);
-                                            if (val) {
-                                                try { Vibration.vibrate(25); } catch (_) {}
-                                            }
-                                        }}
-                                        trackColor={{ false: colors.surfaceElevated, true: accent.primary }}
-                                        thumbColor="#FFFFFF"
-                                    />
-                                }
-                            />
-                        </>
-                    )}
-
-                    {/* Nivel de Control Predeterminado */}
-                    <RowDivider />
-                    <View style={styles.inlineSelectorRow}>
-                        <View style={styles.inlineSelectorHeader}>
-                            <View style={[styles.rowIconBadge, { backgroundColor: isDark ? 'rgba(245, 158, 11, 0.15)' : 'rgba(245, 158, 11, 0.10)' }]}>
-                                <SlidersHorizontal size={17} color="#F59E0B" />
-                            </View>
-                            <View style={{ flex: 1 }}>
-                                <Text style={[styles.rowTitleText, { color: colors.textPrimary }]}>
-                                    {t('settings.control_level', 'Nivel de control predeterminado')}
-                                </Text>
-                                <Text style={[styles.rowDescText, { color: colors.textMuted }]}>
-                                    {language === 'es' ? 'Intensidad al crear nuevos recordatorios' : 'Default urgency for new tasks'}
-                                </Text>
-                            </View>
-                        </View>
-
-                        {/* Segmentos limpios de nivel */}
-                        <View style={[styles.levelSegmentsWrap, { backgroundColor: colors.surfaceElevated }]}>
-                            {controlLevels.map((lvl) => {
-                                const isSelected = defaultControlLevel === lvl.value;
-                                return (
-                                    <TouchableOpacity
-                                        key={lvl.value}
-                                        onPress={() => setDefaultControlLevel(lvl.value as any)}
-                                        activeOpacity={0.7}
-                                        style={[
-                                            styles.levelSegmentBtn,
-                                            isSelected && {
-                                                backgroundColor: isDark ? colors.surfaceCard : '#FFFFFF',
-                                                borderColor: lvl.color,
-                                                shadowColor: '#000000',
-                                                shadowOpacity: 0.08,
-                                                shadowRadius: 3,
-                                                elevation: 2,
-                                            },
-                                        ]}
-                                    >
-                                        <View style={[styles.levelDot, { backgroundColor: lvl.color }]} />
-                                        <Text
-                                            style={[
-                                                styles.levelSegmentLabel,
-                                                {
-                                                    color: isSelected ? colors.textPrimary : colors.textMuted,
-                                                    fontWeight: isSelected ? '700' : '500',
-                                                },
-                                            ]}
-                                        >
-                                            {lvl.label}
-                                        </Text>
-                                    </TouchableOpacity>
-                                );
-                            })}
-                        </View>
-                    </View>
-
-                    {/* Tonos por Nivel */}
-                    {notificationsEnabled && soundEnabled && (
-                        <>
-                            <RowDivider />
-                            <ModernSettingsRow
-                                icon={Bell}
-                                iconColor="#10B981"
-                                iconBg={isDark ? 'rgba(16, 185, 129, 0.15)' : 'rgba(16, 185, 129, 0.10)'}
-                                title={language === 'es' ? 'Tono: Normal' : 'Ringtone: Normal'}
-                                value={getSoundName(soundSettings.normal)}
+                                icon={User}
+                                iconColor={accent.primary}
+                                iconBg={isDark ? 'rgba(59, 130, 246, 0.15)' : 'rgba(59, 130, 246, 0.10)'}
+                                title={session ? (userName || session.user?.email || (language === 'es' ? 'Mi Perfil' : 'My Profile')) : (language === 'es' ? 'Iniciar Sesión / Cuenta' : 'Sign In / Account')}
+                                description={session ? (isPremium ? (language === 'es' ? 'Plan Premium Activo' : 'Premium Active') : (language === 'es' ? 'Plan Gratuito' : 'Free Plan')) : (language === 'es' ? 'Crea una cuenta para sincronizar tus notas y tareas' : 'Create an account to sync notes and tasks')}
+                                value={session ? (isPremium ? 'PRO' : (language === 'es' ? 'Gratis' : 'Free')) : (language === 'es' ? 'Conectar' : 'Connect')}
                                 isLink
-                                onPress={() => router.push({ pathname: '/sounds', params: { level: 'normal' } })}
+                                onPress={() => {
+                                    if (session) {
+                                        router.push('/profile' as any);
+                                    } else {
+                                        router.push('/login' as any);
+                                    }
+                                }}
                             />
-                            <RowDivider />
-                            <ModernSettingsRow
-                                icon={Zap}
-                                iconColor="#F59E0B"
-                                iconBg={isDark ? 'rgba(245, 158, 11, 0.15)' : 'rgba(245, 158, 11, 0.10)'}
-                                title={language === 'es' ? 'Tono: Estricto' : 'Ringtone: Strict'}
-                                value={getSoundName(soundSettings.strict)}
-                                isLink
-                                onPress={() => router.push({ pathname: '/sounds', params: { level: 'strict' } })}
-                            />
-                            <RowDivider />
-                            <ModernSettingsRow
-                                icon={AlertOctagon}
-                                iconColor="#E11D48"
-                                iconBg={isDark ? 'rgba(225, 29, 72, 0.15)' : 'rgba(225, 29, 72, 0.10)'}
-                                title={language === 'es' ? 'Tono: Crítico' : 'Ringtone: Critical'}
-                                value={getSoundName(soundSettings.critical)}
-                                isLink
-                                onPress={() => router.push({ pathname: '/sounds', params: { level: 'critical' } })}
-                            />
-                        </>
-                    )}
-                </View>
-
-                {/* ══════════ SECCIÓN 2: APARIENCIA Y PERSONALIZACIÓN ══════════ */}
-                <View style={styles.sectionHeaderWrap}>
-                    <Text style={[styles.sectionHeaderText, { color: colors.textSecondary }]}>
-                        {t('settings.general', 'Apariencia').toUpperCase()}
-                    </Text>
-                </View>
-
-                <View style={[styles.groupCard, {
-                    backgroundColor: isDark ? 'rgba(255, 255, 255, 0.035)' : '#FFFFFF',
-                    borderColor: isDark ? 'rgba(255, 255, 255, 0.06)' : 'rgba(0, 0, 0, 0.05)',
-                }]}>
-                    {/* Selector de Tema */}
-                    <View style={styles.themeRowWrap}>
-                        <View style={styles.themeRowHeader}>
-                            <View style={[styles.rowIconBadge, { backgroundColor: isDark ? 'rgba(59, 130, 246, 0.15)' : 'rgba(59, 130, 246, 0.10)' }]}>
-                                {theme === 'system' ? (
-                                    <Smartphone size={17} color="#3B82F6" />
-                                ) : isDark ? (
-                                    <Moon size={17} color="#A78BFA" />
-                                ) : (
-                                    <Sun size={17} color="#F59E0B" />
-                                )}
-                            </View>
-                            <View style={{ flex: 1 }}>
-                                <Text style={[styles.rowTitleText, { color: colors.textPrimary }]}>
-                                    {t('settings.theme', 'Tema de la App')}
-                                </Text>
-                                <Text style={[styles.rowDescText, { color: colors.textMuted }]}>
-                                    {theme === 'system'
-                                        ? `${t('settings.theme_system', 'Sistema')} (${isDark ? t('settings.theme_dark', 'Oscuro') : t('settings.theme_light', 'Claro')})`
-                                        : theme === 'dark'
-                                        ? t('settings.theme_dark', 'Oscuro')
-                                        : t('settings.theme_light', 'Claro')}
-                                </Text>
-                            </View>
                         </View>
 
-                        {/* Segmented Control */}
-                        <View style={[styles.segmentedControl, { backgroundColor: colors.surfaceElevated }]}>
-                            {[
-                                { key: 'system' as const, label: t('settings.theme_system', 'Sistema'), icon: Smartphone },
-                                { key: 'light' as const, label: t('settings.theme_light', 'Claro'), icon: Sun },
-                                { key: 'dark' as const, label: t('settings.theme_dark', 'Oscuro'), icon: Moon },
-                            ].map(item => {
-                                const isSelected = theme === item.key;
-                                const ItemIcon = item.icon;
-                                return (
-                                    <TouchableOpacity
-                                        key={item.key}
-                                        onPress={() => setTheme(item.key)}
-                                        activeOpacity={0.7}
-                                        style={[
-                                            styles.segmentButton,
-                                            isSelected && {
-                                                backgroundColor: isDark ? colors.surfaceCard : '#FFFFFF',
-                                                shadowColor: '#000000',
-                                                shadowOpacity: 0.08,
-                                                shadowRadius: 3,
-                                                elevation: 2,
-                                            },
-                                        ]}
-                                    >
-                                        <ItemIcon size={14} color={isSelected ? accent.primary : colors.textMuted} />
-                                        <Text style={[
-                                            styles.segmentText,
-                                            {
-                                                fontWeight: isSelected ? '700' : '500',
-                                                color: isSelected ? colors.textPrimary : colors.textMuted,
-                                            },
-                                        ]}>
-                                            {item.label}
-                                        </Text>
-                                    </TouchableOpacity>
-                                );
-                            })}
-                        </View>
-                    </View>
-
-                    <RowDivider />
-                    {/* Selector de Acento */}
-                    <View style={styles.accentRowWrap}>
-                        <View style={styles.accentRowHeader}>
-                            <View style={[styles.rowIconBadge, { backgroundColor: isDark ? 'rgba(236, 72, 153, 0.15)' : 'rgba(236, 72, 153, 0.10)' }]}>
-                                <Sparkles size={17} color="#EC4899" />
-                            </View>
-                            <View style={{ flex: 1 }}>
-                                <Text style={[styles.rowTitleText, { color: colors.textPrimary }]}>
-                                    {t('settings.accent_theme', 'Paleta de Acento')}
-                                </Text>
-                                <Text style={[styles.rowDescText, { color: colors.textMuted }]}>
-                                    {t(`settings.accent_${accentTheme}`, accentTheme)}
-                                </Text>
-                            </View>
-                        </View>
-
-                        <View style={styles.accentsRow}>
-                            {ACCENT_OPTIONS.map(option => {
-                                const isActive = accentTheme === option.key;
-                                const displayColor = isDark ? option.darkColor : option.lightColor;
-                                return (
-                                    <TouchableOpacity
-                                        key={option.key}
-                                        onPress={() => setAccentTheme(option.key)}
-                                        activeOpacity={0.7}
-                                        style={styles.accentItem}
-                                    >
-                                        <View
-                                            style={[
-                                                styles.accentCircle,
-                                                {
-                                                    backgroundColor: displayColor,
-                                                    borderColor: isDark ? '#FFFFFF' : '#0F172A',
-                                                    borderWidth: isActive ? 2.5 : 0,
-                                                    transform: isActive ? [{ scale: 1.1 }] : [{ scale: 1 }],
-                                                },
-                                            ]}
-                                        >
-                                            {isActive && <Check size={14} color="#FFFFFF" strokeWidth={3} />}
-                                        </View>
-                                        <Text
-                                            style={[
-                                                styles.accentLabel,
-                                                {
-                                                    color: isActive ? displayColor : colors.textMuted,
-                                                    fontWeight: isActive ? '800' : '600',
-                                                    fontSize: 10,
-                                                },
-                                            ]}
-                                        >
-                                            {t(`settings.accent_${option.key}`)}
-                                        </Text>
-                                    </TouchableOpacity>
-                                );
-                            })}
-                        </View>
-                    </View>
-
-                    <RowDivider />
-                    {/* Idioma */}
-                    <ModernSettingsRow
-                        icon={Globe}
-                        iconColor="#10B981"
-                        iconBg={isDark ? 'rgba(16, 185, 129, 0.15)' : 'rgba(16, 185, 129, 0.10)'}
-                        title={t('settings.language', 'Idioma')}
-                        value={language === 'es' ? t('settings.spanish', 'Español') : t('settings.english', 'Inglés')}
-                        isLink
-                        onPress={() => setLanguage(language === 'es' ? 'en' : 'es')}
-                    />
-
-                    <RowDivider />
-                    {/* Formato de Hora */}
-                    <ModernSettingsRow
-                        icon={Clock}
-                        iconColor="#3B82F6"
-                        iconBg={isDark ? 'rgba(59, 130, 246, 0.15)' : 'rgba(59, 130, 246, 0.10)'}
-                        title={t('settings.time_format_label', 'Formato de hora')}
-                        value={t('settings.hours_format', '24 horas')}
-                    />
-                </View>
-
-                {/* ══════════ SECCIÓN 3: WIDGETS DE INICIO (ANDROID) ══════════ */}
-                {Platform.OS === 'android' && (
-                    <>
+                        {/* SECCIÓN: PREFERENCIAS PRINCIPALES */}
                         <View style={styles.sectionHeaderWrap}>
                             <Text style={[styles.sectionHeaderText, { color: colors.textSecondary }]}>
-                                {language === 'es' ? 'WIDGETS DE INICIO' : 'HOME WIDGETS'}
+                                {language === 'es' ? 'PREFERENCIAS PRINCIPALES' : 'CORE PREFERENCES'}
                             </Text>
                         </View>
 
-                        <View style={[styles.groupCard, {
-                            backgroundColor: isDark ? 'rgba(255, 255, 255, 0.035)' : '#FFFFFF',
-                            borderColor: isDark ? 'rgba(255, 255, 255, 0.06)' : 'rgba(0, 0, 0, 0.05)',
-                        }]}>
-                            {/* Fila Única: Añadir Widget al Launcher */}
+                        <View style={[styles.groupCard, cardBgStyle]}>
+                            {/* Notificaciones y Alertas */}
+                            <ModernSettingsRow
+                                icon={Bell}
+                                iconColor="#3B82F6"
+                                iconBg={isDark ? 'rgba(59, 130, 246, 0.15)' : 'rgba(59, 130, 246, 0.10)'}
+                                title={t('settings.notifications', 'Notificaciones y Alertas')}
+                                description={language === 'es' ? 'Tonos, vibración y niveles de control' : 'Ringtones, vibration & urgency levels'}
+                                value={notificationsEnabled ? (soundEnabled ? (language === 'es' ? 'Activo' : 'Active') : (language === 'es' ? 'Silencio' : 'Silent')) : (language === 'es' ? 'Desactivado' : 'Off')}
+                                isLink
+                                onPress={() => setCurrentSection('notifications')}
+                            />
+
+                            <RowDivider />
+                            {/* Apariencia y Tema */}
+                            <ModernSettingsRow
+                                icon={Sparkles}
+                                iconColor="#EC4899"
+                                iconBg={isDark ? 'rgba(236, 72, 153, 0.15)' : 'rgba(236, 72, 153, 0.10)'}
+                                title={t('settings.general', 'Apariencia y Tema')}
+                                description={language === 'es' ? 'Modo oscuro/claro, color de acento e idioma' : 'Dark/light mode, accent color & language'}
+                                value={`${theme === 'system' ? 'Auto' : theme === 'dark' ? (language === 'es' ? 'Oscuro' : 'Dark') : (language === 'es' ? 'Claro' : 'Light')}${isAmoled ? ' (AMOLED)' : ''} · ${t(`settings.accent_${accentTheme}`, accentTheme)}`}
+                                isLink
+                                onPress={() => setCurrentSection('appearance')}
+                            />
+
+                            {/* Widgets de Inicio (Android) */}
+                            {Platform.OS === 'android' && (
+                                <>
+                                    <RowDivider />
+                                    <ModernSettingsRow
+                                        icon={Layers}
+                                        iconColor="#06B6D4"
+                                        iconBg={isDark ? 'rgba(6, 182, 212, 0.15)' : 'rgba(6, 182, 212, 0.10)'}
+                                        title={language === 'es' ? 'Widgets de Inicio' : 'Home Widgets'}
+                                        description={language === 'es' ? 'Añadir al launcher, estilos y accesibilidad' : 'Launcher widgets, styles & scaling'}
+                                        value={widgetFrostedGlass ? (language === 'es' ? 'Esmerilado' : 'Frosted') : widgetGlassmorphic ? (language === 'es' ? 'Cristal' : 'Glass') : (language === 'es' ? 'Estándar' : 'Standard')}
+                                        isLink
+                                        onPress={() => setCurrentSection('widgets')}
+                                    />
+                                </>
+                            )}
+                        </View>
+
+                        {/* SECCIÓN: NUBE Y RESPALDO */}
+                        <View style={styles.sectionHeaderWrap}>
+                            <Text style={[styles.sectionHeaderText, { color: colors.textSecondary }]}>
+                                {language === 'es' ? 'DATOS Y SINCRONIZACIÓN' : 'DATA & SYNC'}
+                            </Text>
+                        </View>
+
+                        <View style={[styles.groupCard, cardBgStyle]}>
+                            <ModernSettingsRow
+                                icon={Cloud}
+                                iconColor="#0EA5E9"
+                                iconBg={isDark ? 'rgba(14, 165, 233, 0.15)' : 'rgba(14, 165, 233, 0.10)'}
+                                title={t('settings.cloud_sync', 'Nube y Cuenta')}
+                                description={session ? (language === 'es' ? 'Copia de seguridad en tiempo real' : 'Real-time backup') : (language === 'es' ? 'Inicia sesión para sincronizar tus datos' : 'Log in to sync your data')}
+                                value={session ? (cloudSyncEnabled ? (language === 'es' ? 'Sincronizado' : 'Synced') : (language === 'es' ? 'Pausado' : 'Paused')) : (language === 'es' ? 'Invitado' : 'Guest')}
+                                isLink
+                                onPress={() => setCurrentSection('cloud')}
+                            />
+                        </View>
+
+                        {/* SECCIÓN: SISTEMA Y EXPERIMENTAL */}
+                        <View style={styles.sectionHeaderWrap}>
+                            <Text style={[styles.sectionHeaderText, { color: colors.textSecondary }]}>
+                                {language === 'es' ? 'SISTEMA Y EXPERIMENTAL' : 'SYSTEM & EXPERIMENTAL'}
+                            </Text>
+                        </View>
+
+                        <View style={[styles.groupCard, cardBgStyle]}>
+                            <ModernSettingsRow
+                                icon={Zap}
+                                iconColor="#8B5CF6"
+                                iconBg={isDark ? 'rgba(139, 92, 246, 0.15)' : 'rgba(139, 92, 246, 0.10)'}
+                                title={language === 'es' ? 'Laboratorio Colaborativo (PoC Yjs)' : 'Collaborative Lab (PoC Yjs)'}
+                                description={language === 'es' ? 'Editor colaborativo Tiptap + Yjs en tiempo real' : 'Real-time collaborative Tiptap editor'}
+                                value="/poc-yjs"
+                                isLink
+                                onPress={() => router.push('/poc-yjs' as any)}
+                            />
+
+                            <RowDivider />
+                            <ModernSettingsRow
+                                icon={Shield}
+                                iconColor="#10B981"
+                                iconBg={isDark ? 'rgba(16, 185, 129, 0.15)' : 'rgba(16, 185, 129, 0.10)'}
+                                title={language === 'es' ? 'Información y Legal' : 'Legal & Info'}
+                                description={language === 'es' ? 'Políticas de privacidad y condiciones de uso' : 'Privacy policy & terms of service'}
+                                value={`v${Constants.expoConfig?.version || '1.0.0'}`}
+                                isLink
+                                onPress={() => setCurrentSection('legal')}
+                            />
+                        </View>
+                    </>
+                )}
+
+                {/* ══════════════════════════════════════════════════════════════ */}
+                {/* 2. SUB-PANTALLA: NOTIFICACIONES Y ALERTAS                     */}
+                {/* ══════════════════════════════════════════════════════════════ */}
+                {currentSection === 'notifications' && (
+                    <>
+                        <View style={[styles.groupCard, cardBgStyle]}>
+                            {/* Switch Notificaciones del Sistema */}
+                            <ModernSettingsRow
+                                icon={Bell}
+                                iconColor="#3B82F6"
+                                iconBg={isDark ? 'rgba(59, 130, 246, 0.15)' : 'rgba(59, 130, 246, 0.10)'}
+                                title={t('settings.notifications_label', 'Notificaciones')}
+                                description={language === 'es' ? 'Avisos en la barra de estado y pantalla' : 'Status bar & lock screen alerts'}
+                                rightElement={
+                                    <Switch
+                                        value={notificationsEnabled}
+                                        onValueChange={setNotificationsEnabled}
+                                        trackColor={{ false: colors.surfaceElevated, true: accent.primary }}
+                                        thumbColor="#FFFFFF"
+                                    />
+                                }
+                            />
+
+                            {notificationsEnabled && (
+                                <>
+                                    <RowDivider />
+                                    {/* Switch Sonido de Alerta */}
+                                    <ModernSettingsRow
+                                        icon={Volume2}
+                                        iconColor="#8B5CF6"
+                                        iconBg={isDark ? 'rgba(139, 92, 246, 0.15)' : 'rgba(139, 92, 246, 0.10)'}
+                                        title={t('settings.sound', 'Sonidos de alerta')}
+                                        description={language === 'es' ? 'Reproducir tonos audibles' : 'Play audio ringtones'}
+                                        rightElement={
+                                            <Switch
+                                                value={soundEnabled}
+                                                onValueChange={setSoundEnabled}
+                                                trackColor={{ false: colors.surfaceElevated, true: accent.primary }}
+                                                thumbColor="#FFFFFF"
+                                            />
+                                        }
+                                    />
+
+                                    <RowDivider />
+                                    {/* Switch Vibración Táctil */}
+                                    <ModernSettingsRow
+                                        icon={Vibrate}
+                                        iconColor="#10B981"
+                                        iconBg={isDark ? 'rgba(16, 185, 129, 0.15)' : 'rgba(16, 185, 129, 0.10)'}
+                                        title={language === 'es' ? 'Vibración del teléfono' : 'Device vibration'}
+                                        description={language === 'es' ? 'Vibración física en recordatorios y pantalla completa' : 'Hardware haptic vibration on alerts'}
+                                        rightElement={
+                                            <Switch
+                                                value={vibrationEnabled ?? true}
+                                                onValueChange={(val) => {
+                                                    setVibrationEnabled(val);
+                                                    if (val) {
+                                                        try { Vibration.vibrate(25); } catch (_) {}
+                                                    }
+                                                }}
+                                                trackColor={{ false: colors.surfaceElevated, true: accent.primary }}
+                                                thumbColor="#FFFFFF"
+                                            />
+                                        }
+                                    />
+                                </>
+                            )}
+                        </View>
+
+                        {/* Nivel de Control Predeterminado */}
+                        <View style={styles.sectionHeaderWrap}>
+                            <Text style={[styles.sectionHeaderText, { color: colors.textSecondary }]}>
+                                {language === 'es' ? 'NIVEL DE URGENCIA POR DEFECTO' : 'DEFAULT URGENCY LEVEL'}
+                            </Text>
+                        </View>
+
+                        <View style={[styles.groupCard, cardBgStyle]}>
+                            <View style={styles.inlineSelectorRow}>
+                                <View style={styles.inlineSelectorHeader}>
+                                    <View style={[styles.rowIconBadge, { backgroundColor: isDark ? 'rgba(245, 158, 11, 0.15)' : 'rgba(245, 158, 11, 0.10)' }]}>
+                                        <SlidersHorizontal size={17} color="#F59E0B" />
+                                    </View>
+                                    <View style={{ flex: 1 }}>
+                                        <Text style={[styles.rowTitleText, { color: colors.textPrimary }]}>
+                                            {t('settings.control_level', 'Nivel de control predeterminado')}
+                                        </Text>
+                                        <Text style={[styles.rowDescText, { color: colors.textMuted }]}>
+                                            {language === 'es' ? 'Intensidad al crear nuevos recordatorios' : 'Default urgency for new tasks'}
+                                        </Text>
+                                    </View>
+                                </View>
+
+                                <View style={[styles.levelSegmentsWrap, { backgroundColor: colors.surfaceElevated }]}>
+                                    {controlLevels.map((lvl) => {
+                                        const isSelected = defaultControlLevel === lvl.value;
+                                        return (
+                                            <TouchableOpacity
+                                                key={lvl.value}
+                                                onPress={() => setDefaultControlLevel(lvl.value as any)}
+                                                activeOpacity={0.7}
+                                                style={[
+                                                    styles.levelSegmentBtn,
+                                                    isSelected && {
+                                                        backgroundColor: isDark ? colors.surfaceCard : '#FFFFFF',
+                                                        borderColor: lvl.color,
+                                                        shadowColor: '#000000',
+                                                        shadowOpacity: 0.08,
+                                                        shadowRadius: 3,
+                                                        elevation: 2,
+                                                    },
+                                                ]}
+                                            >
+                                                <View style={[styles.levelDot, { backgroundColor: lvl.color }]} />
+                                                <Text
+                                                    style={[
+                                                        styles.levelSegmentLabel,
+                                                        {
+                                                            color: isSelected ? colors.textPrimary : colors.textMuted,
+                                                            fontWeight: isSelected ? '700' : '500',
+                                                        },
+                                                    ]}
+                                                >
+                                                    {lvl.label}
+                                                </Text>
+                                            </TouchableOpacity>
+                                        );
+                                    })}
+                                </View>
+                            </View>
+                        </View>
+
+                        {/* Tonos de Alerta por Nivel */}
+                        {notificationsEnabled && soundEnabled && (
+                            <>
+                                <View style={styles.sectionHeaderWrap}>
+                                    <Text style={[styles.sectionHeaderText, { color: colors.textSecondary }]}>
+                                        {language === 'es' ? 'TONOS AUDIBLES' : 'AUDIBLE RINGTONES'}
+                                    </Text>
+                                </View>
+
+                                <View style={[styles.groupCard, cardBgStyle]}>
+                                    <ModernSettingsRow
+                                        icon={Bell}
+                                        iconColor="#10B981"
+                                        iconBg={isDark ? 'rgba(16, 185, 129, 0.15)' : 'rgba(16, 185, 129, 0.10)'}
+                                        title={language === 'es' ? 'Tono: Normal' : 'Ringtone: Normal'}
+                                        description={language === 'es' ? 'Para tareas estándar' : 'For standard tasks'}
+                                        value={getSoundName(soundSettings.normal)}
+                                        isLink
+                                        onPress={() => router.push({ pathname: '/sounds', params: { level: 'normal' } })}
+                                    />
+                                    <RowDivider />
+                                    <ModernSettingsRow
+                                        icon={Zap}
+                                        iconColor="#F59E0B"
+                                        iconBg={isDark ? 'rgba(245, 158, 11, 0.15)' : 'rgba(245, 158, 11, 0.10)'}
+                                        title={language === 'es' ? 'Tono: Estricto' : 'Ringtone: Strict'}
+                                        description={language === 'es' ? 'Para compromisos importantes' : 'For important commitments'}
+                                        value={getSoundName(soundSettings.strict)}
+                                        isLink
+                                        onPress={() => router.push({ pathname: '/sounds', params: { level: 'strict' } })}
+                                    />
+                                    <RowDivider />
+                                    <ModernSettingsRow
+                                        icon={AlertOctagon}
+                                        iconColor="#E11D48"
+                                        iconBg={isDark ? 'rgba(225, 29, 72, 0.15)' : 'rgba(225, 29, 72, 0.10)'}
+                                        title={language === 'es' ? 'Tono: Crítico' : 'Ringtone: Critical'}
+                                        description={language === 'es' ? 'Alarma invasiva y persistente' : 'Invasive persistent alarm'}
+                                        value={getSoundName(soundSettings.critical)}
+                                        isLink
+                                        onPress={() => router.push({ pathname: '/sounds', params: { level: 'critical' } })}
+                                    />
+                                </View>
+                            </>
+                        )}
+                    </>
+                )}
+
+                {/* ══════════════════════════════════════════════════════════════ */}
+                {/* 3. SUB-PANTALLA: APARIENCIA Y TEMA                           */}
+                {/* ══════════════════════════════════════════════════════════════ */}
+                {currentSection === 'appearance' && (
+                    <>
+                        <View style={[styles.groupCard, cardBgStyle]}>
+                            {/* Selector de Tema */}
+                            <View style={styles.themeRowWrap}>
+                                <View style={styles.themeRowHeader}>
+                                    <View style={[styles.rowIconBadge, { backgroundColor: isDark ? 'rgba(59, 130, 246, 0.15)' : 'rgba(59, 130, 246, 0.10)' }]}>
+                                        {theme === 'system' ? (
+                                            <Smartphone size={17} color="#3B82F6" />
+                                        ) : isDark ? (
+                                            <Moon size={17} color="#A78BFA" />
+                                        ) : (
+                                            <Sun size={17} color="#F59E0B" />
+                                        )}
+                                    </View>
+                                    <View style={{ flex: 1 }}>
+                                        <Text style={[styles.rowTitleText, { color: colors.textPrimary }]}>
+                                            {t('settings.theme', 'Tema de la App')}
+                                        </Text>
+                                        <Text style={[styles.rowDescText, { color: colors.textMuted }]}>
+                                            {theme === 'system'
+                                                ? `${t('settings.theme_system', 'Sistema')} (${isDark ? t('settings.theme_dark', 'Oscuro') : t('settings.theme_light', 'Claro')})`
+                                                : theme === 'dark'
+                                                ? t('settings.theme_dark', 'Oscuro')
+                                                : t('settings.theme_light', 'Claro')}
+                                        </Text>
+                                    </View>
+                                </View>
+
+                                <View style={[styles.segmentedControl, { backgroundColor: colors.surfaceElevated }]}>
+                                    {(['system', 'light', 'dark'] as const).map((tMode) => {
+                                        const isSelected = theme === tMode;
+                                        const label = tMode === 'system'
+                                            ? t('settings.theme_system', 'Sistema')
+                                            : tMode === 'light'
+                                            ? t('settings.theme_light', 'Claro')
+                                            : t('settings.theme_dark', 'Oscuro');
+                                        return (
+                                            <TouchableOpacity
+                                                key={tMode}
+                                                activeOpacity={0.7}
+                                                onPress={() => setTheme(tMode)}
+                                                style={[
+                                                    styles.segmentButton,
+                                                    isSelected && {
+                                                        backgroundColor: isDark ? colors.surfaceCard : '#FFFFFF',
+                                                        shadowColor: '#000000',
+                                                        shadowOpacity: 0.08,
+                                                        shadowRadius: 3,
+                                                        elevation: 2,
+                                                    },
+                                                ]}
+                                            >
+                                                <Text
+                                                    style={[
+                                                        styles.segmentText,
+                                                        {
+                                                            color: isSelected ? colors.textPrimary : colors.textMuted,
+                                                            fontWeight: isSelected ? '700' : '500',
+                                                        },
+                                                    ]}
+                                                >
+                                                    {label}
+                                                </Text>
+                                            </TouchableOpacity>
+                                        );
+                                    })}
+                                </View>
+                            </View>
+
+                            <RowDivider />
+
+                            {/* Switch Negro puro (AMOLED) */}
+                            <View style={styles.themeRowWrap}>
+                                <View style={styles.themeRowHeader}>
+                                    <View style={[styles.rowIconBadge, { backgroundColor: isDark ? (isAmoled ? '#0D0D0D' : 'rgba(0, 0, 0, 0.40)') : 'rgba(0, 0, 0, 0.05)', borderColor: isAmoled ? colors.borderSubtle : 'transparent', borderWidth: isAmoled ? 1 : 0 }]}>
+                                        <Moon size={17} color={isDark && amoledEnabled ? accent.primary : colors.textMuted} />
+                                    </View>
+                                    <View style={{ flex: 1 }}>
+                                        <Text style={[styles.rowTitleText, { color: isDark ? colors.textPrimary : colors.textMuted }]}>
+                                            Negro puro (AMOLED)
+                                        </Text>
+                                        <Text style={[styles.rowDescText, { color: colors.textMuted }]}>
+                                            {!isDark
+                                                ? 'Solo disponible en modo oscuro'
+                                                : 'Ahorra batería en pantallas OLED'}
+                                        </Text>
+                                    </View>
+                                    <Switch
+                                        value={Boolean(amoledEnabled && isDark)}
+                                        disabled={!isDark}
+                                        onValueChange={(val) => setAmoledEnabled(val)}
+                                        trackColor={{ false: colors.surfaceElevated, true: accent.primary }}
+                                        thumbColor="#FFFFFF"
+                                    />
+                                </View>
+                            </View>
+
+                            <RowDivider />
+                            {/* Paleta de Acento */}
+                            <View style={styles.accentRowWrap}>
+                                <View style={styles.accentRowHeader}>
+                                    <View style={[styles.rowIconBadge, { backgroundColor: isDark ? 'rgba(236, 72, 153, 0.15)' : 'rgba(236, 72, 153, 0.10)' }]}>
+                                        <Sparkles size={17} color="#EC4899" />
+                                    </View>
+                                    <View style={{ flex: 1 }}>
+                                        <Text style={[styles.rowTitleText, { color: colors.textPrimary }]}>
+                                            {t('settings.accent_theme', 'Paleta de Acento')}
+                                        </Text>
+                                        <Text style={[styles.rowDescText, { color: colors.textMuted }]}>
+                                            {t(`settings.accent_${accentTheme}`, accentTheme)}
+                                        </Text>
+                                    </View>
+                                </View>
+
+                                <View style={styles.accentsRow}>
+                                    {ACCENT_OPTIONS.map(option => {
+                                        const isActive = accentTheme === option.key;
+                                        const displayColor = isDark ? option.darkColor : option.lightColor;
+                                        return (
+                                            <TouchableOpacity
+                                                key={option.key}
+                                                onPress={() => setAccentTheme(option.key)}
+                                                activeOpacity={0.7}
+                                                style={styles.accentItem}
+                                            >
+                                                <View
+                                                    style={[
+                                                        styles.accentCircle,
+                                                        {
+                                                            backgroundColor: displayColor,
+                                                            borderColor: isDark ? '#FFFFFF' : '#0F172A',
+                                                            borderWidth: isActive ? 2.5 : 0,
+                                                            transform: isActive ? [{ scale: 1.1 }] : [{ scale: 1 }],
+                                                        },
+                                                    ]}
+                                                >
+                                                    {isActive && <Check size={14} color="#FFFFFF" strokeWidth={3} />}
+                                                </View>
+                                                <Text
+                                                    style={[
+                                                        styles.accentLabel,
+                                                        {
+                                                            color: isActive ? displayColor : colors.textMuted,
+                                                            fontWeight: isActive ? '800' : '600',
+                                                            fontSize: 10,
+                                                        },
+                                                    ]}
+                                                >
+                                                    {t(`settings.accent_${option.key}`)}
+                                                </Text>
+                                            </TouchableOpacity>
+                                        );
+                                    })}
+                                </View>
+                            </View>
+
+                            <RowDivider />
+                            {/* Idioma */}
+                            <ModernSettingsRow
+                                icon={Globe}
+                                iconColor="#10B981"
+                                iconBg={isDark ? 'rgba(16, 185, 129, 0.15)' : 'rgba(16, 185, 129, 0.10)'}
+                                title={t('settings.language', 'Idioma')}
+                                value={language === 'es' ? t('settings.spanish', 'Español') : t('settings.english', 'Inglés')}
+                                isLink
+                                onPress={() => setLanguage(language === 'es' ? 'en' : 'es')}
+                            />
+
+                            <RowDivider />
+                            {/* Formato de Hora */}
+                            <ModernSettingsRow
+                                icon={Clock}
+                                iconColor="#3B82F6"
+                                iconBg={isDark ? 'rgba(59, 130, 246, 0.15)' : 'rgba(59, 130, 246, 0.10)'}
+                                title={t('settings.time_format_label', 'Formato de hora')}
+                                value={t('settings.hours_format', '24 horas')}
+                            />
+                        </View>
+                    </>
+                )}
+
+                {/* ══════════════════════════════════════════════════════════════ */}
+                {/* 4. SUB-PANTALLA: WIDGETS DE INICIO                           */}
+                {/* ══════════════════════════════════════════════════════════════ */}
+                {currentSection === 'widgets' && Platform.OS === 'android' && (
+                    <>
+                        {/* Fila Principal: Añadir Widget al Launcher */}
+                        <View style={[styles.groupCard, cardBgStyle]}>
                             <ModernSettingsRow
                                 icon={Plus}
                                 iconColor={accent.primary}
                                 iconBg={isDark ? 'rgba(59, 130, 246, 0.15)' : 'rgba(59, 130, 246, 0.10)'}
                                 title={language === 'es' ? 'Añadir widget a la pantalla' : 'Add widget to home screen'}
-                                description={language === 'es' ? 'Elige entre Hoy, Notas, Dúo, Acciones o Clases' : 'Choose from Today, Notes, Duo, Quick or Classes'}
+                                description={language === 'es' ? 'Elige entre Hoy, Notas, Acciones o Horario' : 'Choose from Today, Notes, Quick or Classes'}
                                 isLink
                                 onPress={() => setShowAddWidgetModal(true)}
                             />
@@ -671,9 +911,78 @@ export default function SettingsScreen() {
                                     );
                                 }}
                             />
+                        </View>
+
+                        {/* ESTILO Y CRISTAL */}
+                        <View style={styles.sectionHeaderWrap}>
+                            <Text style={[styles.sectionHeaderText, { color: colors.textSecondary }]}>
+                                {language === 'es' ? 'DISEÑO Y ACABADO VISUAL' : 'DESIGN & VISUAL FINISH'}
+                            </Text>
+                        </View>
+
+                        <View style={[styles.groupCard, cardBgStyle]}>
+                            {/* Switch Estilo Cristal (Glassmorphic) */}
+                            <ModernSettingsRow
+                                icon={Sparkles}
+                                iconColor="#8B5CF6"
+                                iconBg={isDark ? 'rgba(139, 92, 246, 0.15)' : 'rgba(139, 92, 246, 0.10)'}
+                                title={t('settings.widgets_glassmorphic', 'Estilo Cristal (Glassmorphic)')}
+                                description={t('settings.widgets_glassmorphic_desc', 'Fondo translúcido elegante que se funde con tu fondo de pantalla')}
+                                rightElement={
+                                    <Switch
+                                        value={widgetGlassmorphic ?? false}
+                                        onValueChange={setWidgetGlassmorphic}
+                                        trackColor={{ false: colors.surfaceElevated, true: accent.primary }}
+                                        thumbColor="#FFFFFF"
+                                    />
+                                }
+                            />
 
                             <RowDivider />
-                            {/* Selector de escala de texto en widgets */}
+                            {/* Switch Efecto Esmerilado (Frosted Glass) */}
+                            <ModernSettingsRow
+                                icon={Layers}
+                                iconColor="#06B6D4"
+                                iconBg={isDark ? 'rgba(6, 182, 212, 0.15)' : 'rgba(6, 182, 212, 0.10)'}
+                                title={t('settings.widgets_frosted_glass', 'Efecto Esmerilado Satinado')}
+                                description={t('settings.widgets_frosted_glass_desc', 'Gradiente de refracción satinado y bisel de luz pulido estilo cristal')}
+                                rightElement={
+                                    <Switch
+                                        value={widgetFrostedGlass ?? false}
+                                        onValueChange={setWidgetFrostedGlass}
+                                        trackColor={{ false: colors.surfaceElevated, true: accent.primary }}
+                                        thumbColor="#FFFFFF"
+                                    />
+                                }
+                            />
+
+                            <RowDivider />
+                            {/* Switch Alto Contraste */}
+                            <ModernSettingsRow
+                                icon={SlidersHorizontal}
+                                iconColor="#F59E0B"
+                                iconBg={isDark ? 'rgba(245, 158, 11, 0.15)' : 'rgba(245, 158, 11, 0.10)'}
+                                title={t('settings.widgets_high_contrast', 'Modo Alto Contraste')}
+                                description={t('settings.widgets_high_contrast_desc', 'Fondos puros y contornos reforzados para máxima legibilidad')}
+                                rightElement={
+                                    <Switch
+                                        value={widgetHighContrast ?? false}
+                                        onValueChange={setWidgetHighContrast}
+                                        trackColor={{ false: colors.surfaceElevated, true: accent.primary }}
+                                        thumbColor="#FFFFFF"
+                                    />
+                                }
+                            />
+                        </View>
+
+                        {/* ACCESIBILIDAD Y TAMAÑO */}
+                        <View style={styles.sectionHeaderWrap}>
+                            <Text style={[styles.sectionHeaderText, { color: colors.textSecondary }]}>
+                                {language === 'es' ? 'ESCALA DE TEXTO' : 'TEXT SCALING'}
+                            </Text>
+                        </View>
+
+                        <View style={[styles.groupCard, cardBgStyle]}>
                             <View style={styles.inlineSelectorRow}>
                                 <View style={styles.inlineSelectorHeader}>
                                     <View style={[styles.rowIconBadge, { backgroundColor: isDark ? 'rgba(59, 130, 246, 0.15)' : 'rgba(59, 130, 246, 0.10)' }]}>
@@ -726,24 +1035,6 @@ export default function SettingsScreen() {
                             </View>
 
                             <RowDivider />
-                            {/* Switch Alto Contraste en Widgets */}
-                            <ModernSettingsRow
-                                icon={SlidersHorizontal}
-                                iconColor="#F59E0B"
-                                iconBg={isDark ? 'rgba(245, 158, 11, 0.15)' : 'rgba(245, 158, 11, 0.10)'}
-                                title={t('settings.widgets_high_contrast', 'Modo Alto Contraste')}
-                                description={t('settings.widgets_high_contrast_desc', 'Fondos puros y contornos reforzados para máxima legibilidad')}
-                                rightElement={
-                                    <Switch
-                                        value={widgetHighContrast ?? false}
-                                        onValueChange={setWidgetHighContrast}
-                                        trackColor={{ false: colors.surfaceElevated, true: accent.primary }}
-                                        thumbColor="#FFFFFF"
-                                    />
-                                }
-                            />
-
-                            <RowDivider />
                             {/* Sincronizar Widgets Ahora */}
                             <ModernSettingsRow
                                 icon={RefreshCw}
@@ -752,6 +1043,7 @@ export default function SettingsScreen() {
                                 title={language === 'es' ? 'Sincronizar widgets ahora' : 'Sync widgets now'}
                                 description={language === 'es' ? 'Fuerza la actualización de datos en el sistema' : 'Force launcher widget cache refresh'}
                                 onPress={async () => {
+                                    await updateTodayWidget();
                                     const success = await WidgetService.syncAll();
                                     if (success) {
                                         Alert.alert(
@@ -767,51 +1059,81 @@ export default function SettingsScreen() {
                     </>
                 )}
 
-                {/* ══════════ SECCIÓN 4: SINCRONIZACIÓN EN LA NUBE ══════════ */}
-                {session && (
+                {/* ══════════════════════════════════════════════════════════════ */}
+                {/* 5. SUB-PANTALLA: NUBE Y CUENTA                                */}
+                {/* ══════════════════════════════════════════════════════════════ */}
+                {currentSection === 'cloud' && (
                     <>
-                        <View style={styles.sectionHeaderWrap}>
-                            <Text style={[styles.sectionHeaderText, { color: colors.textSecondary }]}>
-                                {t('settings.cloud_sync', 'NUBE Y CUENTA').toUpperCase()}
-                            </Text>
-                        </View>
-
-                        <View style={[styles.groupCard, {
-                            backgroundColor: isDark ? 'rgba(255, 255, 255, 0.035)' : '#FFFFFF',
-                            borderColor: isDark ? 'rgba(255, 255, 255, 0.06)' : 'rgba(0, 0, 0, 0.05)',
-                        }]}>
-                            <ModernSettingsRow
-                                icon={Cloud}
-                                iconColor="#0EA5E9"
-                                iconBg={isDark ? 'rgba(14, 165, 233, 0.15)' : 'rgba(14, 165, 233, 0.10)'}
-                                title={t('settings.cloud_sync_toggle', 'Sincronización automática')}
-                                description={language === 'es' ? 'Copia de seguridad en tiempo real' : 'Real-time cloud backup'}
-                                rightElement={
-                                    <Switch
-                                        value={cloudSyncEnabled}
-                                        onValueChange={setCloudSyncEnabled}
-                                        trackColor={{ false: colors.surfaceElevated, true: accent.primary }}
-                                        thumbColor="#FFFFFF"
-                                    />
-                                }
-                            />
-
-                            {cloudSyncEnabled && (
+                        <View style={[styles.groupCard, cardBgStyle]}>
+                            {session ? (
                                 <>
+                                    <ModernSettingsRow
+                                        icon={Cloud}
+                                        iconColor="#0EA5E9"
+                                        iconBg={isDark ? 'rgba(14, 165, 233, 0.15)' : 'rgba(14, 165, 233, 0.10)'}
+                                        title={t('settings.cloud_sync_toggle', 'Sincronización automática')}
+                                        description={language === 'es' ? 'Copia de seguridad en tiempo real con Supabase' : 'Real-time cloud backup with Supabase'}
+                                        rightElement={
+                                            <Switch
+                                                value={cloudSyncEnabled}
+                                                onValueChange={setCloudSyncEnabled}
+                                                trackColor={{ false: colors.surfaceElevated, true: accent.primary }}
+                                                thumbColor="#FFFFFF"
+                                            />
+                                        }
+                                    />
+
+                                    {cloudSyncEnabled && (
+                                        <>
+                                            <RowDivider />
+                                            <ModernSettingsRow
+                                                icon={RefreshCw}
+                                                iconColor={isSyncing ? colors.textMuted : '#10B981'}
+                                                iconBg={isDark ? 'rgba(16, 185, 129, 0.15)' : 'rgba(16, 185, 129, 0.10)'}
+                                                title={t('settings.sync_now', 'Sincronizar ahora')}
+                                                description={
+                                                    isSyncing
+                                                        ? t('settings.syncing', 'Sincronizando...')
+                                                        : lastSyncTime
+                                                        ? `${language === 'es' ? 'Último respaldo:' : 'Last backup:'} ${new Date(lastSyncTime).toLocaleTimeString()}`
+                                                        : t('settings.never', 'Nunca')
+                                                }
+                                                onPress={isSyncing ? undefined : triggerSync}
+                                            />
+                                        </>
+                                    )}
+
                                     <RowDivider />
                                     <ModernSettingsRow
-                                        icon={RefreshCw}
-                                        iconColor={isSyncing ? colors.textMuted : '#10B981'}
+                                        icon={User}
+                                        iconColor="#8B5CF6"
+                                        iconBg={isDark ? 'rgba(139, 92, 246, 0.15)' : 'rgba(139, 92, 246, 0.10)'}
+                                        title={language === 'es' ? 'Gestionar Perfil' : 'Manage Profile'}
+                                        description={session.user?.email || ''}
+                                        isLink
+                                        onPress={() => router.push('/profile' as any)}
+                                    />
+                                </>
+                            ) : (
+                                <>
+                                    <ModernSettingsRow
+                                        icon={User}
+                                        iconColor={accent.primary}
+                                        iconBg={isDark ? 'rgba(59, 130, 246, 0.15)' : 'rgba(59, 130, 246, 0.10)'}
+                                        title={language === 'es' ? 'Iniciar Sesión' : 'Sign In'}
+                                        description={language === 'es' ? 'Accede a tu cuenta para respaldar tus datos' : 'Log in to backup your data'}
+                                        isLink
+                                        onPress={() => router.push('/login' as any)}
+                                    />
+                                    <RowDivider />
+                                    <ModernSettingsRow
+                                        icon={Plus}
+                                        iconColor="#10B981"
                                         iconBg={isDark ? 'rgba(16, 185, 129, 0.15)' : 'rgba(16, 185, 129, 0.10)'}
-                                        title={t('settings.sync_now', 'Sincronizar ahora')}
-                                        value={
-                                            isSyncing
-                                                ? t('settings.syncing', 'Sincronizando...')
-                                                : lastSyncTime
-                                                ? new Date(lastSyncTime).toLocaleTimeString()
-                                                : t('settings.never', 'Nunca')
-                                        }
-                                        onPress={isSyncing ? undefined : triggerSync}
+                                        title={language === 'es' ? 'Crear Cuenta' : 'Create Account'}
+                                        description={language === 'es' ? 'Empieza a sincronizar de forma gratuita' : 'Start syncing for free'}
+                                        isLink
+                                        onPress={() => router.push('/register' as any)}
                                     />
                                 </>
                             )}
@@ -819,44 +1141,54 @@ export default function SettingsScreen() {
                     </>
                 )}
 
-                {/* ══════════ SECCIÓN 5: INFORMACIÓN Y LEGAL ══════════ */}
-                <View style={styles.sectionHeaderWrap}>
-                    <Text style={[styles.sectionHeaderText, { color: colors.textSecondary }]}>
-                        {language === 'es' ? 'INFORMACIÓN Y LEGAL' : 'LEGAL & INFO'}
-                    </Text>
-                </View>
+                {/* ══════════════════════════════════════════════════════════════ */}
+                {/* 6. SUB-PANTALLA: INFORMACIÓN Y LEGAL                         */}
+                {/* ══════════════════════════════════════════════════════════════ */}
+                {currentSection === 'legal' && (
+                    <>
+                        <View style={[styles.groupCard, cardBgStyle]}>
+                            <ModernSettingsRow
+                                icon={Shield}
+                                iconColor="#10B981"
+                                iconBg={isDark ? 'rgba(16, 185, 129, 0.15)' : 'rgba(16, 185, 129, 0.10)'}
+                                title={language === 'es' ? 'Política de Privacidad' : 'Privacy Policy'}
+                                description={language === 'es' ? 'Protección y uso de tus datos personales' : 'Protection and usage of personal data'}
+                                isLink
+                                onPress={() => router.push({ pathname: '/legal', params: { tab: 'privacy' } })}
+                            />
+                            <RowDivider />
+                            <ModernSettingsRow
+                                icon={FileText}
+                                iconColor="#3B82F6"
+                                iconBg={isDark ? 'rgba(59, 130, 246, 0.15)' : 'rgba(59, 130, 246, 0.10)'}
+                                title={language === 'es' ? 'Términos y Condiciones' : 'Terms & Conditions'}
+                                description={language === 'es' ? 'Condiciones de uso y servicio' : 'Service terms & user guidelines'}
+                                isLink
+                                onPress={() => router.push({ pathname: '/legal', params: { tab: 'terms' } })}
+                            />
+                        </View>
 
-                <View style={[styles.groupCard, {
-                    backgroundColor: isDark ? 'rgba(255, 255, 255, 0.035)' : '#FFFFFF',
-                    borderColor: isDark ? 'rgba(255, 255, 255, 0.06)' : 'rgba(0, 0, 0, 0.05)',
-                }]}>
-                    <ModernSettingsRow
-                        icon={Shield}
-                        iconColor="#10B981"
-                        iconBg={isDark ? 'rgba(16, 185, 129, 0.15)' : 'rgba(16, 185, 129, 0.10)'}
-                        title={language === 'es' ? 'Política de Privacidad' : 'Privacy Policy'}
-                        value={language === 'es' ? 'Protección de datos' : 'Data protection'}
-                        isLink
-                        onPress={() => router.push({ pathname: '/legal', params: { tab: 'privacy' } })}
-                    />
-                    <RowDivider />
-                    <ModernSettingsRow
-                        icon={FileText}
-                        iconColor="#3B82F6"
-                        iconBg={isDark ? 'rgba(59, 130, 246, 0.15)' : 'rgba(59, 130, 246, 0.10)'}
-                        title={language === 'es' ? 'Términos y Condiciones' : 'Terms & Conditions'}
-                        value={language === 'es' ? 'Condiciones de uso' : 'Terms of use'}
-                        isLink
-                        onPress={() => router.push({ pathname: '/legal', params: { tab: 'terms' } })}
-                    />
-                </View>
+                        <View style={[styles.groupCard, cardBgStyle, { marginTop: 14 }]}>
+                            <ModernSettingsRow
+                                icon={Smartphone}
+                                iconColor="#8B5CF6"
+                                iconBg={isDark ? 'rgba(139, 92, 246, 0.15)' : 'rgba(139, 92, 246, 0.10)'}
+                                title="Veyra Application"
+                                description={`v${Constants.expoConfig?.version || '1.0.0'} (${Platform.OS})`}
+                                value="Build 2026"
+                            />
+                        </View>
+                    </>
+                )}
 
-                {/* Pie de página con versión */}
-                <View style={styles.footerWrap}>
-                    <Text style={[styles.footerVersion, { color: colors.textMuted }]}>
-                        Veyra v{Constants.expoConfig?.version || '1.0.0'} ({Platform.OS})
-                    </Text>
-                </View>
+                {/* Pie de página con versión en el Hub principal */}
+                {currentSection === 'main' && (
+                    <View style={styles.footerWrap}>
+                        <Text style={[styles.footerVersion, { color: colors.textMuted }]}>
+                            Veyra v{Constants.expoConfig?.version || '1.0.0'} ({Platform.OS})
+                        </Text>
+                    </View>
+                )}
             </ScrollView>
 
             {/* Modal para Añadir Widgets (Limpio y Moderno) */}
@@ -1026,7 +1358,7 @@ const styles = StyleSheet.create({
         paddingBottom: 6,
     },
     heroTitle: {
-        fontSize: 30,
+        fontSize: 28,
         fontWeight: '900',
         letterSpacing: -0.6,
     },
@@ -1034,6 +1366,7 @@ const styles = StyleSheet.create({
         fontSize: 13,
         fontWeight: '500',
         marginTop: 3,
+        lineHeight: 18,
     },
     warrantyBanner: {
         flexDirection: 'row',

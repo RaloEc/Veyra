@@ -35,6 +35,7 @@ if (!require.extensions['.ts']) {
             let source = fs.readFileSync(filename, 'utf8');
 
             // Reemplazar imports nativos de Expo y React Native antes de transpilar
+            source = source.replace(/import \* as Crypto from ['"]expo-crypto['"];/g, 'const Crypto = { randomUUID: () => "uuid-" + Math.random().toString(36).substring(2, 9), digestStringAsync: async () => "hash" };');
             if (filename.includes('db' + path.sep + 'index.ts') || filename.endsWith('db/index.ts')) {
                 source = source.replace(/import \* as SQLite from ['"]expo-sqlite['"];/, 'const SQLite = { openDatabaseAsync: () => {} };');
             }

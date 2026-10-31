@@ -26,10 +26,14 @@ export function SlideToConfirm({
 }: SlideToConfirmProps) {
     const [containerWidth, setContainerWidth] = useState(0);
     const [isConfirmed, setIsConfirmed] = useState(false);
+    const [isPastThreshold, setIsPastThreshold] = useState(false);
 
     const sliderX = useRef(new Animated.Value(0)).current;
-    const thumbWidth = 50;
-    const padding = 4;
+    const pulseAnim = useRef(new Animated.Value(1)).current;
+    const arrowSlideAnim = useRef(new Animated.Value(0)).current;
+
+    const thumbWidth = 54;
+    const padding = 5;
     const maxSlide = Math.max(0, containerWidth - thumbWidth - padding * 2);
 
     // Keep ref to avoid stale closure in PanResponder
@@ -42,19 +46,49 @@ export function SlideToConfirm({
     const onConfirmRef = useRef(onConfirm);
     onConfirmRef.current = onConfirm;
 
+    // Pulse animation inviting user to slide
+    useEffect(() => {
+        const loop = Animated.loop(
+            Animated.sequence([
+                Animated.timing(arrowSlideAnim, {
+                    toValue: 6,
+                    duration: 800,
+                    useNativeDriver: true,
+                }),
+                Animated.timing(arrowSlideAnim, {
+                    toValue: 0,
+                    duration: 800,
+                    useNativeDriver: true,
+                }),
+            ])
+        );
+        loop.start();
+        return () => loop.stop();
+    }, []);
+
     const panResponder = useRef(
         PanResponder.create({
             onStartShouldSetPanResponder: () => !disabled && !isConfirmedRef.current,
             onMoveShouldSetPanResponder: (_, gestureState) => {
-                return !disabled && !isConfirmedRef.current && Math.abs(gestureState.dx) > 5;
+                return !disabled && !isConfirmedRef.current && Math.abs(gestureState.dx) > 4;
             },
             onPanResponderGrant: () => {
-                // Initial touch
+                try {
+                    Vibration.vibrate(10);
+                } catch {}
             },
             onPanResponderMove: (_, gestureState) => {
                 if (isConfirmedRef.current || disabled) return;
                 const newX = Math.max(0, Math.min(gestureState.dx, maxSlideRef.current));
                 sliderX.setValue(newX);
+
+                const threshold = maxSlideRef.current * 0.72;
+                if (newX >= threshold && !isPastThreshold) {
+                    setIsPastThreshold(true);
+                    try { Vibration.vibrate(15); } catch {}
+                } else if (newX < threshold && isPastThreshold) {
+                    setIsPastThreshold(false);
+                }
             },
             onPanResponderRelease: (_, gestureState) => {
                 if (isConfirmedRef.current || disabled) return;
@@ -63,7 +97,7 @@ export function SlideToConfirm({
                 if (gestureState.dx >= threshold && maxSlideRef.current > 0) {
                     // Confirmed!
                     try {
-                        Vibration.vibrate(35);
+                        Vibration.vibrate(40);
                     } catch {}
 
                     Animated.timing(sliderX, {
@@ -76,19 +110,21 @@ export function SlideToConfirm({
                     });
                 } else {
                     // Snap back
+                    setIsPastThreshold(false);
                     Animated.spring(sliderX, {
                         toValue: 0,
-                        friction: 6,
-                        tension: 60,
+                        friction: 7,
+                        tension: 70,
                         useNativeDriver: false,
                     }).start();
                 }
             },
             onPanResponderTerminate: () => {
+                setIsPastThreshold(false);
                 Animated.spring(sliderX, {
                     toValue: 0,
-                    friction: 6,
-                    tension: 60,
+                    friction: 7,
+                    tension: 70,
                     useNativeDriver: false,
                 }).start();
             },
@@ -112,8 +148,8 @@ export function SlideToConfirm({
             style={[
                 styles.track,
                 {
-                    backgroundColor: isDark ? 'rgba(255, 255, 255, 0.06)' : 'rgba(0, 0, 0, 0.05)',
-                    borderColor: isDark ? 'rgba(255, 255, 255, 0.12)' : 'rgba(0, 0, 0, 0.1)',
+                    backgroundColor: isDark ? 'rgba(255, 255, 255, 0.07)' : 'rgba(0, 0, 0, 0.05)',
+                    borderColor: isDark ? 'rgba(255, 255, 255, 0.16)' : 'rgba(0, 0, 0, 0.12)',
                 },
             ]}
             onLayout={(e) => {
@@ -123,35 +159,37 @@ export function SlideToConfirm({
                 }
             }}
         >
-            {/* Animated Fill Layer */}
+            {/* Animated Fill Layer with Glow */}
             <Animated.View
                 style={[
                     styles.fillLayer,
                     {
                         width: fillWidth,
-                        backgroundColor: `${themeColor}25`,
+                        backgroundColor: `${themeColor}2A`,
                     },
                 ]}
             />
 
-            {/* Centered Instructional Label */}
+            {/* Centered Instructional Label with animated nudge chevron */}
             <Animated.View style={[styles.labelWrap, { opacity: textOpacity }]} pointerEvents="none">
                 <Text
                     style={[
                         styles.label,
-                        { color: isDark ? 'rgba(255, 255, 255, 0.7)' : 'rgba(0, 0, 0, 0.6)' },
+                        { color: isDark ? 'rgba(255, 255, 255, 0.85)' : 'rgba(0, 0, 0, 0.8)' },
                     ]}
                     numberOfLines={1}
                 >
                     {label}
                 </Text>
-                <ChevronsRight
-                    size={18}
-                    color={isDark ? 'rgba(255, 255, 255, 0.4)' : 'rgba(0, 0, 0, 0.35)'}
-                />
+                <Animated.View style={{ transform: [{ translateX: arrowSlideAnim }] }}>
+                    <ChevronsRight
+                        size={18}
+                        color={isDark ? 'rgba(255, 255, 255, 0.5)' : 'rgba(0, 0, 0, 0.45)'}
+                    />
+                </Animated.View>
             </Animated.View>
 
-            {/* Draggable Thumb */}
+            {/* Draggable Thumb with State Indicator */}
             <Animated.View
                 {...panResponder.panHandlers}
                 style={[
@@ -159,10 +197,15 @@ export function SlideToConfirm({
                     {
                         backgroundColor: themeColor,
                         transform: [{ translateX: sliderX }],
+                        shadowColor: themeColor,
                     },
                 ]}
             >
-                <Check size={22} color="#FFFFFF" strokeWidth={3.2} />
+                {isPastThreshold || isConfirmed ? (
+                    <Check size={24} color="#FFFFFF" strokeWidth={3.5} />
+                ) : (
+                    <ChevronsRight size={24} color="#FFFFFF" strokeWidth={3} />
+                )}
             </Animated.View>
         </View>
     );
@@ -170,11 +213,11 @@ export function SlideToConfirm({
 
 const styles = StyleSheet.create({
     track: {
-        height: 58,
-        borderRadius: 29,
+        height: 64,
+        borderRadius: 32,
         borderWidth: 1.5,
         justifyContent: 'center',
-        paddingHorizontal: 4,
+        paddingHorizontal: 5,
         position: 'relative',
         overflow: 'hidden',
     },
@@ -194,23 +237,22 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         justifyContent: 'center',
         gap: 6,
-        paddingHorizontal: 54,
+        paddingHorizontal: 60,
     },
     label: {
-        fontSize: 14.5,
-        fontWeight: '700',
-        letterSpacing: 0.2,
+        fontSize: 15,
+        fontWeight: '800',
+        letterSpacing: 0.3,
     },
     thumb: {
-        width: 50,
-        height: 50,
-        borderRadius: 25,
+        width: 54,
+        height: 54,
+        borderRadius: 27,
         alignItems: 'center',
         justifyContent: 'center',
-        elevation: 6,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 3 },
-        shadowOpacity: 0.35,
-        shadowRadius: 5,
+        elevation: 8,
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.45,
+        shadowRadius: 8,
     },
 });

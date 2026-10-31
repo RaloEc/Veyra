@@ -22,6 +22,7 @@ import {
     Share2,
     Clock,
     Type,
+    Zap,
 } from '@tamagui/lucide-icons';
 import { useVeyraTheme } from '../../theme/useVeyraTheme';
 import { VeyraSurface } from '../ui/VeyraSurface';
@@ -43,6 +44,7 @@ export interface NoteOptionsMenuProps {
     onDelete?: () => void;
     isEditMode?: boolean;
     onToggleEditMode?: () => void;
+    onActivatePilotYjs?: () => void;
 }
 
 export function NoteOptionsMenu({
@@ -61,6 +63,7 @@ export function NoteOptionsMenu({
     onToggleEditMode,
     onShare,
     onViewHistory,
+    onActivatePilotYjs,
 }: NoteOptionsMenuProps) {
     const { t } = useTranslation();
     const insets = useSafeAreaInsets();
@@ -156,7 +159,7 @@ export function NoteOptionsMenu({
                         style={[
                             styles.surfaceCard,
                             {
-                                backgroundColor: isDark ? '#1C1F26' : '#FFFFFF',
+                                backgroundColor: isDark ? (colors.bg === '#000000' ? colors.surfaceCard : '#1C1F26') : '#FFFFFF',
                                 borderColor: colors.borderSubtle,
                             },
                         ]}
@@ -327,6 +330,28 @@ export function NoteOptionsMenu({
                                         : t('notes.edit_mode', { defaultValue: 'Modo edición' })}
                                 </Text>
                             </TouchableOpacity>
+                        )}
+
+                        {/* Acción de desarrollo: Activar nota piloto Yjs */}
+                        {onActivatePilotYjs && (
+                            <>
+                                <View style={[styles.divider, { backgroundColor: colors.borderSubtle }]} />
+                                <TouchableOpacity
+                                    activeOpacity={0.65}
+                                    onPress={() => {
+                                        onClose();
+                                        onActivatePilotYjs();
+                                    }}
+                                    style={styles.menuRow}
+                                >
+                                    <View style={styles.iconSlot}>
+                                        <Zap size={16} color="#8B5CF6" strokeWidth={2.2} />
+                                    </View>
+                                    <Text style={[styles.menuLabel, { color: '#8B5CF6', fontWeight: '700' }]}>
+                                        {t('notes.activate_pilot_yjs', { defaultValue: 'Activar piloto Yjs (Dev)' })}
+                                    </Text>
+                                </TouchableOpacity>
+                            </>
                         )}
 
                         {/* Línea divisoria minimalista */}

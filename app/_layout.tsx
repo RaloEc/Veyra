@@ -7,11 +7,15 @@ import { useFonts } from 'expo-font';
 import { Stack, useRouter, useSegments, usePathname } from 'expo-router';
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { initDatabase } from '../src/db';
+import { runBirthdayMigrationIfNeeded } from '../src/migrations/birthdayMigration';
 import { StatusBar } from 'expo-status-bar';
 import * as NavigationBar from 'expo-navigation-bar';
 import { NotificationService } from '../src/services/notificationService';
 import * as Notifications from 'expo-notifications';
 import { useStore } from '../src/store/useStore';
+import { useNotesStore } from '../src/store/useNotesStore';
+import { useFoldersStore } from '../src/store/useFoldersStore';
+import { useEventsStore } from '../src/store/useEventsStore';
 import { View, Platform, BackHandler, useColorScheme, ActivityIndicator, AppState } from 'react-native';
 import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { supabase } from '../src/lib/supabase';
@@ -20,10 +24,13 @@ import * as TaskManager from 'expo-task-manager';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { ReminderService } from '../src/services/reminderService';
 import { WidgetService } from '../src/services/widgetService';
+import { UploadQueueService } from '../src/services/uploadQueueService';
+import { updateTodayWidget } from '../src/widgets/widgetUpdater';
 import '../src/lib/i18n';
 import i18n from 'i18next';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { VEYRA_TOKENS } from '../src/theme/tokens';
+import { useResolvedTheme } from '../src/theme/useResolvedTheme';
 import { ErrorBoundary } from '../src/components/ErrorBoundary';
 import { RealtimeService } from '../src/services/realtimeService';
 import * as Linking from 'expo-linking';
@@ -40,7 +47,7 @@ TaskManager.defineTask(BACKGROUND_FETCH_TASK, async () => {
     return BackgroundFetch.BackgroundFetchResult.NoData;
 });
 
-function AppShell({ theme }: { theme: 'dark' | 'light' }) {
+function AppShell({ theme, isAmoled }: { theme: 'dark' | 'light'; isAmoled: boolean }) {
     const insets = useSafeAreaInsets();
 
     // Sincronizar barra de navegación nativa de Android con el tema y la barra inferior
@@ -51,19 +58,24 @@ function AppShell({ theme }: { theme: 'dark' | 'light' }) {
     useEffect(() => {
         if (Platform.OS === 'android') {
             try {
-                if (typeof NavigationBar.setStyle === 'function') {
-                    NavigationBar.setStyle(navBarStyle);
+                if (typeof (NavigationBar as any).setStyle === 'function') {
+                    (NavigationBar as any).setStyle(navBarStyle);
                 }
-                if (typeof NavigationBar.setHidden === 'function') {
-                    NavigationBar.setHidden(false);
+                if (typeof (NavigationBar as any).setHidden === 'function') {
+                    (NavigationBar as any).setHidden(false);
+                }
+                if (isAmoled && typeof (NavigationBar as any).setBackgroundColorAsync === 'function') {
+                    (NavigationBar as any).setBackgroundColorAsync('#000000').catch(() => {});
                 }
             } catch (err) {
                 console.warn('[NavigationBar] Failed to set navigation bar style:', err);
             }
         }
-    }, [navBarStyle]);
+    }, [navBarStyle, isAmoled]);
 
-    const mainBg = theme === 'dark' ? VEYRA_TOKENS.colors.dark.bg : VEYRA_TOKENS.colors.light.bg;
+    const mainBg = isAmoled
+        ? VEYRA_TOKENS.colors.amoled.bg
+        : (theme === 'dark' ? VEYRA_TOKENS.colors.dark.bg : VEYRA_TOKENS.colors.light.bg);
 
     return (
         <View style={{ flex: 1, backgroundColor: mainBg }}>
@@ -79,6 +91,7 @@ function AppShell({ theme }: { theme: 'dark' | 'light' }) {
                 <Stack.Screen name="forgot-password" options={{ headerShown: false, animation: 'slide_from_right' }} />
                 <Stack.Screen name="create" options={{ presentation: 'transparentModal', animation: 'none', contentStyle: { backgroundColor: 'transparent' } }} />
                 <Stack.Screen name="events/create" options={{ presentation: 'transparentModal', animation: 'none', contentStyle: { backgroundColor: 'transparent' } }} />
+                <Stack.Screen name="events/[id]" options={{ presentation: 'card', animation: 'fade', animationDuration: 240, contentStyle: { backgroundColor: mainBg } }} />
                 <Stack.Screen name="reminder/[id]" options={{ presentation: 'card', animation: 'fade', animationDuration: 240, contentStyle: { backgroundColor: mainBg } }} />
                 <Stack.Screen name="history" options={{ presentation: 'card', animation: 'fade_from_bottom', animationDuration: 180, title: 'Historial' }} />
                 <Stack.Screen name="notes/index" options={{ title: 'Notas', presentation: 'card', animation: 'none', contentStyle: { backgroundColor: mainBg } }} />
@@ -115,7 +128,7 @@ function AppShell({ theme }: { theme: 'dark' | 'light' }) {
                 <Stack.Screen name="join" options={{ presentation: 'modal', animation: 'slide_from_bottom', headerShown: false }} />
                 <Stack.Screen name="collab/[id]" options={{ presentation: 'card', animation: 'slide_from_right', headerShown: false }} />
             </Stack>
-            <StatusBar style={theme === 'dark' ? 'light' : 'dark'} />
+            <StatusBar style={theme === 'dark' || isAmoled ? 'light' : 'dark'} />
         </View>
     );
 }
@@ -131,11 +144,7 @@ export default function RootLayout() {
     const [isAuthChecking, setIsAuthChecking] = useState(true);
     const router = useRouter();
     const pathname = usePathname();
-    const systemColorScheme = useColorScheme();
-    const themeSetting = useStore(state => state.theme);
-    const resolvedTheme: 'light' | 'dark' = themeSetting === 'system'
-        ? (systemColorScheme === 'dark' ? 'dark' : 'light')
-        : (themeSetting || 'dark');
+    const { resolvedTheme, isAmoled, isDark } = useResolvedTheme();
     const setSession = useStore(state => state.setSession);
     const session = useStore(state => state.session);
     const onboardingCompleted = useStore(state => state.onboardingCompleted);
@@ -149,24 +158,32 @@ export default function RootLayout() {
         let isMounted = true;
         const safetyTimer = setTimeout(() => {
             if (isMounted) setIsAuthChecking(false);
-        }, 1500);
+        }, 5000);
+
+        let lastAppliedToken: string | null | undefined = undefined;
+        const applySessionIfChanged = (nextSession: any) => {
+            const nextToken = nextSession?.access_token ?? null;
+            if (lastAppliedToken === nextToken) return;
+            lastAppliedToken = nextToken;
+            setSession(nextSession);
+        };
 
         const checkSession = async () => {
             try {
                 const sessionPromise = supabase.auth.getSession();
                 const timeoutPromise = new Promise((_, reject) =>
-                    setTimeout(() => reject(new Error('Session check timeout')), 1200)
+                    setTimeout(() => reject(new Error('Session check timeout')), 4000)
                 );
                 const { data: { session } } = (await Promise.race([sessionPromise, timeoutPromise])) as any;
-                if (isMounted) setSession(session);
+                if (isMounted) applySessionIfChanged(session);
             } catch (e: any) {
                 console.warn('[Auth] Session check timed out or failed:', e);
                 // Si el refresh token es inválido o no se encuentra en el servidor, limpiar sesión huérfana
                 const errMsg = String(e?.message || '');
                 if (errMsg.includes('Refresh Token') || errMsg.includes('refresh_token_not_found') || e?.name === 'AuthApiError') {
                     console.log('[Auth] Limpiando sesión huérfana de almacenamiento local...');
-                    await supabase.auth.signOut().catch(() => {});
-                    if (isMounted) setSession(null);
+                    setTimeout(() => supabase.auth.signOut().catch(() => {}), 0);
+                    if (isMounted) applySessionIfChanged(null);
                 }
             } finally {
                 if (isMounted) {
@@ -181,17 +198,17 @@ export default function RootLayout() {
         const { data: authListener } = supabase.auth.onAuthStateChange(async (event, session) => {
             if (event === 'SIGNED_OUT') {
                 if (isMounted) {
-                    setSession(null);
+                    applySessionIfChanged(null);
                     setIsAuthChecking(false);
                 }
-            } else if (event === 'USER_DELETED') {
-                await supabase.auth.signOut().catch(() => {});
+            } else if ((event as any) === 'USER_DELETED') {
+                setTimeout(() => supabase.auth.signOut().catch(() => {}), 0);
                 if (isMounted) {
-                    setSession(null);
+                    applySessionIfChanged(null);
                     setIsAuthChecking(false);
                 }
             } else if (isMounted) {
-                setSession(session);
+                applySessionIfChanged(session);
                 setIsAuthChecking(false);
             }
         });
@@ -207,15 +224,20 @@ export default function RootLayout() {
     useEffect(() => {
         if (!isHydrated || !dbReady || !session?.user?.id || !cloudSyncEnabled) return;
 
-        // Sync inicial en segundo plano al entrar (respetará el cooldown de 2.5 min si ya sincronizó)
-        triggerSync(false, true);
+        // Sync inicial en segundo plano con margen breve (500ms) tras desbloquear SQLite
+        const initialSyncTimer = setTimeout(() => {
+            triggerSync(false, true);
+        }, 500);
 
         // Sync periódico en segundo plano cada 5 minutos mientras la app esté abierta
         const syncInterval = setInterval(() => {
             triggerSync(false, true);
         }, 5 * 60 * 1000);
 
-        return () => clearInterval(syncInterval);
+        return () => {
+            clearTimeout(initialSyncTimer);
+            clearInterval(syncInterval);
+        };
     }, [session?.user?.id, cloudSyncEnabled, isHydrated, dbReady]);
 
     // Escucha en vivo de cambios colaborativos (Realtime WebSockets)
@@ -267,7 +289,9 @@ export default function RootLayout() {
         return () => backHandler.remove();
     }, [pathname, segments, router]);
 
-    const isAppReady = loaded && dbReady && isHydrated && !isAuthChecking;
+    // En arquitectura Offline-First, si el usuario ya completó el onboarding, montamos la UI inmediatamente
+    // sin bloquear la pantalla con un spinner por esperas de red en Supabase Auth.
+    const isAppReady = loaded && dbReady && isHydrated && (onboardingCompleted ? true : !isAuthChecking);
     const pendingConfirmIdRef = useRef<string | null>(null);
     const pendingDeepLinkUrlRef = useRef<string | null>(null);
     const lastNavigatedRef = useRef<{ id: string; time: number }>({ id: '', time: 0 });
@@ -338,37 +362,61 @@ export default function RootLayout() {
         async function prepare() {
             try {
                 await initDatabase();
-                await NotificationService.setup();
-                const initialSounds = useStore.getState().soundSettings;
-                await NotificationService.requestPermissions(initialSounds);
-                await NotificationService.registerCategories();
-                await NotificationService.getDiagnosticInfo();
 
-                // Asegurar que no quede ninguna tarea de fondo periódica activa (previene ANR cuando la app está cerrada)
-                const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient || Constants.appOwnership === 'expo';
-                if (!isExpoGo) {
-                    try {
-                        const isRegistered = await TaskManager.isTaskRegisteredAsync(BACKGROUND_FETCH_TASK);
-                        if (isRegistered) {
-                            await BackgroundFetch.unregisterTaskAsync(BACKGROUND_FETCH_TASK);
-                        }
-                    } catch (bfErr) {
-                        // Silenciar error no crítico
-                    }
-                }
-
+                // Desbloqueo prioritario e inmediato de la UI y barra inferior tras inicializar SQLite
                 setDbReady(true);
-                WidgetService.processPendingActions()
-                    .then(() => WidgetService.syncAll())
-                    .catch(err => console.warn('[Widget] Startup sync error:', err));
-                WidgetService.syncTheme(
-                    useStore.getState().theme || 'system',
-                    useStore.getState().accentTheme || 'blue'
-                ).catch(() => {});
-                WidgetService.syncAccessibility(
-                    useStore.getState().widgetTextScale ?? 1.0,
-                    useStore.getState().widgetHighContrast ?? false
-                ).catch(() => {});
+
+                // Precargar stores críticos desde SQLite local en paralelo para que Notas, Carpetas,
+                // Recordatorios y Eventos estén listos en memoria desde el primer segundo
+                Promise.allSettled([
+                    useStore.getState().loadReminders(),
+                    useNotesStore.getState().loadNotes(),
+                    useFoldersStore.getState().loadFolders(),
+                    useEventsStore.getState().loadAllEvents(),
+                ]).catch(() => {});
+
+                // Inicializar notificaciones y migraciones en segundo plano sin bloquear el arranque visual
+                (async () => {
+                    try {
+                        runBirthdayMigrationIfNeeded().catch(err => {
+                            console.warn('[Layout] Birthday migration notice:', err);
+                        });
+                        await NotificationService.setup();
+                        const initialSounds = useStore.getState().soundSettings;
+                        await NotificationService.requestPermissions(initialSounds);
+                        await NotificationService.registerCategories();
+                        NotificationService.getDiagnosticInfo().catch(() => {});
+
+                        const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient || Constants.appOwnership === 'expo';
+                        if (!isExpoGo) {
+                            try {
+                                const isRegistered = await TaskManager.isTaskRegisteredAsync(BACKGROUND_FETCH_TASK);
+                                if (isRegistered) {
+                                    await BackgroundFetch.unregisterTaskAsync(BACKGROUND_FETCH_TASK);
+                                }
+                            } catch {}
+                        }
+                    } catch (bgErr) {
+                        console.warn('[Layout] Background notification init notice:', bgErr);
+                    }
+                })();
+
+                // Tareas secundarias diferidas para dar prioridad absoluta a la interactividad del Home
+                setTimeout(() => {
+                    UploadQueueService.init();
+                    WidgetService.processPendingActions()
+                        .then(() => WidgetService.syncAll())
+                        .catch(err => console.warn('[Widget] Startup sync error:', err));
+                    WidgetService.syncTheme(
+                        useStore.getState().theme || 'system',
+                        useStore.getState().accentTheme || 'blue',
+                        useStore.getState().amoledEnabled ?? false
+                    ).catch(() => {});
+                    WidgetService.syncAccessibility(
+                        useStore.getState().widgetTextScale ?? 1.0,
+                        useStore.getState().widgetHighContrast ?? false
+                    ).catch(() => {});
+                }, 1200);
             } catch (err) {
                 console.error('Initialization Failed:', err);
                 setDbReady(true); // Permitir entrar aunque falle lo no crítico
@@ -574,7 +622,7 @@ export default function RootLayout() {
             }
         }).catch(() => {});
 
-        // Sincronizar y procesar acciones del widget y nube al volver a primer plano
+        // Sincronizar y procesar acciones del widget y nube al volver a primer plano o salir a segundo plano
         const appStateSubscription = AppState.addEventListener('change', (nextAppState) => {
             if (nextAppState === 'active') {
                 WidgetService.processPendingActions()
@@ -586,6 +634,9 @@ export default function RootLayout() {
                 if (state.session?.user?.id && state.cloudSyncEnabled && !state.isSyncing) {
                     state.triggerSync(false, true).catch(() => {});
                 }
+            } else if (nextAppState === 'background' || nextAppState === 'inactive') {
+                // Al minimizar o salir de la app, forzar que el widget refleje inmediatamente los últimos cambios
+                updateTodayWidget().catch(() => {});
             }
         });
 
@@ -609,22 +660,27 @@ export default function RootLayout() {
     }, [language, isHydrated, dbReady]);
 
     if (!isAppReady) {
+        const splashBg = isAmoled
+            ? VEYRA_TOKENS.colors.amoled.bg
+            : (resolvedTheme === 'dark' ? VEYRA_TOKENS.colors.dark.bg : VEYRA_TOKENS.colors.light.bg);
         return (
-            <View style={{ flex: 1, backgroundColor: resolvedTheme === 'dark' ? VEYRA_TOKENS.colors.dark.bg : VEYRA_TOKENS.colors.light.bg, justifyContent: 'center', alignItems: 'center' }}>
+            <View style={{ flex: 1, backgroundColor: splashBg, justifyContent: 'center', alignItems: 'center' }}>
                 <ActivityIndicator size="large" color="#3B82F6" />
-                <StatusBar style={resolvedTheme === 'dark' ? 'light' : 'dark'} />
+                <StatusBar style={isDark ? 'light' : 'dark'} />
             </View>
         );
     }
 
+    const tamaguiThemeName = isAmoled ? 'dark_amoled' : resolvedTheme;
+
     return (
         <GestureHandlerRootView style={{ flex: 1 }}>
             <ErrorBoundary>
-                <TamaguiProvider config={tamaguiConfig} defaultTheme={resolvedTheme}>
+                <TamaguiProvider config={tamaguiConfig} defaultTheme={tamaguiThemeName}>
                     <PortalProvider shouldAddRootHost>
                         <SafeAreaProvider>
-                            <Theme name={resolvedTheme}>
-                                <AppShell theme={resolvedTheme} />
+                            <Theme name={tamaguiThemeName}>
+                                <AppShell theme={resolvedTheme} isAmoled={isAmoled} />
                             </Theme>
                         </SafeAreaProvider>
                     </PortalProvider>

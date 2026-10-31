@@ -43,6 +43,7 @@ interface RichTextToolbarProps {
     editorRef: React.RefObject<any>;
     isNotesFocused?: boolean;
     isDark?: boolean;
+    isAmoled?: boolean;
     onPressCamera?: () => void;
     onPressGallery?: () => void;
     onPressDocument?: () => void;
@@ -77,12 +78,12 @@ const TEXT_COLORS = [
 // Colores de resaltado (Marcatextos)
 const HIGHLIGHT_COLORS = [
     { label: 'Ninguno', color: 'transparent', preview: 'transparent' },
-    { label: 'Amarillo', color: '#FEF08A', preview: '#FEF08A' },
-    { label: 'Verde', color: '#BBF7D0', preview: '#BBF7D0' },
-    { label: 'Azul', color: '#BAE6FD', preview: '#BAE6FD' },
-    { label: 'Rosa', color: '#FBCFE8', preview: '#FBCFE8' },
-    { label: 'Morado', color: '#DDD6FE', preview: '#DDD6FE' },
-    { label: 'Naranja', color: '#FED7AA', preview: '#FED7AA' },
+    { label: 'Amarillo', color: 'rgba(250, 204, 21, 0.35)', preview: 'rgba(250, 204, 21, 0.35)' },
+    { label: 'Verde', color: 'rgba(74, 222, 128, 0.35)', preview: 'rgba(74, 222, 128, 0.35)' },
+    { label: 'Azul', color: 'rgba(96, 165, 250, 0.35)', preview: 'rgba(96, 165, 250, 0.35)' },
+    { label: 'Rosa', color: 'rgba(244, 114, 182, 0.35)', preview: 'rgba(244, 114, 182, 0.35)' },
+    { label: 'Morado', color: 'rgba(192, 132, 252, 0.35)', preview: 'rgba(192, 132, 252, 0.35)' },
+    { label: 'Naranja', color: 'rgba(251, 146, 60, 0.35)', preview: 'rgba(251, 146, 60, 0.35)' },
 ];
 
 // Helpers para normalización y comparación exacta de colores (hex / rgb / transparent)
@@ -142,6 +143,8 @@ function isNonTransparentColor(colorStr: string | null | undefined): boolean {
 export function RichTextToolbar({
     editorRef,
     isNotesFocused,
+    isDark: propIsDark,
+    isAmoled: propIsAmoled,
     onPressCamera,
     onPressGallery,
     onPressDocument,
@@ -162,7 +165,11 @@ export function RichTextToolbar({
     const [activeTextColor, setActiveTextColor] = useState<string | null>(null);
     const [activeHighlightColor, setActiveHighlightColor] = useState<string | null>(null);
     const lastActionTimestamp = useRef<number>(0);
-    const { colors, accent, isDark } = useVeyraTheme();
+    const theme = useVeyraTheme();
+    const colors = theme.colors;
+    const accent = theme.accent;
+    const isDark = propIsDark ?? theme.isDark;
+    const isAmoled = propIsAmoled ?? theme.isAmoled;
 
     useEffect(() => {
         const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
@@ -319,8 +326,7 @@ export function RichTextToolbar({
         lastActionTimestamp.current = Date.now();
 
         if (color === 'default') {
-            const finalColor = isDark ? '#F4F4F5' : '#0F172A';
-            editorRef.current.sendAction(actions.foreColor, 'result', finalColor);
+            editorRef.current.sendAction(actions.foreColor, 'result', 'default');
             setActiveTextColor(null);
         } else {
             editorRef.current.sendAction(actions.foreColor, 'result', color);
@@ -354,8 +360,7 @@ export function RichTextToolbar({
         // 3. Quitar resaltador de fondo
         editorRef.current.sendAction(actions.hiliteColor, 'result', 'transparent');
         // 4. Restablecer color de texto normal
-        const defaultColor = isDark ? '#F4F4F5' : '#0F172A';
-        editorRef.current.sendAction(actions.foreColor, 'result', defaultColor);
+        editorRef.current.sendAction(actions.foreColor, 'result', 'default');
         // 5. Restablecer alineación
         editorRef.current.sendAction(actions.alignLeft, 'result');
 
@@ -405,7 +410,7 @@ export function RichTextToolbar({
             style={[
                 styles.container,
                 {
-                    backgroundColor: colors.surfaceElevated,
+                    backgroundColor: isAmoled ? colors.bg : colors.surfaceElevated,
                     borderTopColor: colors.borderSubtle,
                     paddingBottom: isKeyboardVisible ? 6 : Math.max(insets.bottom, 8),
                 },
@@ -640,7 +645,7 @@ export function RichTextToolbar({
                 <View style={styles.submenuContainer}>
                     {renderBackButton()}
                     {/* Toggle selector: Color de texto vs Resaltador con indicadores */}
-                    <View style={[styles.colorTargetToggle, { backgroundColor: isDark ? '#232838' : '#E2E8F0' }]}>
+                    <View style={[styles.colorTargetToggle, { backgroundColor: isAmoled ? '#121212' : (isDark ? '#232838' : '#E2E8F0') }]}>
                         <TouchableOpacity
                             activeOpacity={0.7}
                             delayPressIn={0}
@@ -648,7 +653,7 @@ export function RichTextToolbar({
                             onPress={() => setColorTarget('text')}
                             style={[
                                 styles.colorTargetBtn,
-                                colorTarget === 'text' && { backgroundColor: isDark ? '#161922' : '#FFFFFF' },
+                                colorTarget === 'text' && { backgroundColor: isAmoled ? '#1C1C1E' : (isDark ? '#161922' : '#FFFFFF') },
                             ]}
                         >
                             <Palette size={14} color={(colorTarget === 'text' ? accent.primary : colors.textSecondary) as any} />
@@ -663,7 +668,7 @@ export function RichTextToolbar({
                             onPress={() => setColorTarget('highlight')}
                             style={[
                                 styles.colorTargetBtn,
-                                colorTarget === 'highlight' && { backgroundColor: isDark ? '#161922' : '#FFFFFF' },
+                                colorTarget === 'highlight' && { backgroundColor: isAmoled ? '#1C1C1E' : (isDark ? '#161922' : '#FFFFFF') },
                             ]}
                         >
                             <Highlighter size={14} color={(colorTarget === 'highlight' ? accent.primary : colors.textSecondary) as any} />
@@ -778,7 +783,7 @@ export function RichTextToolbar({
                 <View style={styles.submenuContainer}>
                     {renderBackButton()}
                     {/* Toggle selector: Toda la nota vs Selección */}
-                    <View style={[styles.fontScopeToggle, { backgroundColor: isDark ? '#232838' : '#E2E8F0' }]}>
+                    <View style={[styles.fontScopeToggle, { backgroundColor: isAmoled ? '#121212' : (isDark ? '#232838' : '#E2E8F0') }]}>
                         <TouchableOpacity
                             activeOpacity={0.7}
                             delayPressIn={0}
@@ -786,7 +791,7 @@ export function RichTextToolbar({
                             onPress={() => setFontScope('whole')}
                             style={[
                                 styles.fontScopeBtn,
-                                fontScope === 'whole' && { backgroundColor: isDark ? '#161922' : '#FFFFFF' },
+                                fontScope === 'whole' && { backgroundColor: isAmoled ? '#1C1C1E' : (isDark ? '#161922' : '#FFFFFF') },
                             ]}
                         >
                             <Text style={[styles.fontScopeText, { color: fontScope === 'whole' ? accent.primary : colors.textSecondary }]}>
@@ -800,7 +805,7 @@ export function RichTextToolbar({
                             onPress={() => setFontScope('selection')}
                             style={[
                                 styles.fontScopeBtn,
-                                fontScope === 'selection' && { backgroundColor: isDark ? '#161922' : '#FFFFFF' },
+                                fontScope === 'selection' && { backgroundColor: isAmoled ? '#1C1C1E' : (isDark ? '#161922' : '#FFFFFF') },
                             ]}
                         >
                             <Text style={[styles.fontScopeText, { color: fontScope === 'selection' ? accent.primary : colors.textSecondary }]}>

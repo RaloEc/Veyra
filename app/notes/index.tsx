@@ -74,6 +74,7 @@ import {
     Inbox,
     Layers,
     ChevronLeft,
+    ChevronRight,
     MoreVertical,
     Edit3,
     Users,
@@ -104,6 +105,8 @@ import { TopBar } from '../../src/components/TopBar';
 import { BottomTabBar } from '../../src/components/layout/BottomTabBar';
 import { ShareModal } from '../../src/components/collaboration/ShareModal';
 import { CollaboratorsAvatars } from '../../src/components/collaboration/CollaboratorsAvatars';
+import { SyncService } from '../../src/services/syncService';
+import { FolderService, getAllDescendantFolderIds } from '../../src/services/folderService';
 
 /**
  * Normaliza cualquier formato de color o nombre ('purple', 'blue') a HEX de 6 caracteres seguro.
@@ -131,6 +134,41 @@ interface NoteSection {
     data: Note[];
 }
 
+export type NoteFilterType = 'all' | 'pinned' | 'shared' | 'unassigned' | 'tasks' | 'attachments';
+
+const noteIsShared = (note: Note, currentUserId?: string): boolean => {
+    return Boolean(
+        note.is_shared === 1 ||
+        (note.shared_owner_id && note.shared_owner_id.length > 0) ||
+        (note.user_id && currentUserId && note.user_id !== currentUserId && note.user_id !== 'local_user')
+    );
+};
+
+const noteHasTasks = (note: Note): boolean => {
+    if (!note.content) return false;
+    return (
+        note.content.includes('taskList') ||
+        note.content.includes('taskItem') ||
+        note.content.includes('data-type="taskList"') ||
+        note.content.includes('type="checkbox"') ||
+        note.content.includes('[ ]') ||
+        note.content.includes('[x]')
+    );
+};
+
+const noteHasAttachments = (note: Note): boolean => {
+    if (note.attachments && note.attachments !== '[]' && note.attachments !== 'null') {
+        try {
+            const parsed = JSON.parse(note.attachments);
+            if (Array.isArray(parsed) && parsed.length > 0) return true;
+        } catch { }
+    }
+    if (note.content && (note.content.includes('<img') || note.content.includes('data:image'))) {
+        return true;
+    }
+    return false;
+};
+
 const extractFirstImageUri = (attachmentsStr?: string, contentStr?: string): string | null => {
     if (attachmentsStr) {
         try {
@@ -150,16 +188,25 @@ const extractFirstImageUri = (attachmentsStr?: string, contentStr?: string): str
                     }
                 }
             }
-        } catch {}
+        } catch { }
     }
 
-    if (contentStr) {
+    if (contentStr && contentStr.includes('<img')) {
         try {
-            const imgMatch = contentStr.match(/<img[^>]+src=["']([^"']+)["']/i);
-            if (imgMatch && imgMatch[1]) {
+            const imgIdx = contentStr.indexOf('<img');
+            const slice = contentStr.slice(imgIdx, imgIdx + 4000);
+            const imgMatch = slice.match(/<img[^>]+src=\\?["']([^"'\\]+)\\?["']/i);
+            if (imgMatch && imgMatch[1] && !imgMatch[1].startsWith('data:image')) {
                 return imgMatch[1];
             }
-        } catch {}
+            if (imgMatch && imgMatch[1] && imgMatch[1].startsWith('data:image')) {
+                const fullSlice = contentStr.slice(imgIdx);
+                const fullMatch = fullSlice.match(/<img[^>]+src=\\?["'](data:image\/[^"'\\]+)\\?["']/i);
+                if (fullMatch && fullMatch[1]) {
+                    return fullMatch[1];
+                }
+            }
+        } catch { }
     }
 
     return null;
@@ -175,6 +222,8 @@ interface NoteItemRowProps {
     isDeleting: boolean;
     folderInfo?: Folder | null;
     showFolderBadge?: boolean;
+    isFolderView?: boolean;
+    folderAccentColor?: string;
     colors: any;
     typography: any;
     accent: any;
@@ -199,6 +248,8 @@ const NoteItemRow = React.memo(function NoteItemRow({
     isDeleting,
     folderInfo,
     showFolderBadge,
+    isFolderView = false,
+    folderAccentColor,
     colors,
     typography,
     accent,
@@ -212,7 +263,10 @@ const NoteItemRow = React.memo(function NoteItemRow({
     onDeleteNote,
     onTogglePinNote,
 }: NoteItemRowProps) {
-    const plainText = useMemo(() => extractPlainTextFromPages(item.content), [item.content]);
+    const plainText = useMemo(() => {
+        const raw = item.preview_text?.trim() || extractPlainTextFromPages(item.content);
+        return raw.replace(/<[^>]*>?/gm, '').replace(/&nbsp;/gi, ' ').trim();
+    }, [item.preview_text, item.content]);
     const imageThumb = useMemo(() => extractFirstImageUri(item.attachments, item.content), [item.attachments, item.content]);
     const hasAttachments = Boolean(item.attachments && item.attachments !== '[]');
     const isGuestRevoked = useMemo(() => {
@@ -428,7 +482,10 @@ const NoteItemRow = React.memo(function NoteItemRow({
                             {
                                 backgroundColor: isSelected
                                     ? (isDark ? 'rgba(59, 130, 246, 0.16)' : 'rgba(59, 130, 246, 0.09)')
-                                    : (isDark ? '#1C1F26' : '#FFFFFF'),
+                                    : isFolderView
+                                        ? (isDark ? 'rgba(255, 255, 255, 0.02)' : 'rgba(0, 0, 0, 0.015)')
+                                        : (isDark ? (colors.bg === '#000000' ? colors.surfaceCard : '#1C1F26') : '#FFFFFF'),
+                                borderRadius: isFolderView ? 12 : 0,
                             },
                             rowAnimatedStyle,
                         ]}
@@ -439,24 +496,35 @@ const NoteItemRow = React.memo(function NoteItemRow({
                             onLongPress={() => onLongPress(item.id)}
                             style={[
                                 styles.noteItem,
+                                isFolderView && styles.noteItemFolderView,
                                 isGuestRevoked && { opacity: 0.72 },
                                 isSelected && {
                                     backgroundColor: isDark ? 'rgba(59, 130, 246, 0.16)' : 'rgba(59, 130, 246, 0.09)',
-                                    borderLeftWidth: 3.5,
+                                    borderLeftWidth: 3,
                                     borderLeftColor: accent.primary,
+                                    borderRadius: isFolderView ? 12 : 0,
                                 },
                             ]}
                         >
                             {/* Columna de Texto */}
                             <View style={styles.noteTextCol}>
-                                {/* Fila Meta: Fecha / Hora + Fijada + Carpeta + Adjuntos */}
+                                {/* Fila Meta: Punto color carpeta + Fecha / Hora + Fijada + Carpeta + Adjuntos */}
                                 <View style={styles.noteMetaRow}>
+                                    {isFolderView && folderAccentColor && (
+                                        <View
+                                            style={[
+                                                styles.folderNoteDot,
+                                                { backgroundColor: folderAccentColor },
+                                            ]}
+                                        />
+                                    )}
+
                                     <Text style={[styles.noteDate, { color: colors.textMuted }]}>
                                         {formatNoteDate(item.created_at_ms || item.updated_at_ms)}
                                     </Text>
 
                                     {item.is_pinned === 1 && sectionKey !== 'pinned' && (
-                                        <View style={styles.pinInlineBadge}>
+                                        <View style={isFolderView ? styles.folderItemPinnedBadgeSubtle : styles.pinInlineBadge}>
                                             <Pin size={10} color={(isDark ? '#FBBF24' : '#F59E0B') as any} />
                                             <Text style={[styles.pinInlineText, { color: isDark ? '#FBBF24' : '#F59E0B' }]}>
                                                 {language === 'es' ? 'Fijada' : 'Pinned'}
@@ -512,13 +580,17 @@ const NoteItemRow = React.memo(function NoteItemRow({
                                         </View>
                                     ) : (item.is_shared === 1 || item.shared_owner_id) && (
                                         <View
-                                            style={[
-                                                styles.folderInlineBadge,
-                                                {
-                                                    backgroundColor: `${accent.primary}${isDark ? '25' : '15'}`,
-                                                    borderColor: `${accent.primary}30`,
-                                                },
-                                            ]}
+                                            style={
+                                                isFolderView
+                                                    ? styles.folderItemSharedBadgeSubtle
+                                                    : [
+                                                        styles.folderInlineBadge,
+                                                        {
+                                                            backgroundColor: `${accent.primary}${isDark ? '25' : '15'}`,
+                                                            borderColor: `${accent.primary}30`,
+                                                        },
+                                                    ]
+                                            }
                                         >
                                             <Users size={10} color={accent.primary as any} strokeWidth={2} />
                                             <Text
@@ -535,19 +607,26 @@ const NoteItemRow = React.memo(function NoteItemRow({
                                     )}
                                 </View>
 
-                                {/* Título de la Nota */}
-                                <Text
-                                    style={[
-                                        styles.noteTitle,
-                                        {
-                                            color: colors.textPrimary,
-                                            fontSize: typography.bodyMedium.fontSize,
-                                        },
-                                    ]}
-                                    numberOfLines={1}
-                                >
-                                    {item.title || t('notes.no_title', { defaultValue: 'Sin título' })}
-                                </Text>
+                                {/* Título de la Nota + Indicador de cambios no vistos */}
+                                <View style={styles.noteTitleContainer}>
+                                    <Text
+                                        style={[
+                                            styles.noteTitle,
+                                            {
+                                                color: colors.textPrimary,
+                                                fontSize: typography.bodyMedium.fontSize,
+                                                fontWeight: '600',
+                                                flexShrink: 1,
+                                            },
+                                        ]}
+                                        numberOfLines={1}
+                                    >
+                                        {item.title || t('notes.no_title', { defaultValue: 'Sin título' })}
+                                    </Text>
+                                    {(item.updated_at_ms || 0) > (item.last_opened_ms || 0) && (
+                                        <View style={styles.unreadDot} />
+                                    )}
+                                </View>
 
                                 {/* Extracto de Texto */}
                                 {plainText ? (
@@ -581,9 +660,18 @@ const NoteItemRow = React.memo(function NoteItemRow({
                 </GestureDetector>
             </View>
 
-            {/* Divisor entre notas dentro del mismo contenedor */}
+            {/* Divisor entre notas */}
             {index < totalCount - 1 && (
-                <VeyraDivider style={{ marginHorizontal: 16, opacity: 0.4 }} />
+                isFolderView ? (
+                    <View
+                        style={[
+                            styles.folderNoteDivider,
+                            { backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)' },
+                        ]}
+                    />
+                ) : (
+                    <VeyraDivider style={{ marginHorizontal: 16, opacity: 0.4 }} />
+                )
             )}
         </Animated.View>
     );
@@ -614,6 +702,7 @@ function NotesScreenComponent({ hideBars = false }: { hideBars?: boolean } = {})
     const moveNotesBatch = useNotesStore(state => state.moveNotesBatch);
     const addNote = useNotesStore(state => state.addNote);
     const markNoteRevoked = useNotesStore(state => state.markNoteRevoked);
+    const markNoteOpened = useNotesStore(state => state.markNoteOpened);
     const setSelectedNotesIds = useNotesStore(state => state.setSelectedNotesIds);
 
     const folders = useFoldersStore(state => state.folders);
@@ -641,6 +730,7 @@ function NotesScreenComponent({ hideBars = false }: { hideBars?: boolean } = {})
 
     const [searchQuery, setSearchQuery] = useState('');
     const [isSearching, setIsSearching] = useState(false);
+    const [activeFilter, setActiveFilter] = useState<NoteFilterType>('all');
     const [selectedNotes, setSelectedNotes] = useState<string[]>([]);
     const [selectedFolderIds, setSelectedFolderIds] = useState<string[]>([]);
     const [deletingIds, setDeletingIds] = useState<string[]>([]);
@@ -677,6 +767,8 @@ function NotesScreenComponent({ hideBars = false }: { hideBars?: boolean } = {})
     const [isFolderModalVisible, setIsFolderModalVisible] = useState(false);
     const [editingFolder, setEditingFolder] = useState<Folder | null>(null);
     const [isMoveModalVisible, setIsMoveModalVisible] = useState(false);
+    const [moveModalType, setMoveModalType] = useState<'note' | 'folder'>('note');
+    const [folderToMoveId, setFolderToMoveId] = useState<string | null>(null);
     const [isFolderShareModalVisible, setIsFolderShareModalVisible] = useState(false);
     const [sharingNote, setSharingNote] = useState<Note | null>(null);
 
@@ -890,9 +982,10 @@ function NotesScreenComponent({ hideBars = false }: { hideBars?: boolean } = {})
                     return;
                 }
             }
+            markNoteOpened(id);
             router.push(`/notes/${id}`);
         }
-    }, [isFolderSelectionMode, isSelectionMode, router, notes, t, deleteNote, markNoteRevoked, session?.user?.id]);
+    }, [isFolderSelectionMode, isSelectionMode, router, notes, t, deleteNote, markNoteRevoked, markNoteOpened, session?.user?.id]);
 
     const handleLongPress = (id: string) => {
         if (isFolderSelectionMode) {
@@ -960,8 +1053,51 @@ function NotesScreenComponent({ hideBars = false }: { hideBars?: boolean } = {})
         const targetFolder = folders.find(f => f.id === selectedFolderIds[0]);
         if (targetFolder) {
             setSelectedFolderIds([]);
-            setEditingFolder(targetFolder);
-            setIsFolderModalVisible(true);
+            useFoldersStore.getState().openFolderMorph(null, targetFolder);
+        }
+    };
+
+    const handleMoveSelectedFolder = () => {
+        if (selectedFolderIds.length !== 1) return;
+        const fId = selectedFolderIds[0];
+        setMoveModalType('folder');
+        setFolderToMoveId(fId);
+        setIsMoveModalVisible(true);
+    };
+
+    const handleMoveFolder = async (destinationFolderId: string | null) => {
+        if (!folderToMoveId) return;
+
+        // Prevención de ciclos: comprobar si el destino es la misma carpeta o un descendiente
+        const invalidTargets = new Set([folderToMoveId, ...getAllDescendantFolderIds(folderToMoveId, folders)]);
+        if (destinationFolderId && invalidTargets.has(destinationFolderId)) {
+            Alert.alert(
+                language === 'es' ? 'Acción no permitida' : 'Action not allowed',
+                language === 'es'
+                    ? 'No puedes mover una carpeta dentro de sí misma o de una de sus subcarpetas.'
+                    : 'You cannot move a folder into itself or one of its subfolders.'
+            );
+            return;
+        }
+
+        LayoutAnimation.configureNext(smoothLayoutAnimation);
+        await updateFolder(folderToMoveId, { parent_id: destinationFolderId });
+        await loadFolders();
+        setSelectedFolderIds([]);
+
+        // Si la carpeta movida está activa o dentro de su stack, reconstruir el folderStack para actualizar breadcrumb
+        const currentStack = useFoldersStore.getState().folderStack;
+        if (currentStack.some(f => f.id === folderToMoveId)) {
+            const freshFolders = useFoldersStore.getState().folders;
+            const activeId = openedFolderId || folderToMoveId;
+            const newStack: Folder[] = [];
+            let curr = freshFolders.find(f => f.id === activeId);
+            while (curr) {
+                newStack.unshift(curr);
+                if (!curr.parent_id) break;
+                curr = freshFolders.find(f => f.id === curr!.parent_id);
+            }
+            setFolderStack(newStack);
         }
     };
 
@@ -1080,7 +1216,7 @@ function NotesScreenComponent({ hideBars = false }: { hideBars?: boolean } = {})
                                 title: language === 'es' ? 'Notas de Veyra' : 'Veyra Notes',
                                 message: shareText,
                             });
-                        } catch (e) {}
+                        } catch (e) { }
                     },
                 },
                 {
@@ -1174,23 +1310,27 @@ function NotesScreenComponent({ hideBars = false }: { hideBars?: boolean } = {})
                 refreshFolders();
             }
 
+            // Sincronización parcial en segundo plano de previews de notas colaborativas Yjs
+            SyncService.syncYjsNotesPreview(session?.user?.id).catch(err => {
+                console.warn('[Notes] Error sincronizando preview de notas Yjs:', err);
+            });
+
+            // Refrescar preview cada 45s en segundo plano mientras la lista está enfocada
+            const previewInterval = setInterval(() => {
+                SyncService.syncYjsNotesPreview(session?.user?.id).catch(() => { });
+            }, 45000);
+
             if (!openedFolderId && useFoldersStore.getState().activeFolderId !== 'all') {
                 setActiveFolderId('all');
             }
 
             return () => {
+                clearInterval(previewInterval);
                 setSelectedNotes([]);
                 setSelectedFolderIds([]);
             };
-        }, [openedFolderId, setActiveFolderId])
+        }, [openedFolderId, setActiveFolderId, session?.user?.id])
     );
-
-    useEffect(() => {
-        const { isNotesDirty, notes: currentNotes, loadNotes: refreshNotes } = useNotesStore.getState();
-        const { isFoldersDirty, folders: currentFolders, loadFolders: refreshFolders } = useFoldersStore.getState();
-        if (isNotesDirty || currentNotes.length === 0) refreshNotes();
-        if (isFoldersDirty || currentFolders.length === 0) refreshFolders();
-    }, []);
 
     // Formateo de fecha editorial relativo (Hoy, Ayer, o "2 Sep")
     const formatNoteDate = (ms: number) => {
@@ -1204,9 +1344,12 @@ function NotesScreenComponent({ hideBars = false }: { hideBars?: boolean } = {})
         return format(d, language === 'es' ? 'd MMM' : 'MMM d', { locale });
     };
 
-    // Conteo de fijadas y sin carpeta
+    // Conteo de notas según filtros inteligentes
     const pinnedCount = useMemo(() => notes.filter(n => n.is_pinned === 1).length, [notes]);
+    const sharedCount = useMemo(() => notes.filter(n => noteIsShared(n, session?.user?.id)).length, [notes, session?.user?.id]);
     const unassignedCount = useMemo(() => notes.filter(n => !n.folder_id).length, [notes]);
+    const tasksCount = useMemo(() => notes.filter(noteHasTasks).length, [notes]);
+    const attachmentsCount = useMemo(() => notes.filter(noteHasAttachments).length, [notes]);
 
     // Mapa rápido de carpetas por ID
     const foldersMap = useMemo(() => {
@@ -1303,13 +1446,22 @@ function NotesScreenComponent({ hideBars = false }: { hideBars?: boolean } = {})
     const filteredBaseNotes = useMemo(() => {
         return notes.filter(note => {
             if (openedFolderId) return true; // Base screen stays cached
-            const plainContent = extractPlainTextFromPages(note.content);
+
+            // Filtro inteligente de contenido activo
+            if (activeFilter === 'pinned' && note.is_pinned !== 1) return false;
+            if (activeFilter === 'shared' && !noteIsShared(note, session?.user?.id)) return false;
+            if (activeFilter === 'unassigned' && note.folder_id) return false;
+            if (activeFilter === 'tasks' && !noteHasTasks(note)) return false;
+            if (activeFilter === 'attachments' && !noteHasAttachments(note)) return false;
+
+            const rawContent = note.preview_text?.trim() || extractPlainTextFromPages(note.content);
+            const plainContent = rawContent.replace(/<[^>]*>?/gm, ' ').trim();
             const matchesSearch =
                 note.title?.toLowerCase().includes(searchQuery.toLowerCase()) ||
                 plainContent.toLowerCase().includes(searchQuery.toLowerCase());
             return matchesSearch;
         });
-    }, [notes, searchQuery, openedFolderId]);
+    }, [notes, searchQuery, openedFolderId, activeFilter, session?.user?.id]);
 
     const sortedBaseNotes = useMemo(() => {
         return [...filteredBaseNotes].sort((a, b) => {
@@ -1329,8 +1481,17 @@ function NotesScreenComponent({ hideBars = false }: { hideBars?: boolean } = {})
 
     const filteredFolderNotes = useMemo(() => {
         if (!isFolderViewActive) return [];
+
+        // Búsqueda recursiva: si el usuario está buscando, incluir subcarpetas descendientes
+        let allowedFolderIds: Set<string> | null = null;
+        if (searchQuery.trim().length > 0 && currentTargetFolderId !== 'pinned' && currentTargetFolderId !== 'unassigned') {
+            const descendantIds = getAllDescendantFolderIds(currentTargetFolderId, folders);
+            allowedFolderIds = new Set([currentTargetFolderId, ...descendantIds]);
+        }
+
         return notes.filter(note => {
-            const plainContent = extractPlainTextFromPages(note.content);
+            const rawContent = note.preview_text?.trim() || extractPlainTextFromPages(note.content);
+            const plainContent = rawContent.replace(/<[^>]*>?/gm, ' ').trim();
             const matchesSearch =
                 note.title?.toLowerCase().includes(searchQuery.toLowerCase()) ||
                 plainContent.toLowerCase().includes(searchQuery.toLowerCase());
@@ -1339,9 +1500,13 @@ function NotesScreenComponent({ hideBars = false }: { hideBars?: boolean } = {})
 
             if (currentTargetFolderId === 'pinned') return note.is_pinned === 1;
             if (currentTargetFolderId === 'unassigned') return !note.folder_id;
+
+            if (allowedFolderIds) {
+                return Boolean(note.folder_id && allowedFolderIds.has(note.folder_id));
+            }
             return note.folder_id === currentTargetFolderId;
         });
-    }, [notes, searchQuery, currentTargetFolderId, isFolderViewActive]);
+    }, [notes, searchQuery, currentTargetFolderId, isFolderViewActive, folders]);
 
     const sortedFolderNotes = useMemo(() => {
         return [...filteredFolderNotes].sort((a, b) => {
@@ -1394,15 +1559,19 @@ function NotesScreenComponent({ hideBars = false }: { hideBars?: boolean } = {})
                     {
                         id: 'move',
                         label: language === 'es' ? 'Mover' : 'Move',
-                        icon: (color) => <FolderInput size={16} color={accent.primary} strokeWidth={2.4} />,
-                        onPress: () => setIsMoveModalVisible(true),
+                        icon: (color) => <FolderInput size={16} color={accent.primary as any} strokeWidth={2.4} />,
+                        onPress: () => {
+                            setMoveModalType('note');
+                            setFolderToMoveId(null);
+                            setIsMoveModalVisible(true);
+                        },
                         color: accent.primary,
                         bg: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)',
                     },
                     {
                         id: 'duplicate',
                         label: language === 'es' ? 'Duplicar' : 'Duplicate',
-                        icon: (color) => <Copy size={16} color={color} strokeWidth={2.4} />,
+                        icon: (color) => <Copy size={16} color={color as any} strokeWidth={2.4} />,
                         onPress: handleDuplicateSelected,
                         color: colors.textPrimary,
                         bg: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)',
@@ -1410,7 +1579,7 @@ function NotesScreenComponent({ hideBars = false }: { hideBars?: boolean } = {})
                     {
                         id: 'share',
                         label: language === 'es' ? 'Compartir' : 'Share',
-                        icon: (color) => <Share2 size={16} color={colors.textPrimary} strokeWidth={2.4} />,
+                        icon: (color) => <Share2 size={16} color={colors.textPrimary as any} strokeWidth={2.4} />,
                         onPress: handleShareSelected,
                         color: colors.textPrimary,
                         bg: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)',
@@ -1418,7 +1587,7 @@ function NotesScreenComponent({ hideBars = false }: { hideBars?: boolean } = {})
                     {
                         id: 'delete',
                         label: language === 'es' ? 'Eliminar' : 'Delete',
-                        icon: (color) => <Trash2 size={16} color={isDark ? '#FB7185' : '#E11D48'} strokeWidth={2.4} />,
+                        icon: (color) => <Trash2 size={16} color={(isDark ? '#FB7185' : '#E11D48') as any} strokeWidth={2.4} />,
                         onPress: handleDeleteSelected,
                         color: isDark ? '#FB7185' : '#E11D48',
                         bg: isDark ? 'rgba(239, 68, 68, 0.15)' : 'rgba(239, 68, 68, 0.1)',
@@ -1431,8 +1600,16 @@ function NotesScreenComponent({ hideBars = false }: { hideBars?: boolean } = {})
                 folderActions.push({
                     id: 'edit',
                     label: language === 'es' ? 'Editar' : 'Edit',
-                    icon: (color: string) => <Edit3 size={16} color={colors.textPrimary} strokeWidth={2.4} />,
+                    icon: (color: string) => <Edit3 size={16} color={colors.textPrimary as any} strokeWidth={2.4} />,
                     onPress: handleEditSelectedFolder,
+                    color: colors.textPrimary,
+                    bg: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)',
+                });
+                folderActions.push({
+                    id: 'move',
+                    label: language === 'es' ? 'Mover a...' : 'Move to...',
+                    icon: (color: string) => <FolderInput size={16} color={colors.textPrimary as any} strokeWidth={2.4} />,
+                    onPress: handleMoveSelectedFolder,
                     color: colors.textPrimary,
                     bg: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)',
                 });
@@ -1517,7 +1694,7 @@ function NotesScreenComponent({ hideBars = false }: { hideBars?: boolean } = {})
                 title: language === 'es' ? 'Notas de Veyra' : 'Veyra Notes',
                 message: shareText,
             });
-        } catch (e) {}
+        } catch (e) { }
     };
 
     useEffect(() => {
@@ -1601,7 +1778,7 @@ function NotesScreenComponent({ hideBars = false }: { hideBars?: boolean } = {})
         );
     };
 
-    // 2. Render de sección para la Vista de Carpeta en el Overlay (Teñido con activeFolderColor)
+    // 2. Render de sección para la Vista de Carpeta en el Overlay (Minimalista, ligero y elegante)
     const renderFolderSectionContainer = ({ item: section }: { item: NoteSection }) => {
         return (
             <Animated.View
@@ -1609,30 +1786,37 @@ function NotesScreenComponent({ hideBars = false }: { hideBars?: boolean } = {})
                 layout={LinearTransition.duration(260).easing(ReanimatedEasing.bezier(0.25, 1, 0.5, 1))}
                 style={styles.sectionBlock}
             >
-                {/* Título de la sección teñido con el color de la carpeta */}
-                <View style={styles.sectionHeaderRow}>
-                    <Text style={[styles.sectionTitle, { color: activeFolderColor }]}>
-                        {section.title}
-                    </Text>
-                    <Text style={[styles.sectionCount, { color: colors.textMuted }]}>
-                        {section.data.length}
-                    </Text>
+                {/* Cabecera de sección limpia: Título en mayúsculas + badge sutil + línea de acento tenue */}
+                <View style={styles.folderSectionHeaderRow}>
+                    <View style={styles.folderSectionTitleGroup}>
+                        <Text style={[styles.folderSectionTitleText, { color: colors.textSecondary }]}>
+                            {section.title}
+                        </Text>
+                        <View
+                            style={[
+                                styles.folderSectionPillCount,
+                                {
+                                    backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)',
+                                },
+                            ]}
+                        >
+                            <Text style={[styles.folderSectionCountText, { color: colors.textMuted }]}>
+                                {section.data.length}
+                            </Text>
+                        </View>
+                    </View>
+                    <View
+                        style={[
+                            styles.folderSectionLine,
+                            {
+                                backgroundColor: isDark ? `${activeFolderColor}28` : `${activeFolderColor}18`,
+                            },
+                        ]}
+                    />
                 </View>
 
-                {/* Contenedor tipo Tarjeta para este período con color de carpeta */}
-                <VeyraSurface
-                    level={1}
-                    radius="lg"
-                    style={[
-                        styles.sectionCard,
-                        {
-                            borderColor: isDark ? `${activeFolderColor}35` : `${activeFolderColor}28`,
-                            backgroundColor: isDark ? `${activeFolderColor}0F` : `${activeFolderColor}08`,
-                            borderLeftWidth: 3.5,
-                            borderLeftColor: activeFolderColor,
-                        },
-                    ]}
-                >
+                {/* Lista ligera de notas: sin borde izquierdo pesado, cada nota respira */}
+                <View style={styles.folderSectionNotesList}>
                     {section.data.map((note, idx) => (
                         <NoteItemRow
                             key={note.id}
@@ -1645,6 +1829,8 @@ function NotesScreenComponent({ hideBars = false }: { hideBars?: boolean } = {})
                             isDeleting={deletingIds.includes(note.id)}
                             folderInfo={null}
                             showFolderBadge={false}
+                            isFolderView={true}
+                            folderAccentColor={activeFolderColor}
                             colors={colors}
                             typography={typography}
                             accent={accent}
@@ -1659,7 +1845,7 @@ function NotesScreenComponent({ hideBars = false }: { hideBars?: boolean } = {})
                             onTogglePinNote={handleTogglePinNote}
                         />
                     ))}
-                </VeyraSurface>
+                </View>
             </Animated.View>
         );
     };
@@ -1743,9 +1929,9 @@ function NotesScreenComponent({ hideBars = false }: { hideBars?: boolean } = {})
         return foldersMap.get(currentTargetFolderId) || null;
     }, [currentTargetFolderId, foldersMap]);
 
-    // Header superior de la lista: Grid de carpetas colapsable solo en la vista 'all'
+    // Header superior de la lista: Grid de carpetas visible solo en la vista 'all' y sin búsqueda activa
     const renderListHeader = () => {
-        if (searchQuery.trim().length > 0) return null;
+        if (searchQuery.trim().length > 0 || activeFilter !== 'all') return null;
 
         return (
             <View style={styles.folderGridWrapper}>
@@ -1761,14 +1947,10 @@ function NotesScreenComponent({ hideBars = false }: { hideBars?: boolean } = {})
                         handleOpenFolder(id, rect);
                     }}
                     onEditFolder={(folder) => {
-                        setEditingFolder(folder);
-                        setModalParentFolder(null);
-                        setIsFolderModalVisible(true);
+                        useFoldersStore.getState().openFolderMorph(null, folder);
                     }}
                     onCreateFolder={() => {
-                        setEditingFolder(null);
-                        setModalParentFolder(null);
-                        setIsFolderModalVisible(true);
+                        useFoldersStore.getState().openFolderMorph(null, null);
                     }}
                     onTogglePin={async (id) => {
                         await togglePinFolder(id);
@@ -1945,24 +2127,24 @@ function NotesScreenComponent({ hideBars = false }: { hideBars?: boolean } = {})
         <View
             ref={screenContainerRef}
             collapsable={false}
-                onLayout={(e) => {
-                    const { width, height } = e.nativeEvent.layout;
-                    svContainerW.value = width;
-                    svContainerH.value = height;
-                    if (screenContainerRef.current) {
-                        screenContainerRef.current.measureInWindow((sx, sy, sw, sh) => {
-                            if (typeof sx === 'number' && typeof sy === 'number') {
-                                screenOffsetRef.current = { x: sx, y: sy };
-                                if (typeof sw === 'number' && sw > 0) svContainerW.value = sw;
-                                if (typeof sh === 'number' && sh > 0) svContainerH.value = sh;
-                            }
-                        });
-                    }
-                }}
-                style={{ flex: 1, position: 'relative' }}
-            >
-                {/* 1. PANTALLA BASE (TODAS LAS NOTAS) */}
-                <Animated.View
+            onLayout={(e) => {
+                const { width, height } = e.nativeEvent.layout;
+                svContainerW.value = width;
+                svContainerH.value = height;
+                if (screenContainerRef.current) {
+                    screenContainerRef.current.measureInWindow((sx, sy, sw, sh) => {
+                        if (typeof sx === 'number' && typeof sy === 'number') {
+                            screenOffsetRef.current = { x: sx, y: sy };
+                            if (typeof sw === 'number' && sw > 0) svContainerW.value = sw;
+                            if (typeof sh === 'number' && sh > 0) svContainerH.value = sh;
+                        }
+                    });
+                }
+            }}
+            style={{ flex: 1, position: 'relative' }}
+        >
+            {/* 1. PANTALLA BASE (TODAS LAS NOTAS) */}
+            <Animated.View
                 style={[
                     styles.headerContainer,
                     dimTopHeaderAnimatedStyle,
@@ -2018,222 +2200,111 @@ function NotesScreenComponent({ hideBars = false }: { hideBars?: boolean } = {})
                                 showsHorizontalScrollIndicator={false}
                                 contentContainerStyle={styles.mainFiltersScrollContent}
                             >
-                                {/* 1. TODAS */}
-                                <View
-                                    ref={(el) => { pillRefs.current['all'] = el; }}
-                                    collapsable={false}
-                                >
-                                    <TouchableOpacity
-                                        style={[
-                                            styles.folderChip,
-                                            {
-                                                backgroundColor: (!isFolderViewActive && activeFolderId === 'all')
-                                                    ? (isDark ? `${accent.primary}25` : `${accent.primary}18`)
-                                                    : (isDark ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.04)'),
-                                                borderColor: (!isFolderViewActive && activeFolderId === 'all')
-                                                    ? (isDark ? `${accent.primary}60` : `${accent.primary}45`)
-                                                    : colors.borderSubtle,
-                                            },
-                                        ]}
-                                        onPress={() => {
-                                            if (isFolderViewActive) {
-                                                handleCloseFolder();
-                                            }
-                                        }}
-                                        activeOpacity={0.7}
-                                    >
-                                        <Layers size={13} color={(!isFolderViewActive && activeFolderId === 'all') ? accent.primary : (colors.textSecondary as any)} />
-                                        <Text
-                                            style={[
-                                                styles.folderChipText,
-                                                {
-                                                    color: (!isFolderViewActive && activeFolderId === 'all') ? colors.textPrimary : colors.textSecondary,
-                                                    fontWeight: (!isFolderViewActive && activeFolderId === 'all') ? '700' : '600',
-                                                },
-                                            ]}
-                                        >
-                                            {language === 'es' ? 'Todas' : 'All'}
-                                        </Text>
-                                        <Text
-                                            style={[
-                                                styles.folderChipBadge,
-                                                {
-                                                    backgroundColor: (!isFolderViewActive && activeFolderId === 'all')
-                                                        ? (isDark ? `${accent.primary}35` : `${accent.primary}22`)
-                                                        : (isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.06)'),
-                                                    color: (!isFolderViewActive && activeFolderId === 'all') ? accent.primary : colors.textMuted,
-                                                },
-                                            ]}
-                                        >
-                                            {notes.length}
-                                        </Text>
-                                    </TouchableOpacity>
-                                </View>
-
-                                {/* 2. FIJADAS */}
-                                {pinnedCount > 0 && (
-                                    <View
-                                        ref={(el) => { pillRefs.current['pinned'] = el; }}
-                                        collapsable={false}
-                                    >
-                                        <TouchableOpacity
-                                            style={[
-                                                styles.folderChip,
-                                                {
-                                                    backgroundColor: (isFolderViewActive && currentTargetFolderId === 'pinned')
-                                                        ? (isDark ? 'rgba(251, 191, 36, 0.20)' : 'rgba(245, 158, 11, 0.15)')
-                                                        : (isDark ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.04)'),
-                                                    borderColor: (isFolderViewActive && currentTargetFolderId === 'pinned')
-                                                        ? (isDark ? '#FBBF2480' : '#F59E0B60')
-                                                        : colors.borderSubtle,
-                                                },
-                                            ]}
-                                            onPress={() => handlePillPress('pinned')}
-                                            activeOpacity={0.7}
-                                        >
-                                            <Pin size={12} color={(isDark ? '#FBBF24' : '#F59E0B') as any} />
-                                            <Text
-                                                style={[
-                                                    styles.folderChipText,
-                                                    {
-                                                        color: (isFolderViewActive && currentTargetFolderId === 'pinned') ? colors.textPrimary : colors.textSecondary,
-                                                        fontWeight: (isFolderViewActive && currentTargetFolderId === 'pinned') ? '700' : '600',
-                                                    },
-                                                ]}
-                                            >
-                                                {language === 'es' ? 'Fijadas' : 'Pinned'}
-                                            </Text>
-                                            <Text
-                                                style={[
-                                                    styles.folderChipBadge,
-                                                    {
-                                                        backgroundColor: (isFolderViewActive && currentTargetFolderId === 'pinned')
-                                                            ? (isDark ? 'rgba(251, 191, 36, 0.32)' : 'rgba(245, 158, 11, 0.22)')
-                                                            : (isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.06)'),
-                                                        color: isDark ? '#FBBF24' : '#F59E0B',
-                                                    },
-                                                ]}
-                                            >
-                                                {pinnedCount}
-                                            </Text>
-                                        </TouchableOpacity>
-                                    </View>
-                                )}
-
-                                {/* 3. SIN CARPETA */}
-                                {unassignedCount > 0 && (
-                                    <View
-                                        ref={(el) => { pillRefs.current['unassigned'] = el; }}
-                                        collapsable={false}
-                                    >
-                                        <TouchableOpacity
-                                            style={[
-                                                styles.folderChip,
-                                                {
-                                                    backgroundColor: (isFolderViewActive && currentTargetFolderId === 'unassigned')
-                                                        ? (isDark ? 'rgba(255, 255, 255, 0.12)' : 'rgba(0, 0, 0, 0.08)')
-                                                        : (isDark ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.04)'),
-                                                    borderColor: (isFolderViewActive && currentTargetFolderId === 'unassigned')
-                                                        ? (isDark ? 'rgba(255, 255, 255, 0.3)' : 'rgba(0, 0, 0, 0.25)')
-                                                        : colors.borderSubtle,
-                                                },
-                                            ]}
-                                            onPress={() => handlePillPress('unassigned')}
-                                            activeOpacity={0.7}
-                                        >
-                                            <Inbox size={12} color={colors.textSecondary as any} />
-                                            <Text
-                                                style={[
-                                                    styles.folderChipText,
-                                                    {
-                                                        color: (isFolderViewActive && currentTargetFolderId === 'unassigned') ? colors.textPrimary : colors.textSecondary,
-                                                        fontWeight: (isFolderViewActive && currentTargetFolderId === 'unassigned') ? '700' : '600',
-                                                    },
-                                                ]}
-                                            >
-                                                {language === 'es' ? 'Sin carpeta' : 'Unassigned'}
-                                            </Text>
-                                            <Text
-                                                style={[
-                                                    styles.folderChipBadge,
-                                                    {
-                                                        backgroundColor: isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.06)',
-                                                        color: colors.textMuted,
-                                                    },
-                                                ]}
-                                            >
-                                                {unassignedCount}
-                                            </Text>
-                                        </TouchableOpacity>
-                                    </View>
-                                )}
-
-                                {/* 4. CARPETAS RAÍZ */}
-                                {stripFolders.map(f => {
-                                    const folderColor = normalizeHex(f.color, '#8B5CF6');
-                                    const count = noteCountsMap[f.id] || 0;
-                                    const isFolderActive = isFolderViewActive && currentTargetFolderId === f.id;
+                                {/* FILTROS INTELIGENTES DE CONTENIDO */}
+                                {[
+                                    {
+                                        id: 'all' as NoteFilterType,
+                                        label: language === 'es' ? 'Todas' : 'All',
+                                        icon: Layers,
+                                        count: notes.length,
+                                        color: accent.primary,
+                                    },
+                                    {
+                                        id: 'pinned' as NoteFilterType,
+                                        label: language === 'es' ? 'Fijadas' : 'Pinned',
+                                        icon: Pin,
+                                        count: pinnedCount,
+                                        color: isDark ? '#FBBF24' : '#F59E0B',
+                                    },
+                                    {
+                                        id: 'shared' as NoteFilterType,
+                                        label: language === 'es' ? 'Compartidas' : 'Shared',
+                                        icon: Users,
+                                        count: sharedCount,
+                                        color: isDark ? '#60A5FA' : '#3B82F6',
+                                    },
+                                    {
+                                        id: 'unassigned' as NoteFilterType,
+                                        label: language === 'es' ? 'Sin carpeta' : 'Unassigned',
+                                        icon: Inbox,
+                                        count: unassignedCount,
+                                        color: isDark ? '#94A3B8' : '#64748B',
+                                    },
+                                    {
+                                        id: 'tasks' as NoteFilterType,
+                                        label: language === 'es' ? 'Con tareas' : 'Tasks',
+                                        icon: CheckSquare,
+                                        count: tasksCount,
+                                        color: isDark ? '#34D399' : '#10B981',
+                                    },
+                                    {
+                                        id: 'attachments' as NoteFilterType,
+                                        label: language === 'es' ? 'Con adjuntos' : 'Attachments',
+                                        icon: Paperclip,
+                                        count: attachmentsCount,
+                                        color: isDark ? '#A78BFA' : '#8B5CF6',
+                                    },
+                                ].map(filter => {
+                                    const isActive = activeFilter === filter.id;
+                                    const IconComp = filter.icon;
+                                    const filterColor = filter.color;
 
                                     return (
-                                        <View
-                                            key={f.id}
-                                            ref={(el) => { pillRefs.current[f.id] = el; }}
-                                            collapsable={false}
-                                        >
+                                        <View key={filter.id} collapsable={false}>
                                             <TouchableOpacity
                                                 style={[
                                                     styles.folderChip,
                                                     {
-                                                        backgroundColor: isFolderActive
-                                                            ? `${folderColor}${isDark ? '24' : '16'}`
+                                                        backgroundColor: isActive
+                                                            ? (isDark ? `${filterColor}26` : `${filterColor}18`)
                                                             : (isDark ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.04)'),
-                                                        borderColor: isFolderActive
-                                                            ? `${folderColor}${isDark ? '60' : '45'}`
-                                                            : (isDark ? `${folderColor}35` : `${folderColor}25`),
+                                                        borderColor: isActive
+                                                            ? (isDark ? `${filterColor}70` : `${filterColor}50`)
+                                                            : colors.borderSubtle,
                                                     },
                                                 ]}
-                                                onPress={() => handlePillPress(f.id)}
+                                                onPress={() => {
+                                                    if (activeFilter !== filter.id) {
+                                                        LayoutAnimation.configureNext(smoothLayoutAnimation);
+                                                        setActiveFilter(filter.id);
+                                                    }
+                                                }}
                                                 activeOpacity={0.7}
                                             >
-                                                <FolderIconRenderer
-                                                    name={f.icon || 'folder'}
-                                                    size={12}
-                                                    color={folderColor}
-                                                    strokeWidth={2}
+                                                <IconComp
+                                                    size={13}
+                                                    color={(isActive ? filterColor : (colors.textSecondary as any))}
                                                 />
                                                 <Text
                                                     style={[
                                                         styles.folderChipText,
                                                         {
-                                                            color: isFolderActive ? colors.textPrimary : colors.textSecondary,
-                                                            fontWeight: isFolderActive ? '700' : '600',
+                                                            color: isActive ? colors.textPrimary : colors.textSecondary,
+                                                            fontWeight: isActive ? '700' : '600',
                                                         },
                                                     ]}
-                                                    numberOfLines={1}
                                                 >
-                                                    {f.name}
+                                                    {filter.label}
                                                 </Text>
-                                                {count > 0 && (
-                                                    <Text
-                                                        style={[
-                                                            styles.folderChipBadge,
-                                                            {
-                                                                backgroundColor: isFolderActive
-                                                                    ? `${folderColor}${isDark ? '35' : '22'}`
-                                                                    : (isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.06)'),
-                                                                color: folderColor,
-                                                            },
-                                                        ]}
-                                                    >
-                                                        {count}
-                                                    </Text>
-                                                )}
+                                                <Text
+                                                    style={[
+                                                        styles.folderChipBadge,
+                                                        {
+                                                            backgroundColor: isActive
+                                                                ? (isDark ? `${filterColor}35` : `${filterColor}22`)
+                                                                : colors.borderSubtle,
+                                                            color: isActive ? filterColor : colors.textMuted,
+                                                        },
+                                                    ]}
+                                                >
+                                                    {filter.count}
+                                                </Text>
                                             </TouchableOpacity>
                                         </View>
                                     );
                                 })}
 
-                                {/* 5. BOTÓN NUEVA CARPETA */}
+                                {/* BOTÓN NUEVA CARPETA */}
                                 <TouchableOpacity
                                     style={[
                                         styles.newFolderChip,
@@ -2243,8 +2314,7 @@ function NotesScreenComponent({ hideBars = false }: { hideBars?: boolean } = {})
                                         },
                                     ]}
                                     onPress={() => {
-                                        setEditingFolder(null);
-                                        setIsFolderModalVisible(true);
+                                        useFoldersStore.getState().openFolderMorph(null, null);
                                     }}
                                     activeOpacity={0.7}
                                 >
@@ -2279,26 +2349,69 @@ function NotesScreenComponent({ hideBars = false }: { hideBars?: boolean } = {})
                     ]}
                     pointerEvents={isFolderSelectionMode ? 'none' : 'auto'}
                 >
-                    {baseSections.length === 0 ? (
-                        <View style={styles.emptyContainer}>
-                            <View
-                                style={[
-                                    styles.emptyIconWrapper,
-                                    {
-                                        backgroundColor: isDark ? '#1F222A' : '#F1F5F9',
-                                        borderColor: colors.borderSubtle,
-                                    },
-                                ]}
-                            >
-                                <FileText size={28} color={colors.textMuted} />
+                    {baseSections.length === 0 ? (() => {
+                        const getEmptyFilterState = () => {
+                            if (searchQuery) {
+                                return {
+                                    text: language === 'es' ? 'No se encontraron notas' : 'No notes found',
+                                    icon: Search,
+                                };
+                            }
+                            switch (activeFilter) {
+                                case 'pinned':
+                                    return {
+                                        text: language === 'es' ? 'No tienes notas fijadas' : 'No pinned notes',
+                                        icon: Pin,
+                                    };
+                                case 'shared':
+                                    return {
+                                        text: language === 'es' ? 'No tienes notas compartidas' : 'No shared notes',
+                                        icon: Users,
+                                    };
+                                case 'unassigned':
+                                    return {
+                                        text: language === 'es' ? 'No tienes notas sin carpeta' : 'No unassigned notes',
+                                        icon: Inbox,
+                                    };
+                                case 'tasks':
+                                    return {
+                                        text: language === 'es' ? 'No tienes notas con listas o tareas' : 'No notes with tasks',
+                                        icon: CheckSquare,
+                                    };
+                                case 'attachments':
+                                    return {
+                                        text: language === 'es' ? 'No tienes notas con archivos adjuntos' : 'No notes with attachments',
+                                        icon: Paperclip,
+                                    };
+                                default:
+                                    return {
+                                        text: language === 'es' ? 'No tienes notas aún' : 'You have no notes yet',
+                                        icon: FileText,
+                                    };
+                            }
+                        };
+                        const emptyState = getEmptyFilterState();
+                        const EmptyIcon = emptyState.icon;
+
+                        return (
+                            <View style={styles.emptyContainer}>
+                                <View
+                                    style={[
+                                        styles.emptyIconWrapper,
+                                        {
+                                            backgroundColor: isDark ? '#1F222A' : '#F1F5F9',
+                                            borderColor: colors.borderSubtle,
+                                        },
+                                    ]}
+                                >
+                                    <EmptyIcon size={28} color={colors.textMuted as any} />
+                                </View>
+                                <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
+                                    {emptyState.text}
+                                </Text>
                             </View>
-                            <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
-                                {searchQuery
-                                    ? (language === 'es' ? 'No se encontraron notas' : 'No notes found')
-                                    : (language === 'es' ? 'No tienes notas aún' : 'You have no notes yet')}
-                            </Text>
-                        </View>
-                    ) : (
+                        );
+                    })() : (
                         baseSections.map(section => renderBaseSectionContainer({ item: section }))
                     )}
                 </Animated.View>
@@ -2429,7 +2542,7 @@ function NotesScreenComponent({ hideBars = false }: { hideBars?: boolean } = {})
                                 </VeyraSurface>
                             ) : (
                                 <View style={styles.mainTopRow}>
-                                    {/* Lado Izquierdo: Botón Volver + Identidad de la Carpeta */}
+                                    {/* Lado Izquierdo: Botón Volver + Icono + Columna de Título y Breadcrumb unificado */}
                                     <View style={styles.folderHeaderLeftCol}>
                                         <Animated.View style={morphBackBtnStyle}>
                                             <TouchableOpacity
@@ -2448,30 +2561,30 @@ function NotesScreenComponent({ hideBars = false }: { hideBars?: boolean } = {})
                                             </TouchableOpacity>
                                         </Animated.View>
 
-                                        <View style={styles.folderHeaderTitleWrap}>
-                                            <View
-                                                style={[
-                                                    styles.folderCompactIconBox,
-                                                    {
-                                                        backgroundColor: `${activeFolderColor}${isDark ? '25' : '18'}`,
-                                                        borderColor: `${activeFolderColor}40`,
-                                                    },
-                                                ]}
-                                            >
-                                                {activeFolderObj ? (
-                                                    <FolderIconRenderer
-                                                        name={activeFolderObj.icon}
-                                                        size={13}
-                                                        color={activeFolderColor}
-                                                        strokeWidth={2}
-                                                    />
-                                                ) : currentTargetFolderId === 'pinned' ? (
-                                                    <Pin size={13} color={activeFolderColor as any} />
-                                                ) : (
-                                                    <Inbox size={13} color={activeFolderColor as any} />
-                                                )}
-                                            </View>
+                                        <View
+                                            style={[
+                                                styles.folderCompactIconBox,
+                                                {
+                                                    backgroundColor: `${activeFolderColor}${isDark ? '25' : '18'}`,
+                                                    borderColor: `${activeFolderColor}40`,
+                                                },
+                                            ]}
+                                        >
+                                            {activeFolderObj ? (
+                                                <FolderIconRenderer
+                                                    name={activeFolderObj.icon}
+                                                    size={14}
+                                                    color={activeFolderColor}
+                                                    strokeWidth={2}
+                                                />
+                                            ) : currentTargetFolderId === 'pinned' ? (
+                                                <Pin size={14} color={activeFolderColor as any} />
+                                            ) : (
+                                                <Inbox size={14} color={activeFolderColor as any} />
+                                            )}
+                                        </View>
 
+                                        <View style={styles.folderHeaderTitleWrap}>
                                             <Text
                                                 style={[
                                                     styles.folderHeaderTitleText,
@@ -2481,33 +2594,88 @@ function NotesScreenComponent({ hideBars = false }: { hideBars?: boolean } = {})
                                             >
                                                 {activeFolderTitle}
                                             </Text>
+
+                                            {/* Breadcrumb unificado bajo el título solo si es subcarpeta (tiene ancestros) */}
+                                            {folderStack.length > 1 && (
+                                                <ScrollView
+                                                    horizontal
+                                                    showsHorizontalScrollIndicator={false}
+                                                    contentContainerStyle={styles.compactBreadcrumbContent}
+                                                >
+                                                    <TouchableOpacity
+                                                        onPress={() => handleBreadcrumbNavigate(-1)}
+                                                        hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
+                                                    >
+                                                        <Text style={[styles.compactBreadcrumbText, { color: colors.textMuted }]}>
+                                                            {language === 'es' ? 'Carpetas' : 'Folders'}
+                                                        </Text>
+                                                    </TouchableOpacity>
+                                                    {folderStack.slice(0, -1).map((crumb, idx) => (
+                                                        <React.Fragment key={crumb.id}>
+                                                            <ChevronRight size={10} color={colors.textMuted as any} strokeWidth={2.5} style={{ marginHorizontal: 2 }} />
+                                                            <TouchableOpacity
+                                                                onPress={() => handleBreadcrumbNavigate(idx)}
+                                                                hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
+                                                            >
+                                                                <Text style={[styles.compactBreadcrumbText, { color: colors.textSecondary }]}>
+                                                                    {crumb.name}
+                                                                </Text>
+                                                            </TouchableOpacity>
+                                                        </React.Fragment>
+                                                    ))}
+                                                </ScrollView>
+                                            )}
                                         </View>
                                     </View>
 
-                                    {/* Lado Derecho: Colaboradores + Acciones de Carpeta */}
-                                    {activeFolderObj ? (
-                                        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                                    {/* Lado Derecho: Colaboradores + Botón Buscar + Botón "+" Destacado + Menú */}
+                                    <View style={styles.folderHeaderActionsCol}>
+                                        {activeFolderObj && (
                                             <CollaboratorsAvatars
                                                 targetType="folder"
                                                 targetId={activeFolderObj.id}
                                                 onPress={() => setIsFolderShareModalVisible(true)}
                                             />
-                                        </View>
-                                    ) : null}
+                                        )}
+
+                                        <TouchableOpacity
+                                            style={[
+                                                styles.folderActionIconBtn,
+                                                {
+                                                    backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)',
+                                                    borderColor: colors.borderSubtle,
+                                                },
+                                            ]}
+                                            onPress={() => {
+                                                LayoutAnimation.configureNext(smoothLayoutAnimation);
+                                                setIsSearching(true);
+                                            }}
+                                            activeOpacity={0.7}
+                                            hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+                                        >
+                                            <Search size={15} color={colors.textSecondary as any} />
+                                        </TouchableOpacity>
+
+                                        {activeFolderObj && (
+                                            <TouchableOpacity
+                                                style={[
+                                                    styles.folderActionIconBtn,
+                                                    {
+                                                        backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)',
+                                                        borderColor: colors.borderSubtle,
+                                                    },
+                                                ]}
+                                                onPress={() => setIsFolderMenuVisible(true)}
+                                                activeOpacity={0.7}
+                                                hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+                                            >
+                                                <MoreVertical size={15} color={colors.textSecondary as any} />
+                                            </TouchableOpacity>
+                                        )}
+                                    </View>
                                 </View>
                             )}
                         </Animated.View>
-
-                        {/* Breadcrumbs de navegación jerárquica */}
-                        {folderStack.length > 0 && (
-                            <View style={{ paddingHorizontal: 16, paddingBottom: 4 }}>
-                                <FolderBreadcrumb
-                                    stack={folderStack}
-                                    onNavigate={handleBreadcrumbNavigate}
-                                    accentColor={activeFolderColor}
-                                />
-                            </View>
-                        )}
 
                         {/* Contenido de Notas de la Carpeta (Fade + Slide progresivo en la 2da mitad) */}
                         <Animated.View style={[{ flex: 1 }, morphNotesContentStyle]}>
@@ -2538,38 +2706,76 @@ function NotesScreenComponent({ hideBars = false }: { hideBars?: boolean } = {})
                                                 }
                                             }}
                                             onEditFolder={(folder) => {
-                                                setEditingFolder(folder);
-                                                setModalParentFolder(activeFolderObj);
-                                                setIsFolderModalVisible(true);
+                                                useFoldersStore.getState().openFolderMorph(activeFolderObj, folder);
                                             }}
                                             onCreateFolder={() => {
-                                                setEditingFolder(null);
-                                                setModalParentFolder(activeFolderObj);
-                                                setIsFolderModalVisible(true);
+                                                useFoldersStore.getState().openFolderMorph(activeFolderObj, null);
                                             }}
-                                            onTogglePin={() => {}}
+                                            onTogglePin={() => { }}
                                         />
                                     </View>
                                 )}
 
                                 {folderSections.length === 0 ? (
-                                    <View style={styles.emptyContainer}>
+                                    <View style={styles.folderEmptyContainer}>
                                         <View
                                             style={[
-                                                styles.emptyIconWrapper,
+                                                styles.folderEmptyIconBox,
                                                 {
-                                                    backgroundColor: isDark ? '#1F222A' : '#F1F5F9',
-                                                    borderColor: colors.borderSubtle,
+                                                    backgroundColor: isDark ? `${activeFolderColor}22` : `${activeFolderColor}14`,
+                                                    borderColor: isDark ? `${activeFolderColor}40` : `${activeFolderColor}28`,
                                                 },
                                             ]}
                                         >
-                                            <FileText size={28} color={colors.textMuted} />
+                                            {searchQuery ? (
+                                                <Search size={28} color={colors.textMuted as any} />
+                                            ) : activeFolderObj ? (
+                                                <FolderIconRenderer
+                                                    name={activeFolderObj.icon}
+                                                    size={28}
+                                                    color={activeFolderColor}
+                                                    strokeWidth={2}
+                                                />
+                                            ) : (
+                                                <FileText size={28} color={activeFolderColor as any} />
+                                            )}
                                         </View>
-                                        <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
+                                        <Text style={[styles.folderEmptyTitle, { color: colors.textPrimary }]}>
                                             {searchQuery
                                                 ? (language === 'es' ? 'No se encontraron notas' : 'No notes found')
-                                                : (language === 'es' ? 'No hay notas en esta carpeta' : 'No notes in this folder')}
+                                                : (language === 'es' ? 'Aún no hay notas en esta carpeta' : 'No notes in this folder yet')}
                                         </Text>
+                                        {!searchQuery && (
+                                            <>
+                                                <Text style={[styles.folderEmptySubtitle, { color: colors.textSecondary }]}>
+                                                    {language === 'es'
+                                                        ? 'Crea tu primera nota o añade subcarpetas desde el menú de opciones'
+                                                        : 'Create your first note or add subfolders from the options menu'}
+                                                </Text>
+                                                <TouchableOpacity
+                                                    style={[
+                                                        styles.folderEmptyCtaBtn,
+                                                        {
+                                                            backgroundColor: isDark ? `${activeFolderColor}26` : `${activeFolderColor}18`,
+                                                            borderColor: isDark ? `${activeFolderColor}60` : `${activeFolderColor}40`,
+                                                        },
+                                                    ]}
+                                                    onPress={() => {
+                                                        const targetParam = (activeFolderObj && activeFolderObj.id) ? activeFolderObj.id : undefined;
+                                                        router.push({
+                                                            pathname: '/notes/create',
+                                                            params: targetParam ? { folderId: targetParam } : {},
+                                                        } as any);
+                                                    }}
+                                                    activeOpacity={0.7}
+                                                >
+                                                    <Plus size={15} color={activeFolderColor as any} strokeWidth={2.5} />
+                                                    <Text style={[styles.folderEmptyCtaText, { color: activeFolderColor }]}>
+                                                        {language === 'es' ? 'Crear nota' : 'Create note'}
+                                                    </Text>
+                                                </TouchableOpacity>
+                                            </>
+                                        )}
                                     </View>
                                 ) : (
                                     folderSections.map(section => renderFolderSectionContainer({ item: section }))
@@ -2603,22 +2809,37 @@ function NotesScreenComponent({ hideBars = false }: { hideBars?: boolean } = {})
                         await createFolder(name, icon, color, isPinned, parentId);
                     }
                 }}
-                onDelete={async (folderId) => {
+                onDelete={async (folderId, deleteNotes = false) => {
                     LayoutAnimation.configureNext(smoothLayoutAnimation);
                     if (openedFolderId === folderId) {
                         finishCloseFolder();
                     }
-                    await deleteFolder(folderId, false);
+                    await deleteFolder(folderId, deleteNotes);
                 }}
             />
 
-            {/* Modal de Mover Notas a Carpeta */}
+            {/* Modal de Mover Notas / Carpetas */}
             <MoveToFolderModal
                 visible={isMoveModalVisible}
-                onClose={() => setIsMoveModalVisible(false)}
+                onClose={() => {
+                    setIsMoveModalVisible(false);
+                    setMoveModalType('note');
+                    setFolderToMoveId(null);
+                }}
                 folders={folders}
+                type={moveModalType}
+                movingFolderId={folderToMoveId}
+                currentFolderId={moveModalType === 'folder'
+                    ? (folders.find(f => f.id === folderToMoveId)?.parent_id || null)
+                    : (selectedNotes.length === 1 ? notes.find(n => n.id === selectedNotes[0])?.folder_id : null)}
                 noteCount={selectedNotes.length}
-                onSelectFolder={handleMoveSelected}
+                onSelectFolder={async (targetFolderId) => {
+                    if (moveModalType === 'folder') {
+                        await handleMoveFolder(targetFolderId);
+                    } else {
+                        await handleMoveSelected(targetFolderId);
+                    }
+                }}
                 onCreateNewFolder={(parentId) => {
                     setEditingFolder(null);
                     setModalParentFolder(parentId ? folders.find(f => f.id === parentId) || null : null);
@@ -2654,39 +2875,43 @@ function NotesScreenComponent({ hideBars = false }: { hideBars?: boolean } = {})
                                 },
                             ]}
                         >
-                            {/* 1. Historial de notas */}
-                            <TouchableOpacity
-                                style={styles.menuModalItem}
-                                onPress={() => {
-                                    setIsFolderMenuVisible(false);
-                                    router.push('/notes-history');
-                                }}
-                                activeOpacity={0.7}
-                            >
-                                <History size={16} color={colors.textSecondary as any} strokeWidth={2} />
-                                <Text style={[styles.menuModalItemText, { color: colors.textPrimary }]}>
-                                    {language === 'es' ? 'Historial de notas' : 'Notes history'}
-                                </Text>
-                            </TouchableOpacity>
-
-                            {/* 2. Compartir notas */}
-                            <TouchableOpacity
-                                style={styles.menuModalItem}
-                                onPress={() => {
-                                    setIsFolderMenuVisible(false);
-                                    handleShareNotesMenu();
-                                }}
-                                activeOpacity={0.7}
-                            >
-                                <Share2 size={16} color={colors.textSecondary as any} strokeWidth={2} />
-                                <Text style={[styles.menuModalItemText, { color: colors.textPrimary }]}>
-                                    {language === 'es' ? 'Compartir notas' : 'Share notes'}
-                                </Text>
-                            </TouchableOpacity>
-
                             {/* Opciones de Carpeta (si estamos dentro de una carpeta activa) */}
                             {activeFolderObj && (
                                 <>
+                                    {/* 1. Nueva nota */}
+                                    <TouchableOpacity
+                                        style={styles.menuModalItem}
+                                        onPress={() => {
+                                            setIsFolderMenuVisible(false);
+                                            const targetParam = activeFolderObj.id;
+                                            router.push({
+                                                pathname: '/notes/create',
+                                                params: targetParam ? { folderId: targetParam } : {},
+                                            } as any);
+                                        }}
+                                        activeOpacity={0.7}
+                                    >
+                                        <FileText size={16} color={activeFolderColor as any} strokeWidth={2} />
+                                        <Text style={[styles.menuModalItemText, { color: colors.textPrimary }]}>
+                                            {language === 'es' ? 'Nueva nota' : 'New note'}
+                                        </Text>
+                                    </TouchableOpacity>
+
+                                    {/* 2. Nueva subcarpeta (Abre morph en el dock inferior) */}
+                                    <TouchableOpacity
+                                        style={styles.menuModalItem}
+                                        onPress={() => {
+                                            setIsFolderMenuVisible(false);
+                                            useFoldersStore.getState().openFolderMorph(activeFolderObj, null);
+                                        }}
+                                        activeOpacity={0.7}
+                                    >
+                                        <FolderPlus size={16} color={activeFolderColor as any} strokeWidth={2} />
+                                        <Text style={[styles.menuModalItemText, { color: colors.textPrimary }]}>
+                                            {language === 'es' ? 'Nueva subcarpeta' : 'New subfolder'}
+                                        </Text>
+                                    </TouchableOpacity>
+
                                     <View style={[styles.menuModalDivider, { backgroundColor: colors.borderSubtle }]} />
 
                                     {/* Compartir carpeta (Colaboración) */}
@@ -2704,24 +2929,7 @@ function NotesScreenComponent({ hideBars = false }: { hideBars?: boolean } = {})
                                         </Text>
                                     </TouchableOpacity>
 
-                                    {/* 3. Nueva subcarpeta */}
-                                    <TouchableOpacity
-                                        style={styles.menuModalItem}
-                                        onPress={() => {
-                                            setIsFolderMenuVisible(false);
-                                            setEditingFolder(null);
-                                            setModalParentFolder(activeFolderObj);
-                                            setIsFolderModalVisible(true);
-                                        }}
-                                        activeOpacity={0.7}
-                                    >
-                                        <FolderPlus size={16} color={colors.textSecondary as any} strokeWidth={2} />
-                                        <Text style={[styles.menuModalItemText, { color: colors.textPrimary }]}>
-                                            {language === 'es' ? 'Nueva subcarpeta' : 'New subfolder'}
-                                        </Text>
-                                    </TouchableOpacity>
-
-                                    {/* 4. Fijar / Desfijar (Solo para carpetas raíz) */}
+                                    {/* Fijar / Desfijar (Solo para carpetas raíz) */}
                                     {!activeFolderObj.parent_id && (
                                         <TouchableOpacity
                                             style={styles.menuModalItem}
@@ -2738,19 +2946,35 @@ function NotesScreenComponent({ hideBars = false }: { hideBars?: boolean } = {})
                                             />
                                             <Text style={[styles.menuModalItemText, { color: colors.textPrimary }]}>
                                                 {isFolderPinned
-                                                    ? (language === 'es' ? 'Desfijar de acceso rápido' : 'Unpin from quick access')
+                                                    ? (language === 'es' ? 'Desfijar de acceso rápido' : 'Fijar en acceso rápido')
                                                     : (language === 'es' ? 'Fijar en acceso rápido' : 'Pin to quick access')}
                                             </Text>
                                         </TouchableOpacity>
                                     )}
 
-                                    {/* 5. Editar carpeta */}
+                                    {/* Mover carpeta */}
                                     <TouchableOpacity
                                         style={styles.menuModalItem}
                                         onPress={() => {
                                             setIsFolderMenuVisible(false);
-                                            setEditingFolder(activeFolderObj);
-                                            setIsFolderModalVisible(true);
+                                            setMoveModalType('folder');
+                                            setFolderToMoveId(activeFolderObj.id);
+                                            setIsMoveModalVisible(true);
+                                        }}
+                                        activeOpacity={0.7}
+                                    >
+                                        <FolderInput size={16} color={colors.textSecondary as any} strokeWidth={2} />
+                                        <Text style={[styles.menuModalItemText, { color: colors.textPrimary }]}>
+                                            {language === 'es' ? 'Mover carpeta...' : 'Move folder...'}
+                                        </Text>
+                                    </TouchableOpacity>
+
+                                    {/* Editar carpeta */}
+                                    <TouchableOpacity
+                                        style={styles.menuModalItem}
+                                        onPress={() => {
+                                            setIsFolderMenuVisible(false);
+                                            useFoldersStore.getState().openFolderMorph(null, activeFolderObj);
                                         }}
                                         activeOpacity={0.7}
                                     >
@@ -2761,8 +2985,43 @@ function NotesScreenComponent({ hideBars = false }: { hideBars?: boolean } = {})
                                     </TouchableOpacity>
 
                                     <View style={[styles.menuModalDivider, { backgroundColor: colors.borderSubtle }]} />
+                                </>
+                            )}
 
-                                    {/* 5. Eliminar carpeta */}
+                            {/* Historial de notas */}
+                            <TouchableOpacity
+                                style={styles.menuModalItem}
+                                onPress={() => {
+                                    setIsFolderMenuVisible(false);
+                                    router.push('/notes-history');
+                                }}
+                                activeOpacity={0.7}
+                            >
+                                <History size={16} color={colors.textSecondary as any} strokeWidth={2} />
+                                <Text style={[styles.menuModalItemText, { color: colors.textPrimary }]}>
+                                    {language === 'es' ? 'Historial de notas' : 'Notes history'}
+                                </Text>
+                            </TouchableOpacity>
+
+                            {/* Compartir notas */}
+                            <TouchableOpacity
+                                style={styles.menuModalItem}
+                                onPress={() => {
+                                    setIsFolderMenuVisible(false);
+                                    handleShareNotesMenu();
+                                }}
+                                activeOpacity={0.7}
+                            >
+                                <Share2 size={16} color={colors.textSecondary as any} strokeWidth={2} />
+                                <Text style={[styles.menuModalItemText, { color: colors.textPrimary }]}>
+                                    {language === 'es' ? 'Compartir notas' : 'Share notes'}
+                                </Text>
+                            </TouchableOpacity>
+
+                            {/* Eliminar carpeta */}
+                            {activeFolderObj && (
+                                <>
+                                    <View style={[styles.menuModalDivider, { backgroundColor: colors.borderSubtle }]} />
                                     <TouchableOpacity
                                         style={styles.menuModalItem}
                                         onPress={() => {
@@ -3009,6 +3268,17 @@ const styles = StyleSheet.create({
         fontWeight: '700',
         letterSpacing: 0.1,
     },
+    noteTitleContainer: {
+        flexDirection: 'row',
+        alignItems: 'center',
+    },
+    unreadDot: {
+        width: 7,
+        height: 7,
+        borderRadius: 3.5,
+        backgroundColor: '#3B82F6',
+        marginLeft: 6,
+    },
     noteTitle: {
         fontWeight: '700',
         letterSpacing: -0.2,
@@ -3124,24 +3394,91 @@ const styles = StyleSheet.create({
     },
     folderHeaderTitleWrap: {
         flex: 1,
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 7,
+        justifyContent: 'center',
         minWidth: 0,
     },
     folderCompactIconBox: {
-        width: 26,
-        height: 26,
-        borderRadius: 8,
+        width: 28,
+        height: 28,
+        borderRadius: 9,
         borderWidth: 1,
         alignItems: 'center',
         justifyContent: 'center',
     },
     folderHeaderTitleText: {
+        fontSize: 18,
+        fontWeight: '700',
+        letterSpacing: -0.3,
+        flexShrink: 1,
+    },
+    compactBreadcrumbContent: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingTop: 1,
+        paddingRight: 6,
+    },
+    compactBreadcrumbText: {
+        fontSize: 12,
+        fontWeight: '500',
+    },
+    folderHeaderActionsCol: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+        paddingLeft: 4,
+    },
+    folderActionIconBtn: {
+        width: 34,
+        height: 34,
+        borderRadius: 11,
+        borderWidth: 1,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+
+
+    // Empty state folder view
+    folderEmptyContainer: {
+        alignItems: 'center',
+        justifyContent: 'center',
+        paddingVertical: 64,
+        paddingHorizontal: 24,
+        gap: 8,
+    },
+    folderEmptyIconBox: {
+        width: 68,
+        height: 68,
+        borderRadius: 34,
+        alignItems: 'center',
+        justifyContent: 'center',
+        borderWidth: 1.5,
+        marginBottom: 8,
+    },
+    folderEmptyTitle: {
         fontSize: 16,
         fontWeight: '700',
-        letterSpacing: -0.2,
-        flexShrink: 1,
+        textAlign: 'center',
+    },
+    folderEmptySubtitle: {
+        fontSize: 13,
+        fontWeight: '500',
+        textAlign: 'center',
+        lineHeight: 18,
+        maxWidth: 280,
+    },
+    folderEmptyCtaBtn: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+        paddingVertical: 10,
+        paddingHorizontal: 16,
+        borderRadius: 14,
+        borderWidth: 1,
+        marginTop: 12,
+    },
+    folderEmptyCtaText: {
+        fontSize: 13,
+        fontWeight: '700',
     },
     searchExpandedBar: {
         width: '100%',
@@ -3287,5 +3624,70 @@ const styles = StyleSheet.create({
     },
     baseNotesSectionWrapper: {
         flex: 1,
+    },
+    noteItemFolderView: {
+        paddingVertical: 14,
+        paddingHorizontal: 14,
+    },
+    folderNoteDot: {
+        width: 6,
+        height: 6,
+        borderRadius: 3,
+        marginRight: 2,
+        opacity: 0.9,
+    },
+    folderNoteDivider: {
+        height: 0.5,
+        marginHorizontal: 14,
+    },
+    folderItemPinnedBadgeSubtle: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 3,
+        paddingHorizontal: 4,
+        paddingVertical: 1,
+    },
+    folderItemSharedBadgeSubtle: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 3,
+        paddingHorizontal: 4,
+        paddingVertical: 1,
+    },
+    folderSectionNotesList: {
+        borderRadius: 14,
+        overflow: 'hidden',
+    },
+    folderSectionHeaderRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 10,
+        marginBottom: 10,
+        paddingHorizontal: 4,
+    },
+    folderSectionTitleGroup: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+    },
+    folderSectionTitleText: {
+        fontSize: 11,
+        fontWeight: '700',
+        letterSpacing: 0.8,
+        textTransform: 'uppercase',
+    },
+    folderSectionPillCount: {
+        paddingHorizontal: 6,
+        paddingVertical: 1,
+        borderRadius: 10,
+    },
+    folderSectionCountText: {
+        fontSize: 10.5,
+        fontWeight: '600',
+    },
+    folderSectionLine: {
+        flex: 1,
+        height: 1,
+        borderRadius: 0.5,
     },
 });

@@ -75,8 +75,12 @@ import * as IntentLauncher from 'expo-intent-launcher';
 import { useStore } from '../src/store/useStore';
 import { useEventsStore } from '../src/store/useEventsStore';
 import { useSelectionStore } from '../src/store/useSelectionStore';
-import { Reminder, CalendarEvent } from '../src/types/db';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Reminder, CalendarEvent, Tag } from '../src/types/db';
+import { TagService } from '../src/services/TagService';
+import { looksLikeBirthday } from '../src/utils/birthdayDetector';
 import { isEventOccurringOnDate } from '../src/services/eventService';
+import { expandOccurrences } from '../src/services/recurrence/recurrenceEngine';
 import { extractPlainTextFromPages } from '../src/utils/pageUtils';
 import { useCardTransitionStore, CardRect } from '../src/store/cardTransitionStore';
 import { useVeyraTheme } from '../src/theme/useVeyraTheme';
@@ -148,6 +152,7 @@ function calculateRiskInfo(dueDate: number, now: number, isDark: boolean, textSe
 
 interface AgendaEventRowProps {
     event: CalendarEvent;
+    tags?: Tag[];
     itemTime?: number;
     isLast: boolean;
     isSelected?: boolean;
@@ -168,6 +173,7 @@ interface AgendaEventRowProps {
 
 const AgendaEventRow = React.memo(function AgendaEventRow({
     event,
+    tags,
     itemTime,
     isLast,
     isSelected = false,
@@ -379,8 +385,8 @@ const AgendaEventRow = React.memo(function AgendaEventRow({
                                 backgroundColor: isSelected
                                     ? (isDark ? 'rgba(59, 130, 246, 0.15)' : 'rgba(59, 130, 246, 0.08)')
                                     : isOngoing
-                                    ? (isDark ? 'rgba(59, 130, 246, 0.12)' : 'rgba(59, 130, 246, 0.06)')
-                                    : (isDark ? '#1C1F26' : '#FFFFFF'),
+                                        ? (isDark ? 'rgba(59, 130, 246, 0.12)' : 'rgba(59, 130, 246, 0.06)')
+                                        : (isDark ? (colors.bg === '#000000' ? colors.surfaceCard : '#1C1F26') : '#FFFFFF'),
                                 opacity: isPast ? 0.65 : 1,
                             },
                             rowAnimatedStyle,
@@ -438,11 +444,21 @@ const AgendaEventRow = React.memo(function AgendaEventRow({
 
                                 <View style={styles.agendaRowMetaLine}>
                                     <View style={styles.agendaRowTimeWrap}>
-                                        <CalendarIcon size={11} color={isPast ? colors.textMuted : evColor} />
-                                        <Text style={[styles.agendaRowTimeText, { color: isPast ? colors.textMuted : evColor }]}>
-                                            {startStr} - {endStr}
+                                        {Boolean(event.is_all_day) ? (
+                                            <Text style={{ fontSize: 11.5 }}>
+                                                {Boolean(event.is_birthday_like || looksLikeBirthday(event.title)) ? '🎂' : '📅'}
+                                            </Text>
+                                        ) : (
+                                            <CalendarIcon size={11} color={isPast ? colors.textMuted : evColor} />
+                                        )}
+                                        <Text style={[styles.agendaRowTimeText, { color: isPast ? colors.textMuted : (event.is_birthday_like ? '#EC4899' : evColor) }]}>
+                                            {Boolean(event.is_all_day)
+                                                ? (Boolean(event.is_birthday_like || looksLikeBirthday(event.title))
+                                                    ? (language === 'es' ? 'Cumpleaños' : 'Birthday')
+                                                    : (language === 'es' ? 'Todo el día' : 'All day'))
+                                                : `${startStr} - ${endStr}`}
                                         </Text>
-                                        {isPast && (
+                                        {isPast && !event.is_all_day && (
                                             <Text style={{ fontSize: 10, color: colors.textMuted, marginLeft: 4, fontWeight: '500' }}>
                                                 · {language === 'es' ? 'Finalizado' : 'Ended'}
                                             </Text>
@@ -476,6 +492,45 @@ const AgendaEventRow = React.memo(function AgendaEventRow({
                                             </Text>
                                         </TouchableOpacity>
                                     ) : null}
+
+                                    {tags && tags.length > 0 && (
+                                        <View style={styles.tagChipsRow}>
+                                            {tags.slice(0, 2).map(tag => (
+                                                <View
+                                                    key={tag.id}
+                                                    style={[
+                                                        styles.itemTagChip,
+                                                        {
+                                                            backgroundColor: isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.05)',
+                                                            borderColor: tag.color ? `${tag.color}40` : (isDark ? 'rgba(255, 255, 255, 0.12)' : 'rgba(0, 0, 0, 0.08)'),
+                                                        }
+                                                    ]}
+                                                >
+                                                    <Text
+                                                        style={[
+                                                            styles.itemTagChipText,
+                                                            { color: tag.color || (isDark ? '#93C5FD' : '#2563EB') }
+                                                        ]}
+                                                        numberOfLines={1}
+                                                    >
+                                                        #{tag.name}
+                                                    </Text>
+                                                </View>
+                                            ))}
+                                            {tags.length > 2 && (
+                                                <View
+                                                    style={[
+                                                        styles.itemTagChipMore,
+                                                        { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.05)' }
+                                                    ]}
+                                                >
+                                                    <Text style={[styles.itemTagChipMoreText, { color: colors.textMuted }]}>
+                                                        +{tags.length - 2}
+                                                    </Text>
+                                                </View>
+                                            )}
+                                        </View>
+                                    )}
                                 </View>
                             </View>
 
@@ -497,6 +552,7 @@ const AgendaEventRow = React.memo(function AgendaEventRow({
 
 interface AgendaReminderRowProps {
     item: Reminder;
+    tags?: Tag[];
     isLast: boolean;
     isSelected: boolean;
     isSelectionMode: boolean;
@@ -516,6 +572,7 @@ interface AgendaReminderRowProps {
 
 const AgendaReminderRow = React.memo(function AgendaReminderRow({
     item,
+    tags,
     isLast,
     isSelected,
     isSelectionMode,
@@ -705,8 +762,8 @@ const AgendaReminderRow = React.memo(function AgendaReminderRow({
     const priorityColor = isCritical
         ? (isDark ? '#FB7185' : '#E11D48')
         : isStrict
-        ? '#FB923C'
-        : (isDark ? 'rgba(255, 255, 255, 0.2)' : 'rgba(0, 0, 0, 0.15)');
+            ? '#FB923C'
+            : (isDark ? 'rgba(255, 255, 255, 0.2)' : 'rgba(0, 0, 0, 0.15)');
 
     return (
         <Reanimated.View
@@ -752,7 +809,7 @@ const AgendaReminderRow = React.memo(function AgendaReminderRow({
                             {
                                 backgroundColor: isSelected
                                     ? (isDark ? 'rgba(59, 130, 246, 0.15)' : 'rgba(59, 130, 246, 0.08)')
-                                    : (isDark ? '#1C1F26' : '#FFFFFF'),
+                                    : (isDark ? (colors.bg === '#000000' ? colors.surfaceCard : '#1C1F26') : '#FFFFFF'),
                             },
                             rowAnimatedStyle,
                         ]}
@@ -863,6 +920,45 @@ const AgendaReminderRow = React.memo(function AgendaReminderRow({
                                             <Paperclip size={9.5} color={colors.textMuted} />
                                         </View>
                                     )}
+
+                                    {tags && tags.length > 0 && (
+                                        <View style={styles.tagChipsRow}>
+                                            {tags.slice(0, 2).map(tag => (
+                                                <View
+                                                    key={tag.id}
+                                                    style={[
+                                                        styles.itemTagChip,
+                                                        {
+                                                            backgroundColor: isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.05)',
+                                                            borderColor: tag.color ? `${tag.color}40` : (isDark ? 'rgba(255, 255, 255, 0.12)' : 'rgba(0, 0, 0, 0.08)'),
+                                                        }
+                                                    ]}
+                                                >
+                                                    <Text
+                                                        style={[
+                                                            styles.itemTagChipText,
+                                                            { color: tag.color || (isDark ? '#93C5FD' : '#2563EB') }
+                                                        ]}
+                                                        numberOfLines={1}
+                                                    >
+                                                        #{tag.name}
+                                                    </Text>
+                                                </View>
+                                            ))}
+                                            {tags.length > 2 && (
+                                                <View
+                                                    style={[
+                                                        styles.itemTagChipMore,
+                                                        { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.05)' }
+                                                    ]}
+                                                >
+                                                    <Text style={[styles.itemTagChipMoreText, { color: colors.textMuted }]}>
+                                                        +{tags.length - 2}
+                                                    </Text>
+                                                </View>
+                                            )}
+                                        </View>
+                                    )}
                                 </View>
                             </View>
                         </TouchableOpacity>
@@ -936,6 +1032,9 @@ export default function HomeScreen() {
         toggleSubtask,
         loadStreak,
         triggerSync,
+        allTags,
+        itemTagsMap,
+        loadTags,
     } = useStore();
 
     const {
@@ -949,7 +1048,8 @@ export default function HomeScreen() {
 
     const { colors, typography, radii, spacing, accent, isDark, getControlLevelColor } = useVeyraTheme();
 
-    const [agendaFilter, setAgendaFilter] = useState<'all' | 'reminders' | 'events'>('all');
+    const [agendaFilter, setAgendaFilter] = useState<'all' | 'reminders' | 'events' | 'birthdays'>('all');
+    const [selectedTagSlugs, setSelectedTagSlugs] = useState<string[]>([]);
     const [now, setNow] = useState(Date.now());
     const [galleryImages, setGalleryImages] = useState<{ uri: string }[]>([]);
     const [galleryVisible, setGalleryVisible] = useState(false);
@@ -998,6 +1098,57 @@ export default function HomeScreen() {
     const pillOpacity = selectionAnim.interpolate({ inputRange: [0, 1], outputRange: [0, 1], extrapolate: 'clamp' });
     const pillTranslateY = selectionAnim.interpolate({ inputRange: [0, 1], outputRange: [20, 0], extrapolate: 'clamp' });
     const pillScale = selectionAnim.interpolate({ inputRange: [0, 1], outputRange: [0.96, 1], extrapolate: 'clamp' });
+
+    // ─── Carga y persistencia de filtros y tags ───
+    useEffect(() => {
+        (async () => {
+            try {
+                const savedType = await AsyncStorage.getItem('@veyra_home_type_filter');
+                if (savedType && ['all', 'reminders', 'events', 'birthdays'].includes(savedType)) {
+                    setAgendaFilter(savedType as any);
+                }
+                const savedTags = await AsyncStorage.getItem('@veyra_home_tag_filters');
+                if (savedTags) {
+                    const parsed = JSON.parse(savedTags);
+                    if (Array.isArray(parsed)) setSelectedTagSlugs(parsed);
+                }
+            } catch (err) {
+                console.warn('Error loading home filters from storage:', err);
+            }
+        })();
+    }, []);
+
+    const reloadTags = useCallback(async () => {
+        await loadTags();
+    }, [loadTags]);
+
+    useFocusEffect(
+        useCallback(() => {
+            reloadTags();
+        }, [reloadTags])
+    );
+
+    const handleSelectAgendaFilter = useCallback((filter: 'all' | 'reminders' | 'events' | 'birthdays') => {
+        LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+        setAgendaFilter(filter);
+        AsyncStorage.setItem('@veyra_home_type_filter', filter).catch(() => { });
+    }, []);
+
+    const handleToggleTagFilter = useCallback((slug: string) => {
+        LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+        setSelectedTagSlugs(prev => {
+            const next = prev.includes(slug) ? prev.filter(s => s !== slug) : [...prev, slug];
+            AsyncStorage.setItem('@veyra_home_tag_filters', JSON.stringify(next)).catch(() => { });
+            return next;
+        });
+    }, []);
+
+    const handleClearTagFilters = useCallback(() => {
+        LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+        setSelectedTagSlugs([]);
+        AsyncStorage.removeItem('@veyra_home_tag_filters').catch(() => { });
+    }, []);
+
 
     const toggleCardSubtasks = (id: string, e?: any) => {
         if (e && e.stopPropagation) {
@@ -1059,12 +1210,11 @@ export default function HomeScreen() {
         loadHistory();
         loadReminders();
         loadAllEvents();
+        loadTags();
         loadEventsForDate(selectedCalendarDate || new Date());
         const interval = setInterval(() => {
-            loadReminders();
-            loadAllEvents();
             setNow(Date.now());
-        }, 1000 * 30);
+        }, 1000 * 60);
         return () => clearInterval(interval);
     }, [isHydrated]);
 
@@ -1075,10 +1225,10 @@ export default function HomeScreen() {
             const { isEventsDirty, events: currentEvents, loadAllEvents, loadEventsForDate } = useEventsStore.getState();
 
             // Caché inteligente: solo consultar SQLite si los datos están marcados como sucios o en la primera carga
-            if (isRemindersDirty || currentReminders.length === 0) {
+            if (isRemindersDirty) {
                 loadReminders();
             }
-            if (isEventsDirty || currentEvents.length === 0) {
+            if (isEventsDirty) {
                 loadAllEvents();
                 loadEventsForDate(selectedCalendarDate || new Date());
             }
@@ -1100,6 +1250,32 @@ export default function HomeScreen() {
 
     const listData = useMemo(() => {
         const sections: AgendaSection[] = [];
+
+        const itemMatchesFilters = (
+            itemType: 'event' | 'reminder',
+            item: CalendarEvent | Reminder
+        ) => {
+            // 1. Filtro por tags (lógica OR)
+            if (selectedTagSlugs.length > 0) {
+                const itemTags = itemTagsMap[item.id] || [];
+                const hasMatchingTag = itemTags.some(t => selectedTagSlugs.includes(t.slug));
+                if (!hasMatchingTag) return false;
+            }
+
+            // 2. Filtro por tipo
+            if (agendaFilter === 'all') return true;
+            if (agendaFilter === 'reminders') return itemType === 'reminder';
+            if (agendaFilter === 'events') return itemType === 'event';
+            if (agendaFilter === 'birthdays') {
+                if (itemType === 'event') {
+                    const ev = item as CalendarEvent;
+                    return Boolean(ev.is_birthday_like || looksLikeBirthday(ev.title));
+                } else {
+                    return looksLikeBirthday(item.title);
+                }
+            }
+            return true;
+        };
 
         // ─── Búsqueda en tiempo real ───
         if (searchQuery.trim().length > 0) {
@@ -1161,11 +1337,11 @@ export default function HomeScreen() {
             const dateTitle = format(targetDate, language === 'es' ? "EEEE, d 'de' MMMM" : 'EEEE, MMMM d', { locale });
 
             const dayEvents: CalendarEvent[] = (agendaFilter !== 'reminders')
-                ? events.filter(e => isEventOccurringOnDate(e, targetDate))
+                ? events.filter(e => isEventOccurringOnDate(e, targetDate) && itemMatchesFilters('event', e))
                 : [];
 
             const dayReminders: Reminder[] = (agendaFilter !== 'events')
-                ? sortedReminders.filter(r => isSameDay(new Date(r.due_date_ms), targetDate) && r.status === 'pending')
+                ? sortedReminders.filter(r => isSameDay(new Date(r.due_date_ms), targetDate) && r.status === 'pending' && itemMatchesFilters('reminder', r))
                 : [];
 
             const toTimelineEvent = (ev: CalendarEvent) => {
@@ -1232,7 +1408,7 @@ export default function HomeScreen() {
 
         // 1. Tareas Vencidas ("Urgente")
         const overdue = (agendaFilter !== 'events')
-            ? sortedReminders.filter(r => isPast(r.due_date_ms) && r.status === 'pending')
+            ? sortedReminders.filter(r => isPast(r.due_date_ms) && r.status === 'pending' && itemMatchesFilters('reminder', r))
             : [];
 
         if (overdue.length > 0) {
@@ -1245,21 +1421,25 @@ export default function HomeScreen() {
             });
         }
 
-        // 2. Hoy: Eventos y Tareas intercalados con cursando prioritario y pasados colapsables
+        // 2. Hoy: Eventos y Tareas
         const todayDate = new Date();
         const allTodayEvents: CalendarEvent[] = (agendaFilter !== 'reminders')
-            ? events.filter(e => isEventOccurringOnDate(e, todayDate))
+            ? events.filter(e => isEventOccurringOnDate(e, todayDate) && itemMatchesFilters('event', e))
             : [];
 
         const todayReminders: Reminder[] = (agendaFilter !== 'events')
-            ? sortedReminders.filter(r => isToday(r.due_date_ms) && !isPast(r.due_date_ms) && r.status === 'pending')
+            ? sortedReminders.filter(r => isToday(r.due_date_ms) && !isPast(r.due_date_ms) && r.status === 'pending' && itemMatchesFilters('reminder', r))
             : [];
+
+        // 2a. Sección "Todo el día" (All Day) al inicio si existen eventos all-day hoy
+        const allDayTodayEvents = allTodayEvents.filter(e => Boolean(e.is_all_day));
+        const timedTodayEvents = allTodayEvents.filter(e => !e.is_all_day);
 
         const ongoingEvents: CalendarEvent[] = [];
         const upcomingEvents: CalendarEvent[] = [];
         const pastEvents: CalendarEvent[] = [];
 
-        for (const ev of allTodayEvents) {
+        for (const ev of timedTodayEvents) {
             if (isEventOngoingNow(ev, todayDate)) {
                 ongoingEvents.push(ev);
             } else if (isEventPastNow(ev, todayDate)) {
@@ -1285,6 +1465,16 @@ export default function HomeScreen() {
         const activeTodayTimeline = [...ongoingTimeline, ...upcomingTimeline];
         const pastTodayTimeline = pastEvents.map(toTimelineEvent).sort((a, b) => a.time_ms - b.time_ms);
 
+        if (allDayTodayEvents.length > 0) {
+            const allDayTimeline = allDayTodayEvents.map(toTimelineEvent);
+            sections.push({
+                key: 'all_day_today',
+                title: language === 'es' ? 'Todo el día' : 'All day',
+                count: allDayTimeline.length,
+                data: allDayTimeline,
+            });
+        }
+
         sections.push({
             key: 'today',
             title: t('home.today'),
@@ -1298,7 +1488,7 @@ export default function HomeScreen() {
 
         if (agendaFilter !== 'reminders') {
             // Eventos únicos futuros (que no sean hoy)
-            const futureSingleEvents = events.filter(e => (!e.repeat_rule || e.repeat_rule === 'null') && !isToday(new Date(e.start_time_ms)) && !isPast(e.start_time_ms));
+            const futureSingleEvents = events.filter(e => (!e.repeat_rule || e.repeat_rule === 'null') && !isToday(new Date(e.start_time_ms)) && !isPast(e.start_time_ms) && itemMatchesFilters('event', e));
             futureSingleEvents.forEach(ev => {
                 const dateObj = new Date(ev.start_time_ms);
                 const key = format(dateObj, 'yyyy-MM-dd');
@@ -1307,28 +1497,36 @@ export default function HomeScreen() {
                 groupsByDay.set(key, group);
             });
 
-            // Eventos recurrentes: proyectar para los próximos 14 días (del día 1 al 14)
-            const recurringEvents = events.filter(e => e.repeat_rule && e.repeat_rule !== 'null');
+            // Eventos recurrentes: proyectar para los próximos 14 días (del día 1 al 14) en una sola pasada por evento
+            const recurringEvents = events.filter(e => e.repeat_rule && e.repeat_rule !== 'null' && itemMatchesFilters('event', e));
             if (recurringEvents.length > 0) {
-                for (let i = 1; i <= 14; i++) {
-                    const futureDay = addDays(todayDate, i);
-                    const key = format(futureDay, 'yyyy-MM-dd');
-                    recurringEvents.forEach(ev => {
-                        if (isEventOccurringOnDate(ev, futureDay)) {
-                            const d = new Date(futureDay);
-                            const orig = new Date(ev.start_time_ms);
-                            d.setHours(orig.getHours(), orig.getMinutes(), orig.getSeconds(), orig.getMilliseconds());
-                            const group = groupsByDay.get(key) || { date: futureDay, items: [] };
-                            group.items.push({ type: 'event', event: ev, time_ms: d.getTime() });
+                const day1Start = addDays(todayDate, 1);
+                day1Start.setHours(0, 0, 0, 0);
+                const day14End = addDays(todayDate, 14);
+                day14End.setHours(23, 59, 59, 999);
+                const rangeStartMs = day1Start.getTime();
+                const rangeEndMs = day14End.getTime();
+
+                recurringEvents.forEach(ev => {
+                    const occurrences = expandOccurrences(ev, rangeStartMs, rangeEndMs);
+                    for (const occ of occurrences) {
+                        const startMs = occ.startTimeMs;
+                        if (!startMs || isNaN(startMs)) continue;
+                        const occDate = new Date(startMs);
+                        const dayDate = new Date(occDate.getFullYear(), occDate.getMonth(), occDate.getDate());
+                        const key = format(dayDate, 'yyyy-MM-dd');
+                        const group = groupsByDay.get(key) || { date: dayDate, items: [] };
+                        if (!group.items.some(it => it.type === 'event' && it.event.id === ev.id)) {
+                            group.items.push({ type: 'event', event: ev, time_ms: startMs });
                             groupsByDay.set(key, group);
                         }
-                    });
-                }
+                    }
+                });
             }
         }
 
         const futureReminders: Reminder[] = (agendaFilter !== 'events')
-            ? sortedReminders.filter(r => !isToday(r.due_date_ms) && !isPast(r.due_date_ms) && r.status === 'pending')
+            ? sortedReminders.filter(r => !isToday(r.due_date_ms) && !isPast(r.due_date_ms) && r.status === 'pending' && itemMatchesFilters('reminder', r))
             : [];
 
         futureReminders.forEach(r => {
@@ -1365,7 +1563,7 @@ export default function HomeScreen() {
         const overdueCount = overdue.length;
 
         return { sections, stats: { completedToday, overdueCount }, overdueCount, isFilteredByDate: false };
-    }, [sortedReminders, events, agendaFilter, now, history, t, selectedCalendarDate, locale, language, searchQuery]);
+    }, [sortedReminders, events, agendaFilter, selectedTagSlugs, itemTagsMap, now, history, t, selectedCalendarDate, locale, language, searchQuery]);
 
     const todayPendingReminders = useMemo(() => {
         return reminders.filter(r => isToday(r.due_date_ms) && r.status === 'pending');
@@ -1398,6 +1596,23 @@ export default function HomeScreen() {
         }).length;
     }, [selectedCalendarDate, events]);
 
+    const birthdaysFilterCount = useMemo(() => {
+        const birthdayEvents = events.filter(e => {
+            if (!(e.is_birthday_like || looksLikeBirthday(e.title))) return false;
+            if (selectedCalendarDate) return isEventOccurringOnDate(e, selectedCalendarDate);
+            const todayDate = new Date();
+            if (isEventOccurringOnDate(e, todayDate)) return true;
+            if (e.repeat_rule && e.repeat_rule !== 'null') return true;
+            return !isPast(e.start_time_ms);
+        });
+        const birthdayReminders = sortedReminders.filter(r => {
+            if (!looksLikeBirthday(r.title) || r.status !== 'pending') return false;
+            if (selectedCalendarDate) return isSameDay(new Date(r.due_date_ms), selectedCalendarDate);
+            return true;
+        });
+        return birthdayEvents.length + birthdayReminders.length;
+    }, [selectedCalendarDate, events, sortedReminders]);
+
     const allFilterCount = tasksFilterCount + eventsFilterCount;
 
     const handleShareAgenda = async () => {
@@ -1425,7 +1640,7 @@ export default function HomeScreen() {
                                     message += `    ${check} ${st.title}\n`;
                                 });
                             }
-                        } catch {}
+                        } catch { }
                     }
                 });
             }
@@ -1785,7 +2000,7 @@ export default function HomeScreen() {
             return;
         }
         router.push({
-            pathname: '/events/create',
+            pathname: '/events/[id]',
             params: {
                 id,
                 occurrenceDate: itemTime ? new Date(itemTime).toISOString() : undefined,
@@ -1999,6 +2214,7 @@ export default function HomeScreen() {
                                     <AgendaEventRow
                                         key={`event-${timelineItem.event.id}-${timelineItem.time_ms}`}
                                         event={timelineItem.event}
+                                        tags={itemTagsMap[timelineItem.event.id]}
                                         itemTime={timelineItem.time_ms}
                                         isLast={idx === section.data.length - 1 && (!section.pastData || section.pastData.length === 0)}
                                         isSelected={selectedEvents.includes(timelineItem.event.id)}
@@ -2021,6 +2237,7 @@ export default function HomeScreen() {
                                     <AgendaReminderRow
                                         key={`reminder-${timelineItem.item.id}`}
                                         item={timelineItem.item}
+                                        tags={itemTagsMap[timelineItem.item.id]}
                                         isLast={idx === section.data.length - 1 && (!section.pastData || section.pastData.length === 0)}
                                         isSelected={selectedReminders.includes(timelineItem.item.id)}
                                         isSelectionMode={isSelectionMode}
@@ -2066,6 +2283,7 @@ export default function HomeScreen() {
                                     <AgendaEventRow
                                         key={`past-event-${timelineItem.event.id}-${timelineItem.time_ms}`}
                                         event={timelineItem.event}
+                                        tags={itemTagsMap[timelineItem.event.id]}
                                         itemTime={timelineItem.time_ms}
                                         isLast={idx === section.pastData!.length - 1}
                                         isPast={true}
@@ -2156,227 +2374,342 @@ export default function HomeScreen() {
                     style={[StyleSheet.absoluteFill, remindersCrossfadeStyle]}
                     pointerEvents={mainActiveTab === 'reminders' ? 'auto' : 'none'}
                 >
-                {/* ─── HEADER / CALENDARIO DESPLEGABLE ─── */}
-            {isSelectionMode ? (
-                <View style={[styles.viewingAreaContainer, { borderBottomColor: colors.borderSubtle }]}>
-                    <View style={styles.viewingAreaSelectionRow}>
-                        <View>
-                            <Text style={[styles.compactTitle, { color: colors.textPrimary }]}>
-                                {selectedReminders.length} {t('home.selected', { defaultValue: 'seleccionados' })}
-                            </Text>
-                            <Text style={[styles.viewingAreaSubtitle, { color: colors.textSecondary }]}>
-                                {selectedReminders.length === reminders.filter(r => r.status === 'pending').length
-                                    ? (language === 'es' ? 'Todos los recordatorios seleccionados' : 'All reminders selected')
-                                    : (language === 'es' ? 'Toca para seleccionar o desmarcar' : 'Tap to select or deselect')}
-                            </Text>
+                    {/* ─── HEADER / CALENDARIO DESPLEGABLE ─── */}
+                    {isSelectionMode ? (
+                        <View style={[styles.viewingAreaContainer, { borderBottomColor: colors.borderSubtle }]}>
+                            <View style={styles.viewingAreaSelectionRow}>
+                                <View>
+                                    <Text style={[styles.compactTitle, { color: colors.textPrimary }]}>
+                                        {selectedReminders.length} {t('home.selected', { defaultValue: 'seleccionados' })}
+                                    </Text>
+                                    <Text style={[styles.viewingAreaSubtitle, { color: colors.textSecondary }]}>
+                                        {selectedReminders.length === reminders.filter(r => r.status === 'pending').length
+                                            ? (language === 'es' ? 'Todos los recordatorios seleccionados' : 'All reminders selected')
+                                            : (language === 'es' ? 'Toca para seleccionar o desmarcar' : 'Tap to select or deselect')}
+                                    </Text>
+                                </View>
+                                <TouchableOpacity
+                                    onPress={() => setSelectedReminders([])}
+                                    style={[
+                                        styles.clearSelectionBtn,
+                                        { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.06)' },
+                                    ]}
+                                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                                >
+                                    <X size={16} color={colors.textSecondary} />
+                                </TouchableOpacity>
+                            </View>
                         </View>
-                        <TouchableOpacity
-                            onPress={() => setSelectedReminders([])}
-                            style={[
-                                styles.clearSelectionBtn,
-                                { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.06)' },
-                            ]}
-                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                        >
-                            <X size={16} color={colors.textSecondary} />
-                        </TouchableOpacity>
-                    </View>
-                </View>
-            ) : (
-                <CollapsibleCalendarHeader
-                    selectedDate={selectedCalendarDate}
-                    onSelectDate={setSelectedCalendarDate}
-                    reminders={reminders}
-                    events={events}
-                    language={language}
-                    hasTodayTasks={totalTodayTasks > 0}
-                />
-            )}
+                    ) : (
+                        <CollapsibleCalendarHeader
+                            selectedDate={selectedCalendarDate}
+                            onSelectDate={setSelectedCalendarDate}
+                            reminders={reminders}
+                            events={events}
+                            language={language}
+                            hasTodayTasks={totalTodayTasks > 0}
+                        />
+                    )}
 
-            {/* ─── Agenda Filter Pills (Matching Notes screen chips) ─── */}
-            {!isSelectionMode && (
-                <View style={styles.filterPillsContainer}>
-                    <ScrollView
-                        horizontal
-                        showsHorizontalScrollIndicator={false}
-                        contentContainerStyle={styles.filterPillsScrollContent}
+                    {/* ─── Agenda Filter Pills (Matching Notes screen chips) ─── */}
+                    {!isSelectionMode && (
+                        <View style={styles.filterPillsContainer}>
+                            <ScrollView
+                                horizontal
+                                showsHorizontalScrollIndicator={false}
+                                contentContainerStyle={styles.filterPillsScrollContent}
+                            >
+                                {/* 1. TODO */}
+                                <TouchableOpacity
+                                    activeOpacity={0.7}
+                                    onPress={() => handleSelectAgendaFilter('all')}
+                                    style={[
+                                        styles.agendaChip,
+                                        {
+                                            backgroundColor: agendaFilter === 'all'
+                                                ? (isDark ? '#262933' : '#E2E8F0')
+                                                : (isDark ? (colors.bg === '#000000' ? colors.surfaceCard : '#1C1F26') : '#FFFFFF'),
+                                            borderColor: agendaFilter === 'all' ? accent.primary : colors.borderSubtle,
+                                        },
+                                    ]}
+                                >
+                                    <Layers
+                                        size={13}
+                                        color={(agendaFilter === 'all' ? accent.primary : colors.textMuted) as any}
+                                    />
+                                    <Text
+                                        style={[
+                                            styles.agendaChipText,
+                                            {
+                                                color: agendaFilter === 'all' ? colors.textPrimary : colors.textSecondary,
+                                                fontWeight: agendaFilter === 'all' ? '700' : '500',
+                                            },
+                                        ]}
+                                    >
+                                        {language === 'es' ? 'Todo' : 'All'}
+                                    </Text>
+                                    <Text
+                                        style={[
+                                            styles.agendaChipBadge,
+                                            {
+                                                backgroundColor: agendaFilter === 'all'
+                                                    ? (isDark ? (colors.bg === '#000000' ? colors.surfaceCard : '#1C1F26') : '#FFFFFF')
+                                                    : (isDark ? '#262933' : '#F1F5F9'),
+                                                color: agendaFilter === 'all' ? accent.primary : colors.textMuted,
+                                            },
+                                        ]}
+                                    >
+                                        {allFilterCount}
+                                    </Text>
+                                </TouchableOpacity>
+
+                                {/* 2. TAREAS */}
+                                <TouchableOpacity
+                                    activeOpacity={0.7}
+                                    onPress={() => handleSelectAgendaFilter('reminders')}
+                                    style={[
+                                        styles.agendaChip,
+                                        {
+                                            backgroundColor: agendaFilter === 'reminders'
+                                                ? (isDark ? '#262933' : '#E2E8F0')
+                                                : (isDark ? (colors.bg === '#000000' ? colors.surfaceCard : '#1C1F26') : '#FFFFFF'),
+                                            borderColor: agendaFilter === 'reminders' ? accent.primary : colors.borderSubtle,
+                                        },
+                                    ]}
+                                >
+                                    <CheckSquare
+                                        size={13}
+                                        color={(agendaFilter === 'reminders' ? accent.primary : colors.textMuted) as any}
+                                    />
+                                    <Text
+                                        style={[
+                                            styles.agendaChipText,
+                                            {
+                                                color: agendaFilter === 'reminders' ? colors.textPrimary : colors.textSecondary,
+                                                fontWeight: agendaFilter === 'reminders' ? '700' : '500',
+                                            },
+                                        ]}
+                                    >
+                                        {language === 'es' ? 'Tareas' : 'Tasks'}
+                                    </Text>
+                                    <Text
+                                        style={[
+                                            styles.agendaChipBadge,
+                                            {
+                                                backgroundColor: agendaFilter === 'reminders'
+                                                    ? (isDark ? (colors.bg === '#000000' ? colors.surfaceCard : '#1C1F26') : '#FFFFFF')
+                                                    : (isDark ? '#262933' : '#F1F5F9'),
+                                                color: agendaFilter === 'reminders' ? accent.primary : colors.textMuted,
+                                            },
+                                        ]}
+                                    >
+                                        {tasksFilterCount}
+                                    </Text>
+                                </TouchableOpacity>
+
+                                {/* 3. EVENTOS */}
+                                <TouchableOpacity
+                                    activeOpacity={0.7}
+                                    onPress={() => handleSelectAgendaFilter('events')}
+                                    style={[
+                                        styles.agendaChip,
+                                        {
+                                            backgroundColor: agendaFilter === 'events'
+                                                ? (isDark ? '#1E293B' : '#DBEAFE')
+                                                : (isDark ? (colors.bg === '#000000' ? colors.surfaceCard : '#1C1F26') : '#FFFFFF'),
+                                            borderColor: agendaFilter === 'events' ? '#3B82F6' : colors.borderSubtle,
+                                        },
+                                    ]}
+                                >
+                                    <CalendarIcon
+                                        size={13}
+                                        color={(agendaFilter === 'events' ? '#3B82F6' : colors.textMuted) as any}
+                                    />
+                                    <Text
+                                        style={[
+                                            styles.agendaChipText,
+                                            {
+                                                color: agendaFilter === 'events' ? colors.textPrimary : colors.textSecondary,
+                                                fontWeight: agendaFilter === 'events' ? '700' : '500',
+                                            },
+                                        ]}
+                                    >
+                                        {language === 'es' ? 'Eventos' : 'Events'}
+                                    </Text>
+                                    <Text
+                                        style={[
+                                            styles.agendaChipBadge,
+                                            {
+                                                backgroundColor: agendaFilter === 'events'
+                                                    ? (isDark ? '#0F172A' : '#FFFFFF')
+                                                    : (isDark ? '#262933' : '#F1F5F9'),
+                                                color: agendaFilter === 'events' ? '#3B82F6' : colors.textMuted,
+                                            },
+                                        ]}
+                                    >
+                                        {eventsFilterCount}
+                                    </Text>
+                                </TouchableOpacity>
+
+                                {/* 4. CUMPLEAÑOS */}
+                                <TouchableOpacity
+                                    activeOpacity={0.7}
+                                    onPress={() => handleSelectAgendaFilter('birthdays')}
+                                    style={[
+                                        styles.agendaChip,
+                                        {
+                                            backgroundColor: agendaFilter === 'birthdays'
+                                                ? (isDark ? '#3B1828' : '#FCE7F3')
+                                                : (isDark ? (colors.bg === '#000000' ? colors.surfaceCard : '#1C1F26') : '#FFFFFF'),
+                                            borderColor: agendaFilter === 'birthdays' ? '#EC4899' : colors.borderSubtle,
+                                        },
+                                    ]}
+                                >
+                                    <Sparkles
+                                        size={13}
+                                        color={(agendaFilter === 'birthdays' ? '#EC4899' : colors.textMuted) as any}
+                                    />
+                                    <Text
+                                        style={[
+                                            styles.agendaChipText,
+                                            {
+                                                color: agendaFilter === 'birthdays' ? colors.textPrimary : colors.textSecondary,
+                                                fontWeight: agendaFilter === 'birthdays' ? '700' : '500',
+                                            },
+                                        ]}
+                                    >
+                                        {language === 'es' ? 'Cumpleaños' : 'Birthdays'}
+                                    </Text>
+                                    <Text
+                                        style={[
+                                            styles.agendaChipBadge,
+                                            {
+                                                backgroundColor: agendaFilter === 'birthdays'
+                                                    ? (isDark ? '#1F0B18' : '#FFFFFF')
+                                                    : (isDark ? '#262933' : '#F1F5F9'),
+                                                color: agendaFilter === 'birthdays' ? '#EC4899' : colors.textMuted,
+                                            },
+                                        ]}
+                                    >
+                                        {birthdaysFilterCount}
+                                    </Text>
+                                </TouchableOpacity>
+                            </ScrollView>
+
+                            {/* Tag Filter Chips Bar */}
+                            {allTags.length > 0 && (
+                                <View style={styles.tagFilterBarContainer}>
+                                    <ScrollView
+                                        horizontal
+                                        showsHorizontalScrollIndicator={false}
+                                        contentContainerStyle={styles.tagFilterScrollContent}
+                                    >
+                                        {selectedTagSlugs.length > 0 && (
+                                            <TouchableOpacity
+                                                activeOpacity={0.7}
+                                                onPress={handleClearTagFilters}
+                                                style={[
+                                                    styles.tagFilterChip,
+                                                    {
+                                                        backgroundColor: isDark ? 'rgba(239, 68, 68, 0.15)' : '#FEE2E2',
+                                                        borderColor: isDark ? 'rgba(239, 68, 68, 0.4)' : '#FCA5A5',
+                                                    }
+                                                ]}
+                                            >
+                                                <X size={11} color="#EF4444" />
+                                                <Text style={[styles.tagFilterChipText, { color: '#EF4444', fontWeight: '600' }]}>
+                                                    {language === 'es' ? 'Limpiar tags' : 'Clear tags'}
+                                                </Text>
+                                            </TouchableOpacity>
+                                        )}
+                                        {allTags.map(tag => {
+                                            const isSelected = selectedTagSlugs.includes(tag.slug);
+                                            return (
+                                                <TouchableOpacity
+                                                    key={tag.id}
+                                                    activeOpacity={0.7}
+                                                    onPress={() => handleToggleTagFilter(tag.slug)}
+                                                    style={[
+                                                        styles.tagFilterChip,
+                                                        {
+                                                            backgroundColor: isSelected
+                                                                ? (tag.color ? `${tag.color}25` : (isDark ? 'rgba(59, 130, 246, 0.2)' : '#DBEAFE'))
+                                                                : (isDark ? (colors.bg === '#000000' ? colors.surfaceCard : '#1C1F26') : '#FFFFFF'),
+                                                            borderColor: isSelected
+                                                                ? (tag.color || accent.primary)
+                                                                : colors.borderSubtle,
+                                                        }
+                                                    ]}
+                                                >
+                                                    <Text
+                                                        style={[
+                                                            styles.tagFilterChipText,
+                                                            {
+                                                                color: isSelected
+                                                                    ? (tag.color || accent.primary)
+                                                                    : colors.textSecondary,
+                                                                fontWeight: isSelected ? '700' : '500',
+                                                            }
+                                                        ]}
+                                                    >
+                                                        #{tag.name}
+                                                    </Text>
+                                                    {tag.item_count ? (
+                                                        <Text
+                                                            style={[
+                                                                styles.tagFilterBadge,
+                                                                {
+                                                                    backgroundColor: isSelected
+                                                                        ? (isDark ? 'rgba(0,0,0,0.3)' : 'rgba(255,255,255,0.7)')
+                                                                        : (isDark ? '#262933' : '#F1F5F9'),
+                                                                    color: isSelected ? (tag.color || accent.primary) : colors.textMuted,
+                                                                }
+                                                            ]}
+                                                        >
+                                                            {tag.item_count}
+                                                        </Text>
+                                                    ) : null}
+                                                </TouchableOpacity>
+                                            );
+                                        })}
+                                    </ScrollView>
+                                </View>
+                            )}
+                        </View>
+                    )}
+
+                    <Animated.View
+                        style={[
+                            styles.listWrapper,
+                            { opacity: listAnimOpacity },
+                        ]}
                     >
-                        {/* 1. TODO */}
-                        <TouchableOpacity
-                            activeOpacity={0.7}
-                            onPress={() => {
-                                LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-                                setAgendaFilter('all');
+                        <ScrollView
+                            showsVerticalScrollIndicator={false}
+                            removeClippedSubviews={Platform.OS === 'android'}
+                            scrollEventThrottle={16}
+                            contentContainerStyle={{
+                                paddingBottom: insets.bottom + (isSelectionMode ? 130 : 90),
+                                paddingTop: 8,
+                                paddingHorizontal: 20,
                             }}
-                            style={[
-                                styles.agendaChip,
-                                {
-                                    backgroundColor: agendaFilter === 'all'
-                                        ? (isDark ? '#262933' : '#E2E8F0')
-                                        : (isDark ? '#1C1F26' : '#FFFFFF'),
-                                    borderColor: agendaFilter === 'all' ? accent.primary : colors.borderSubtle,
-                                },
-                            ]}
                         >
-                            <Layers
-                                size={13}
-                                color={(agendaFilter === 'all' ? accent.primary : colors.textMuted) as any}
-                            />
-                            <Text
-                                style={[
-                                    styles.agendaChipText,
-                                    {
-                                        color: agendaFilter === 'all' ? colors.textPrimary : colors.textSecondary,
-                                        fontWeight: agendaFilter === 'all' ? '700' : '500',
-                                    },
-                                ]}
-                            >
-                                {language === 'es' ? 'Todo' : 'All'}
-                            </Text>
-                            <Text
-                                style={[
-                                    styles.agendaChipBadge,
-                                    {
-                                        backgroundColor: agendaFilter === 'all'
-                                            ? (isDark ? '#1C1F26' : '#FFFFFF')
-                                            : (isDark ? '#262933' : '#F1F5F9'),
-                                        color: agendaFilter === 'all' ? accent.primary : colors.textMuted,
-                                    },
-                                ]}
-                            >
-                                {allFilterCount}
-                            </Text>
-                        </TouchableOpacity>
-
-                        {/* 2. TAREAS */}
-                        <TouchableOpacity
-                            activeOpacity={0.7}
-                            onPress={() => {
-                                LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-                                setAgendaFilter('reminders');
-                            }}
-                            style={[
-                                styles.agendaChip,
-                                {
-                                    backgroundColor: agendaFilter === 'reminders'
-                                        ? (isDark ? '#262933' : '#E2E8F0')
-                                        : (isDark ? '#1C1F26' : '#FFFFFF'),
-                                    borderColor: agendaFilter === 'reminders' ? accent.primary : colors.borderSubtle,
-                                },
-                            ]}
-                        >
-                            <CheckSquare
-                                size={13}
-                                color={(agendaFilter === 'reminders' ? accent.primary : colors.textMuted) as any}
-                            />
-                            <Text
-                                style={[
-                                    styles.agendaChipText,
-                                    {
-                                        color: agendaFilter === 'reminders' ? colors.textPrimary : colors.textSecondary,
-                                        fontWeight: agendaFilter === 'reminders' ? '700' : '500',
-                                    },
-                                ]}
-                            >
-                                {language === 'es' ? 'Tareas' : 'Tasks'}
-                            </Text>
-                            <Text
-                                style={[
-                                    styles.agendaChipBadge,
-                                    {
-                                        backgroundColor: agendaFilter === 'reminders'
-                                            ? (isDark ? '#1C1F26' : '#FFFFFF')
-                                            : (isDark ? '#262933' : '#F1F5F9'),
-                                        color: agendaFilter === 'reminders' ? accent.primary : colors.textMuted,
-                                    },
-                                ]}
-                            >
-                                {tasksFilterCount}
-                            </Text>
-                        </TouchableOpacity>
-
-                        {/* 3. EVENTOS */}
-                        <TouchableOpacity
-                            activeOpacity={0.7}
-                            onPress={() => {
-                                LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-                                setAgendaFilter('events');
-                            }}
-                            style={[
-                                styles.agendaChip,
-                                {
-                                    backgroundColor: agendaFilter === 'events'
-                                        ? (isDark ? '#1E293B' : '#DBEAFE')
-                                        : (isDark ? '#1C1F26' : '#FFFFFF'),
-                                    borderColor: agendaFilter === 'events' ? '#3B82F6' : colors.borderSubtle,
-                                },
-                            ]}
-                        >
-                            <CalendarIcon
-                                size={13}
-                                color={(agendaFilter === 'events' ? '#3B82F6' : colors.textMuted) as any}
-                            />
-                            <Text
-                                style={[
-                                    styles.agendaChipText,
-                                    {
-                                        color: agendaFilter === 'events' ? colors.textPrimary : colors.textSecondary,
-                                        fontWeight: agendaFilter === 'events' ? '700' : '500',
-                                    },
-                                ]}
-                            >
-                                {language === 'es' ? 'Eventos' : 'Events'}
-                            </Text>
-                            <Text
-                                style={[
-                                    styles.agendaChipBadge,
-                                    {
-                                        backgroundColor: agendaFilter === 'events'
-                                            ? (isDark ? '#0F172A' : '#FFFFFF')
-                                            : (isDark ? '#262933' : '#F1F5F9'),
-                                        color: agendaFilter === 'events' ? '#3B82F6' : colors.textMuted,
-                                    },
-                                ]}
-                            >
-                                {eventsFilterCount}
-                            </Text>
-                        </TouchableOpacity>
-                    </ScrollView>
-                </View>
-            )}
-
-            <Animated.View
-                style={[
-                    styles.listWrapper,
-                    { opacity: listAnimOpacity },
-                ]}
-            >
-                <ScrollView
-                    showsVerticalScrollIndicator={false}
-                    removeClippedSubviews={Platform.OS === 'android'}
-                    scrollEventThrottle={16}
-                    contentContainerStyle={{
-                        paddingBottom: insets.bottom + (isSelectionMode ? 130 : 90),
-                        paddingTop: 8,
-                        paddingHorizontal: 20,
-                    }}
-                >
-                    {listData.sections.length === 0
-                        ? listEmptyElement
-                        : listData.sections.map((section) => renderSectionBlock({ item: section }))}
-                </ScrollView>
-            </Animated.View>
-        </Reanimated.View>
-
-            {/* 2. VISTA DE NOTAS (Montado bajo demanda en GPU para máximo rendimiento de inicio) */}
-            {hasOpenedNotes && (
-                <Reanimated.View
-                    style={[StyleSheet.absoluteFill, notesCrossfadeStyle]}
-                    pointerEvents={mainActiveTab === 'notes' ? 'auto' : 'none'}
-                >
-                    <NotesScreen hideBars />
+                            {listData.sections.length === 0
+                                ? listEmptyElement
+                                : listData.sections.map((section) => renderSectionBlock({ item: section }))}
+                        </ScrollView>
+                    </Animated.View>
                 </Reanimated.View>
-            )}
+
+                {/* 2. VISTA DE NOTAS (Montado bajo demanda en GPU para máximo rendimiento de inicio) */}
+                {hasOpenedNotes && (
+                    <Reanimated.View
+                        style={[StyleSheet.absoluteFill, notesCrossfadeStyle]}
+                        pointerEvents={mainActiveTab === 'notes' ? 'auto' : 'none'}
+                    >
+                        <NotesScreen hideBars />
+                    </Reanimated.View>
+                )}
             </View>
             <BottomTabBar />
 
@@ -3629,5 +3962,62 @@ const styles = StyleSheet.create({
         fontSize: 12,
         fontWeight: '600',
         letterSpacing: 0.1,
+    },
+    tagFilterBarContainer: {
+        marginTop: 6,
+        marginBottom: 2,
+    },
+    tagFilterScrollContent: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+        paddingHorizontal: 24,
+        paddingVertical: 2,
+    },
+    tagFilterChip: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 5,
+        paddingVertical: 4.5,
+        paddingLeft: 9,
+        paddingRight: 8,
+        borderRadius: 12,
+        borderWidth: 1,
+    },
+    tagFilterChipText: {
+        fontSize: 11.5,
+    },
+    tagFilterBadge: {
+        fontSize: 10,
+        fontWeight: '700',
+        paddingHorizontal: 5,
+        paddingVertical: 1,
+        borderRadius: 7,
+        overflow: 'hidden',
+    },
+    tagChipsRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 4,
+        marginLeft: 6,
+    },
+    itemTagChip: {
+        paddingHorizontal: 6,
+        paddingVertical: 1.5,
+        borderRadius: 6,
+        borderWidth: 1,
+    },
+    itemTagChipText: {
+        fontSize: 10,
+        fontWeight: '600',
+    },
+    itemTagChipMore: {
+        paddingHorizontal: 4,
+        paddingVertical: 1.5,
+        borderRadius: 6,
+    },
+    itemTagChipMoreText: {
+        fontSize: 9.5,
+        fontWeight: '600',
     },
 });

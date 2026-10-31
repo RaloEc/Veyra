@@ -47,6 +47,8 @@ export interface Reminder {
     subtasks?: string; // JSON array of Subtask
     is_shared?: number; // 0 | 1
     shared_owner_id?: string;
+    event_id?: string | null; // si está vinculado a un evento
+    offset_minutes?: number | null; // offset respecto al inicio del evento (negativo = antes)
 }
 
 export interface ComplianceEvent {
@@ -100,24 +102,43 @@ export interface Note {
     collab_role?: string; // 'editor' | 'viewer' para notas colaborativas
     font_family?: string; // ID de tipografía base ('sans' | 'serif' | 'mono' | 'script' | 'rounded')
     sync_mode?: NoteSyncMode; // 'rest' (por defecto) | 'yjs' (colaborativa)
+    preview_text?: string | null;
+    cached_html?: string | null;
+    last_opened_ms?: number;
 }
 
 export type NoteSyncMode = 'rest' | 'yjs';
+
+export type RecurrenceRule =
+    | { type: 'none' }
+    | { type: 'daily'; interval?: number }
+    | { type: 'weekly'; interval?: number; by_weekday?: number[] } // 0=Dom ... 6=Sáb
+    | { type: 'monthly'; interval?: number; by_monthday?: number[] }
+    | { type: 'yearly'; interval?: number; by_month?: number; by_monthday?: number; feb29_policy?: 'feb28' | 'mar01' | 'skip' }
+    | { type: 'weekdays' }; // atajo para lun-vie
 
 export interface CalendarEvent {
     id: string; // UUID
     user_id?: string;
     title: string;
     description?: string;
+    category_id?: string | null;
     start_time_ms: number;
     end_time_ms: number;
-    repeat_rule?: string; // JSON: { type: 'none' | 'weekly', days?: number[] }
+    is_all_day?: boolean | number; // default false (0 | 1 en SQLite)
+    all_day_date?: string | null; // formato 'YYYY-MM-DD' local. Null si is_all_day = false
+    timezone?: string | null; // IANA tz, ej. 'America/Guayaquil'. Requerido si is_all_day
+    repeat_rule?: string; // JSON legacy o string
+    recurrence_rule?: string | null; // JSON serializado de RecurrenceRule
+    recurrence_parent_id?: string | null; // id del evento original si es una ocurrencia generada
+    is_birthday_like?: boolean | number; // default false (0 | 1 en SQLite). true para cumpleaños/aniversarios
     location?: string;
     color?: string; // Color HEX
     notification_offset_min?: number; // Minutos antes de iniciar (ej. 0, 5, 10, 15, 30, 60, o null)
     notification_offsets?: string; // JSON array of numbers, e.g. "[5, 15, 1440]"
     notification_ids?: string; // JSON array of string notification IDs
     note_id?: string | null; // UUID de la nota vinculada
+    folder_id?: string | null; // UUID de la carpeta/cuaderno vinculado al evento
     tags?: string; // JSON array of string tags, e.g. '["clase", "universidad"]'
     created_at_ms: number;
     updated_at_ms: number;
@@ -125,6 +146,24 @@ export interface CalendarEvent {
     deleted: number; // 0 | 1
     is_shared?: number; // 0 | 1
     shared_owner_id?: string;
+}
+
+export type Event = CalendarEvent;
+
+export interface Tag {
+    id: string; // UUID
+    user_id?: string;
+    name: string; // nombre canónico visible, ej. 'familia'
+    slug: string; // normalizado: lowercase, sin acentos, sin #
+    color?: string | null; // opcional, hex
+    created_at: number;
+    updated_at: number;
+}
+
+export interface ItemTag {
+    item_type: 'event' | 'reminder';
+    item_id: string;
+    tag_id: string;
 }
 
 // ─── Tipos para Colaboración y Recursos Compartidos ───────────
@@ -188,4 +227,3 @@ export interface CollaborationActivity {
     details?: string;
     created_at: string;
 }
-

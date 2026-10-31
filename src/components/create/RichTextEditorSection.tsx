@@ -79,6 +79,17 @@ export function RichTextEditorSection({
                 const TOP_ZONE = 100;
                 const BOTTOM_ZONE = 100;
 
+                // Garantizar meta viewport estricto para evitar zoom y desbordamiento horizontal
+                try {
+                    var meta = document.querySelector('meta[name="viewport"]');
+                    if (!meta) {
+                        meta = document.createElement('meta');
+                        meta.name = 'viewport';
+                        document.head.appendChild(meta);
+                    }
+                    meta.setAttribute('content', 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no');
+                } catch (vpErr) {}
+
                 // Prevenir que Chromium haga scroll interno dentro del WebView (el ScrollView nativo gestiona el scroll)
                 try {
                     window.addEventListener('scroll', function() {
@@ -2818,6 +2829,9 @@ export function RichTextEditorSection({
                     onCursorPosition={onCursorPosition}
                     placeholder={readOnly ? '' : t('create.placeholder_notes')}
                     scrollEnabled={false}
+                    showsHorizontalScrollIndicator={false}
+                    bounces={false}
+                    overScrollMode="never"
                     initialHeight={flat ? calculatedMinHeight : (readOnly ? 100 : calculatedMinHeight)}
                     style={{ flex: 1, minHeight: flat ? calculatedMinHeight : (readOnly ? 60 : calculatedMinHeight) }}
                     autoCapitalize="sentences"
@@ -2847,18 +2861,30 @@ export function RichTextEditorSection({
                             font-family: ${activeFontCss};
                             min-height: ${flat ? `${calculatedMinHeight}px` : (readOnly ? 'auto' : `${calculatedMinHeight}px`)};
                             box-sizing: border-box;
+                            max-width: 100% !important;
+                            width: 100% !important;
+                            overflow-x: hidden !important;
+                            word-break: break-word !important;
+                            overflow-wrap: break-word !important;
                         `,
                         cssText: `
                             ${GOOGLE_FONTS_CSS_IMPORT}
                             ${NOTE_FONTS_OVERRIDE_CSS}
-                            html, body {
-                                min-height: 100% !important;
-                                height: 100% !important;
+                            html, body, .content, .pell, #editor, .pell-content {
+                                max-width: 100% !important;
+                                width: 100% !important;
                                 margin: 0;
                                 padding: 0;
                                 font-family: ${activeFontCss};
                                 overflow-x: hidden !important;
                                 overflow-y: hidden !important;
+                                box-sizing: border-box !important;
+                                word-break: break-word !important;
+                                overflow-wrap: break-word !important;
+                            }
+                            html, body {
+                                min-height: 100% !important;
+                                height: 100% !important;
                                 cursor: ${readOnly ? 'default' : 'text'} !important;
                                 display: flex;
                                 flex-direction: column;
@@ -2879,6 +2905,12 @@ export function RichTextEditorSection({
                                 -webkit-user-select: ${readOnly ? 'none' : 'text'} !important;
                                 user-select: ${readOnly ? 'none' : 'text'} !important;
                                 -webkit-touch-callout: ${readOnly ? 'none' : 'default'} !important;
+                            }
+                            #editor > *, .pell-content > *, p, div, span, font, h1, h2, h3, h4, h5, h6, li, ul, ol, blockquote {
+                                max-width: 100% !important;
+                                box-sizing: border-box !important;
+                                word-break: break-word !important;
+                                overflow-wrap: break-word !important;
                             }
                             #editor > *, .pell-content > * {
                                 display: block;

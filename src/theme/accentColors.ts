@@ -1,5 +1,5 @@
-import { useColorScheme } from 'react-native';
 import { useStore } from '../store/useStore';
+import { useResolvedTheme } from './useResolvedTheme';
 
 export type AccentTheme = 'purple' | 'blue' | 'red' | 'green' | 'amber' | 'pink';
 
@@ -50,12 +50,19 @@ export function getAccentPalette(accentTheme: AccentTheme, mode: 'light' | 'dark
 }
 
 export function useAccentColor(): AccentPalette & { accent: string } {
-    const systemScheme = useColorScheme();
-    const theme = useStore(state => state.theme);
-    const resolvedMode: 'light' | 'dark' = theme === 'system'
-        ? (systemScheme === 'dark' ? 'dark' : 'light')
-        : (theme === 'dark' ? 'dark' : 'light');
+    const { resolvedTheme, isAmoled } = useResolvedTheme();
     const accentTheme = useStore(state => state.accentTheme);
-    const palette = getAccentPalette(accentTheme || 'blue', resolvedMode);
+    const palette = getAccentPalette(accentTheme || 'blue', resolvedTheme);
+
+    // En AMOLED (sobre negro puro #000000), un fondo al 12% puede ser muy tenue.
+    // Usamos ~16% únicamente cuando isAmoled, sin tocar los valores de accentColors.ts para dark normal.
+    if (isAmoled && palette.primaryBg.includes('0.12)')) {
+        return {
+            ...palette,
+            primaryBg: palette.primaryBg.replace('0.12)', '0.16)'),
+            accent: palette.primary,
+        };
+    }
+
     return { ...palette, accent: palette.primary };
 }

@@ -11,6 +11,8 @@ import { useEventsStore } from '../store/useEventsStore';
 class RealtimeServiceManager {
     private channel: RealtimeChannel | null = null;
     private currentUserId: string | null = null;
+    private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    private retryCount = 0;
 
     /**
      * Inicia la escucha en tiempo real de cambios en Supabase Realtime
@@ -139,6 +141,20 @@ class RealtimeServiceManager {
             )
             .subscribe((status) => {
                 console.log(`[RealtimeService] Estado del canal colaborativo: ${status}`);
+                if (status === 'SUBSCRIBED') {
+                    this.retryCount = 0;
+                } else if ((status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') && this.currentUserId && this.retryCount < 3) {
+                    const targetUser = this.currentUserId;
+                    this.retryCount++;
+                    const delay = Math.min(5000 * this.retryCount, 15000);
+                    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+                    this.reconnectTimer = setTimeout(() => {
+                        if (this.currentUserId === targetUser) {
+                            this.stopListening();
+                            this.startListening(targetUser);
+                        }
+                    }, delay);
+                }
             });
     }
 
@@ -146,6 +162,10 @@ class RealtimeServiceManager {
      * Detiene la escucha activa y libera el WebSocket.
      */
     stopListening() {
+        if (this.reconnectTimer) {
+            clearTimeout(this.reconnectTimer);
+            this.reconnectTimer = null;
+        }
         if (this.channel) {
             console.log('[RealtimeService] Deteniendo suscripción Realtime...');
             supabase.removeChannel(this.channel).catch(() => {});

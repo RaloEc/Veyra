@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
     TouchableOpacity,
     Text,
@@ -10,11 +10,12 @@ import Animated, {
     useAnimatedStyle,
     withSpring,
 } from 'react-native-reanimated';
-import { Plus } from '@tamagui/lucide-icons';
+import { Plus, Zap } from '@tamagui/lucide-icons';
 import { useRouter, useSegments } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { useVeyraTheme } from '../theme/useVeyraTheme';
+import { QuickAddSheet } from './QuickAddSheet';
 
 /**
  * FloatingCreateButton — Botón flotante accesible de creación rápida (FAB)
@@ -25,7 +26,8 @@ export function FloatingCreateButton() {
     const segments = useSegments();
     const { t } = useTranslation();
     const insets = useSafeAreaInsets();
-    const { accent, motion, isDark, typography } = useVeyraTheme();
+    const { colors, accent, motion, isDark, typography } = useVeyraTheme();
+    const [isQuickAddOpen, setIsQuickAddOpen] = useState(false);
     const scale = useSharedValue(1);
 
     const animatedStyle = useAnimatedStyle(() => ({
@@ -47,42 +49,51 @@ export function FloatingCreateButton() {
     };
 
     return (
-        <Animated.View
-            style={[
-                styles.container,
-                {
-                    bottom: insets.bottom + 24,
-                },
-                animatedStyle,
-            ]}
-        >
-            <TouchableOpacity
-                activeOpacity={0.88}
-                onPress={() => router.push('/create')}
-                onPressIn={handlePressIn}
-                onPressOut={handlePressOut}
+        <>
+            <Animated.View
                 style={[
-                    styles.button,
+                    styles.container,
                     {
-                        backgroundColor: accent.primary,
-                        shadowColor: accent.primary,
+                        bottom: insets.bottom + 24,
                     },
+                    animatedStyle,
                 ]}
             >
-                <Plus size={18} color={isDark ? '#1B1B1B' : '#FFFFFF'} strokeWidth={3} />
-                <Text
+                <TouchableOpacity
+                    activeOpacity={0.88}
+                    onPress={() => router.push('/create')}
+                    onLongPress={() => setIsQuickAddOpen(true)}
+                    delayLongPress={350}
+                    onPressIn={handlePressIn}
+                    onPressOut={handlePressOut}
                     style={[
-                        styles.label,
+                        styles.button,
                         {
-                            color: isDark ? '#1B1B1B' : '#FFFFFF',
-                            fontSize: typography.caption.fontSize,
+                            backgroundColor: accent.primary,
+                            shadowColor: accent.primary,
                         },
                     ]}
                 >
-                    {t('home.create_fab')}
-                </Text>
-            </TouchableOpacity>
-        </Animated.View>
+                    <Plus size={18} color={colors.textInverse} strokeWidth={3} />
+                    <Text
+                        style={[
+                            styles.label,
+                            {
+                                color: colors.textInverse,
+                                fontSize: typography.caption.fontSize,
+                            },
+                        ]}
+                    >
+                        {t('home.create_fab')}
+                    </Text>
+                </TouchableOpacity>
+            </Animated.View>
+
+            <QuickAddSheet
+                visible={isQuickAddOpen}
+                onClose={() => setIsQuickAddOpen(false)}
+            />
+        </>
     );
 }
 

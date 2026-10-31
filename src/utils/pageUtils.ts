@@ -97,6 +97,8 @@ function cleanHtmlAndEntities(html: string): string {
     return html
         .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
         .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+        .replace(/<img[^>]*>/gi, ' ')
+        .replace(/data:image\/[^"'\s>]+/gi, '')
         .replace(/<[^>]+>/g, ' ')
         .replace(/&nbsp;/gi, ' ')
         .replace(/&amp;/gi, '&')
@@ -139,4 +141,27 @@ export function extractPlainTextFromPages(content?: string | null): string {
         })
         .filter(Boolean)
         .join('\n');
+}
+
+/**
+ * Calcula un preview_text ligero (máx. maxLen caracteres) para mostrar en la lista de notas
+ * sin tener que parsear el JSON/HTML completo ni imágenes base64 en cada render.
+ */
+export function computeNotePreviewText(content?: string | null, maxLen = 300): string {
+    if (!content || typeof content !== 'string' || !content.trim()) return '';
+    const { pages } = parseNotePages(content);
+    const parts: string[] = [];
+    let currentLen = 0;
+
+    for (const page of pages) {
+        const text = cleanHtmlAndEntities(page.content) || (page.title ? cleanHtmlAndEntities(page.title) : '');
+        if (text) {
+            parts.push(text);
+            currentLen += text.length;
+            if (currentLen >= maxLen) break;
+        }
+    }
+
+    const joined = parts.join(' ').trim();
+    return joined.length > maxLen ? joined.slice(0, maxLen) : joined;
 }

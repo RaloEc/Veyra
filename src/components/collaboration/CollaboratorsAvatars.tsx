@@ -12,6 +12,8 @@ interface CollaboratorsAvatarsProps {
     onPress?: () => void;
     size?: number;
     showIfEmpty?: boolean;
+    activePeers?: Array<{ clientId?: number | string; userId?: string | null; name?: string; color?: string; hasCursor?: boolean; isEditing?: boolean }>;
+    currentUserId?: string;
 }
 
 export const CollaboratorsAvatars: React.FC<CollaboratorsAvatarsProps> = ({
@@ -20,6 +22,8 @@ export const CollaboratorsAvatars: React.FC<CollaboratorsAvatarsProps> = ({
     onPress,
     size = 26,
     showIfEmpty = false,
+    activePeers,
+    currentUserId,
 }) => {
     const { colors, accent } = useVeyraTheme();
     const [collaborators, setCollaborators] = useState<CollaboratorMember[]>([]);
@@ -78,17 +82,99 @@ export const CollaboratorsAvatars: React.FC<CollaboratorsAvatarsProps> = ({
         };
     }, [targetId, refresh]);
 
+    // Si se pasa activePeers (modo colaborativo en tiempo real Yjs), mostrar exclusivamente a quienes están editando (excluyendo al usuario actual)
+    if (activePeers !== undefined) {
+        const peersToShow = activePeers.filter(p => p.isEditing === true && (!currentUserId || !p.userId || p.userId !== currentUserId));
+        if (peersToShow.length === 0 && !showIfEmpty) {
+            return null;
+        }
+
+        const displayPeers = peersToShow.slice(0, 3);
+        const extraCount = peersToShow.length - 3;
+
+        return (
+            <TouchableOpacity
+                style={styles.container}
+                onPress={onPress}
+                activeOpacity={0.7}
+                disabled={!onPress}
+            >
+                <View style={styles.avatarsRow}>
+                    {displayPeers.map((peer, index) => {
+                        const displayName = peer.name || 'Invitado';
+                        const initial = displayName[0]?.toUpperCase() || 'U';
+                        const avatarBg = peer.color || accent.primary;
+                        return (
+                            <View
+                                key={peer.clientId ?? `peer-${index}`}
+                                style={[
+                                    styles.avatar,
+                                    {
+                                        width: size,
+                                        height: size,
+                                        borderRadius: size / 2,
+                                        backgroundColor: avatarBg,
+                                        borderColor: colors.bg,
+                                        borderWidth: 1.5,
+                                        marginLeft: index === 0 ? 0 : -8,
+                                    },
+                                ]}
+                            >
+                                <Text style={[styles.avatarText, { fontSize: size * 0.42 }]}>
+                                    {initial}
+                                </Text>
+                            </View>
+                        );
+                    })}
+
+                    {extraCount > 0 && (
+                        <View
+                            style={[
+                                styles.avatar,
+                                styles.extraBadge,
+                                {
+                                    width: size,
+                                    height: size,
+                                    borderRadius: size / 2,
+                                    backgroundColor: colors.surfaceElevated,
+                                    borderColor: colors.bg,
+                                    borderWidth: 1.5,
+                                    marginLeft: -8,
+                                },
+                            ]}
+                        >
+                            <Text style={[styles.extraText, { color: colors.textSecondary, fontSize: size * 0.38 }]}>
+                                +{extraCount}
+                            </Text>
+                        </View>
+                    )}
+
+                    {peersToShow.length === 0 && showIfEmpty && (
+                        <View style={[styles.shareBadge, { backgroundColor: colors.surfaceElevated }]}>
+                            <Users size={14} color={colors.textSecondary as any} />
+                            <Text style={[styles.shareBadgeText, { color: colors.textSecondary }]}>
+                                Compartir
+                            </Text>
+                        </View>
+                    )}
+                </View>
+            </TouchableOpacity>
+        );
+    }
+
     // Si los integrantes están configurados como privados y el usuario NO es el propietario, no mostrar avatares
     if (!isOwner && !isPublicMembers) {
         return null;
     }
 
-    if (collaborators.length === 0 && !showIfEmpty) {
+    const filteredCollaborators = currentUserId ? collaborators.filter(c => c.user_id !== currentUserId) : collaborators;
+
+    if (filteredCollaborators.length === 0 && !showIfEmpty) {
         return null;
     }
 
-    const displayMembers = collaborators.slice(0, 3);
-    const extraCount = collaborators.length - 3;
+    const displayMembers = filteredCollaborators.slice(0, 3);
+    const extraCount = filteredCollaborators.length - 3;
 
     return (
         <TouchableOpacity

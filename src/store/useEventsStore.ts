@@ -2,8 +2,11 @@ import { create } from 'zustand';
 import { CalendarEvent } from '../types/db';
 import { EventService, CreateEventInput } from '../services/eventService';
 import { NotificationService } from '../services/notificationService';
-import { useStore } from './useStore';
-import { WidgetService } from '../services/widgetService';
+import { CollaborationService } from '../services/collaborationService';
+import { useStore, registerExternalStoreReloader } from './useStore';
+import { updateTodayWidget } from '../widgets/widgetUpdater';
+import { registerWidgetStoreCallbacks } from '../services/widgetService';
+import { registerSyncStoreHandlers } from '../services/syncService';
 
 interface EventsState {
     events: CalendarEvent[];
@@ -16,12 +19,16 @@ interface EventsState {
     loadEventsForDate: (date: Date) => Promise<void>;
     setSelectedDate: (date: Date) => void;
     createEvent: (input: CreateEventInput) => Promise<CalendarEvent | null>;
-    updateEvent: (id: string, updates: Partial<CalendarEvent>) => Promise<void>;
+    updateEvent: (id: string, updates: Partial<CalendarEvent>, tagNames?: string[]) => Promise<void>;
     deleteEvent: (id: string) => Promise<void>;
     deleteEventOccurrence: (id: string, occurrenceDate: Date, mode: 'this' | 'following' | 'all') => Promise<void>;
     linkNoteToEvent: (eventId: string, noteId: string) => Promise<void>;
-    unlinkNoteFromEvent: (eventId: string) => Promise<void>;
+    unlinkNoteFromEvent: (eventId: string, noteId?: string) => Promise<void>;
+    linkFolderToEvent: (eventId: string, folderId: string) => Promise<void>;
+    unlinkFolderFromEvent: (eventId: string) => Promise<void>;
 }
+
+let loadAllEventsInFlight: Promise<void> | null = null;
 
 export const useEventsStore = create<EventsState>((set, get) => ({
     events: [],
@@ -37,18 +44,25 @@ export const useEventsStore = create<EventsState>((set, get) => ({
     },
 
     loadAllEvents: async () => {
+        if (loadAllEventsInFlight) {
+            return loadAllEventsInFlight;
+        }
         if (get().events.length === 0) {
             set({ isLoading: true });
         }
-        try {
-            const events = await EventService.getAllEvents(false);
-            set({ events, isEventsDirty: false, isLoading: false });
-            WidgetService.syncAgenda(undefined, events).catch(() => {});
-            WidgetService.syncSchedule().catch(() => {});
-        } catch (error) {
-            console.error('[useEventsStore] Failed to load all events:', error);
-            set({ isLoading: false });
-        }
+        loadAllEventsInFlight = (async () => {
+            try {
+                const events = await EventService.getAllEvents(false);
+                set({ events, isEventsDirty: false, isLoading: false });
+                updateTodayWidget(undefined, events).catch(() => {});
+            } catch (error) {
+                console.error('[useEventsStore] Failed to load all events:', error);
+                set({ isLoading: false });
+            } finally {
+                loadAllEventsInFlight = null;
+            }
+        })();
+        return loadAllEventsInFlight;
     },
 
     loadEventsForDate: async (date: Date) => {
@@ -92,7 +106,7 @@ export const useEventsStore = create<EventsState>((set, get) => ({
         }
     },
 
-    updateEvent: async (id: string, updates: Partial<CalendarEvent>) => {
+    updateEvent: async (id: string, updates: Partial<CalendarEvent>, tagNames?: string[]) => {
         try {
             const currentEvent = get().events.find(e => e.id === id);
             if (currentEvent?.notification_ids) {
@@ -100,17 +114,15 @@ export const useEventsStore = create<EventsState>((set, get) => ({
             }
 
             if (currentEvent && (currentEvent.is_shared === 1 || currentEvent.shared_owner_id)) {
-                import('../services/collaborationService').then(({ CollaborationService }) => {
-                    CollaborationService.notifyChange({
-                        targetType: 'event',
-                        targetId: currentEvent.id,
-                        action: 'edited',
-                        itemTitle: updates.title || currentEvent.title || 'Evento',
-                    }).catch(() => {});
+                CollaborationService.notifyChange({
+                    targetType: 'event',
+                    targetId: currentEvent.id,
+                    action: 'edited',
+                    itemTitle: updates.title || currentEvent.title || 'Evento',
                 }).catch(() => {});
             }
 
-            await EventService.updateEvent(id, updates);
+            await EventService.updateEvent(id, updates, tagNames);
             const updated = await EventService.getEventById(id);
 
             if (updated) {
@@ -141,13 +153,11 @@ export const useEventsStore = create<EventsState>((set, get) => ({
             }
 
             if (event && (event.is_shared === 1 || event.shared_owner_id)) {
-                import('../services/collaborationService').then(({ CollaborationService }) => {
-                    CollaborationService.notifyChange({
-                        targetType: 'event',
-                        targetId: event.id,
-                        action: 'deleted',
-                        itemTitle: event.title || 'Evento',
-                    }).catch(() => {});
+                CollaborationService.notifyChange({
+                    targetType: 'event',
+                    targetId: event.id,
+                    action: 'deleted',
+                    itemTitle: event.title || 'Evento',
                 }).catch(() => {});
             }
 
@@ -182,6 +192,8 @@ export const useEventsStore = create<EventsState>((set, get) => ({
             await EventService.linkNoteToEvent(eventId, noteId);
             await get().loadAllEvents();
             await get().loadEventsForDate(get().selectedDate);
+            const { useNotesStore } = await import('./useNotesStore');
+            await useNotesStore.getState().loadNotes();
             if (useStore.getState().session?.user?.id && useStore.getState().cloudSyncEnabled) {
                 useStore.getState().triggerSync();
             }
@@ -190,16 +202,55 @@ export const useEventsStore = create<EventsState>((set, get) => ({
         }
     },
 
-    unlinkNoteFromEvent: async (eventId: string) => {
+    unlinkNoteFromEvent: async (eventId: string, noteId?: string) => {
         try {
-            await EventService.unlinkNoteFromEvent(eventId);
+            await EventService.unlinkNoteFromEvent(eventId, noteId);
             await get().loadAllEvents();
             await get().loadEventsForDate(get().selectedDate);
+            const { useNotesStore } = await import('./useNotesStore');
+            await useNotesStore.getState().loadNotes();
             if (useStore.getState().session?.user?.id && useStore.getState().cloudSyncEnabled) {
                 useStore.getState().triggerSync();
             }
         } catch (error) {
             console.error('[useEventsStore] Failed to unlink note from event:', error);
         }
+    },
+
+    linkFolderToEvent: async (eventId: string, folderId: string) => {
+        try {
+            await EventService.linkFolderToEvent(eventId, folderId);
+            await get().loadAllEvents();
+            await get().loadEventsForDate(get().selectedDate);
+            if (useStore.getState().session?.user?.id && useStore.getState().cloudSyncEnabled) {
+                useStore.getState().triggerSync();
+            }
+        } catch (error) {
+            console.error('[useEventsStore] Failed to link folder to event:', error);
+        }
+    },
+
+    unlinkFolderFromEvent: async (eventId: string) => {
+        try {
+            await EventService.unlinkFolderFromEvent(eventId);
+            await get().loadAllEvents();
+            await get().loadEventsForDate(get().selectedDate);
+            if (useStore.getState().session?.user?.id && useStore.getState().cloudSyncEnabled) {
+                useStore.getState().triggerSync();
+            }
+        } catch (error) {
+            console.error('[useEventsStore] Failed to unlink folder from event:', error);
+        }
     }
 }));
+
+registerWidgetStoreCallbacks({
+    getEvents: () => useEventsStore.getState().events,
+});
+
+registerSyncStoreHandlers({
+    loadAllEvents: () => useEventsStore.getState().loadAllEvents(),
+});
+
+registerExternalStoreReloader(() => useEventsStore.getState().loadAllEvents());
+

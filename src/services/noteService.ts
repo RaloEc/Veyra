@@ -1,23 +1,20 @@
 import { withDB } from '../db';
 import { Note, NoteSyncMode } from '../types/db';
 import * as Crypto from 'expo-crypto';
+import { WidgetService } from './widgetService';
+import { SearchService } from './searchService';
+import { computeNotePreviewText } from '../utils/pageUtils';
 
 function triggerNotesWidgetSync() {
-    import('./widgetService').then(({ WidgetService }) => {
-        WidgetService.syncNotes().catch(() => {});
-    }).catch(() => {});
+    WidgetService.syncNotes().catch(() => {});
 }
 
 function triggerSearchIndex(note: Note) {
-    import('./searchService').then(({ SearchService }) => {
-        SearchService.indexNote(note).catch(() => {});
-    }).catch(() => {});
+    SearchService.indexNote(note).catch(() => {});
 }
 
 function triggerSearchRemove(id: string) {
-    import('./searchService').then(({ SearchService }) => {
-        SearchService.removeItem('note', id).catch(() => {});
-    }).catch(() => {});
+    SearchService.removeItem('note', id).catch(() => {});
 }
 
 export const NoteService = {
@@ -38,6 +35,7 @@ export const NoteService = {
         return withDB(async (db) => {
             const id = Crypto.randomUUID();
             const now = Date.now();
+            const previewText = content ? computeNotePreviewText(content) : null;
 
             const newNote: Note = {
                 id,
@@ -46,6 +44,7 @@ export const NoteService = {
                 event_id: eventId || null,
                 title,
                 content,
+                preview_text: previewText,
                 created_at_ms: now,
                 updated_at_ms: now,
                 is_pinned: isPinned ? 1 : 0,
@@ -53,6 +52,7 @@ export const NoteService = {
                 links,
                 deleted: 0,
                 last_modified_ms: now,
+                last_opened_ms: now,
                 font_family: fontFamily || 'sans',
                 is_shared: isShared,
                 shared_owner_id: sharedOwnerId || undefined,
@@ -60,9 +60,9 @@ export const NoteService = {
             };
 
             await db.runAsync(
-                `INSERT INTO notes (id, user_id, folder_id, event_id, title, content, created_at_ms, updated_at_ms, is_pinned, attachments, links, deleted, last_modified_ms, font_family, is_shared, shared_owner_id, sync_mode)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                [id, userId || null, folderId || null, eventId || null, title || null, content || null, now, now, isPinned ? 1 : 0, attachments || null, links || null, 0, now, fontFamily || 'sans', isShared, sharedOwnerId || null, syncMode]
+                `INSERT INTO notes (id, user_id, folder_id, event_id, title, content, created_at_ms, updated_at_ms, is_pinned, attachments, links, deleted, last_modified_ms, font_family, is_shared, shared_owner_id, sync_mode, preview_text, last_opened_ms)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                [id, userId || null, folderId || null, eventId || null, title || null, content || null, now, now, isPinned ? 1 : 0, attachments || null, links || null, 0, now, fontFamily || 'sans', isShared, sharedOwnerId || null, syncMode, previewText, now]
             );
 
             if (eventId) {
@@ -88,20 +88,43 @@ export const NoteService = {
                 [folderId || null, now, now, ...ids]
             );
             triggerNotesWidgetSync();
+            ids.forEach(id => {
+                NoteService.getNoteById(id).then(n => n && triggerSearchIndex(n)).catch(() => {});
+            });
         });
     },
 
     async getNotes(includeDeleted: boolean = false): Promise<Note[]> {
         return withDB(async (db) => {
-            if (includeDeleted) {
-                return await db.getAllAsync<Note>(
-                    `SELECT * FROM notes ORDER BY is_pinned DESC, updated_at_ms DESC`
-                );
-            } else {
-                return await db.getAllAsync<Note>(
-                    `SELECT * FROM notes WHERE deleted = 0 ORDER BY is_pinned DESC, updated_at_ms DESC`
-                );
+            const rows = includeDeleted
+                ? await db.getAllAsync<Note>(`SELECT * FROM notes ORDER BY is_pinned DESC, updated_at_ms DESC`)
+                : await db.getAllAsync<Note>(`SELECT * FROM notes WHERE deleted = 0 ORDER BY is_pinned DESC, updated_at_ms DESC`);
+
+            // Si alguna nota activa aún no tiene preview_text calculado, lo generamos en memoria
+            // y lo persistimos asíncronamente en segundo plano para acelerar todos los renders posteriores.
+            const missingPreviews: Array<{ id: string; preview: string }> = [];
+            for (const note of rows) {
+                if ((note.preview_text === null || note.preview_text === undefined) && note.content) {
+                    const computed = computeNotePreviewText(note.content);
+                    note.preview_text = computed;
+                    missingPreviews.push({ id: note.id, preview: computed });
+                }
             }
+
+            if (missingPreviews.length > 0) {
+                setTimeout(() => {
+                    withDB(async (bgDb) => {
+                        for (const item of missingPreviews) {
+                            await bgDb.runAsync(
+                                `UPDATE notes SET preview_text = ? WHERE id = ? AND preview_text IS NULL`,
+                                [item.preview, item.id]
+                            );
+                        }
+                    }).catch(() => {});
+                }, 50);
+            }
+
+            return rows;
         });
     },
 
@@ -123,16 +146,31 @@ export const NoteService = {
         });
     },
 
+    async markNoteOpened(id: string): Promise<void> {
+        return withDB(async (db) => {
+            const now = Date.now();
+            await db.runAsync(
+                `UPDATE notes SET last_opened_ms = ? WHERE id = ?`,
+                [now, id]
+            );
+        });
+    },
+
     async updateNote(
         id: string,
         updates: Partial<Note>
     ): Promise<void> {
         return withDB(async (db) => {
             const now = Date.now();
+            const effectiveUpdates: Partial<Note> = { ...updates };
+            if (effectiveUpdates.content !== undefined && effectiveUpdates.preview_text === undefined) {
+                effectiveUpdates.preview_text = computeNotePreviewText(effectiveUpdates.content);
+            }
+
             const sets: string[] = [];
             const params: any[] = [];
 
-            Object.entries(updates).forEach(([key, value]) => {
+            Object.entries(effectiveUpdates).forEach(([key, value]) => {
                 if (key !== 'id' && key !== 'created_at_ms') {
                     sets.push(`${key} = ?`);
                     params.push(value);
@@ -188,6 +226,9 @@ export const NoteService = {
                 params
             );
             triggerNotesWidgetSync();
+            ids.forEach(id => {
+                NoteService.getNoteById(id).then(n => n && triggerSearchIndex(n)).catch(() => {});
+            });
         });
     },
 

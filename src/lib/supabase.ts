@@ -1,4 +1,5 @@
 import 'react-native-url-polyfill/auto';
+import { AppState } from 'react-native';
 import { createClient } from '@supabase/supabase-js';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
@@ -12,4 +13,15 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
         persistSession: true,
         detectSessionInUrl: false,
     },
+});
+
+// Manejo oficial de AppState recomendado por Supabase para React Native:
+// Pausa el auto-refresh cuando la app entra en segundo plano y lo reanuda al volver al primer plano,
+// evitando conexiones TCP colgadas y deadlocks en el cliente de autenticación.
+AppState.addEventListener('change', (state) => {
+    if (state === 'active') {
+        supabase.auth.startAutoRefresh();
+    } else {
+        supabase.auth.stopAutoRefresh();
+    }
 });

@@ -11,6 +11,7 @@ interface TitleInputProps {
     isDark?: boolean;
     flat?: boolean;
     onSubmit?: () => void;
+    onBlur?: () => void;
     placeholder?: string;
     style?: any;
     inputStyle?: any;
@@ -25,6 +26,7 @@ export function TitleInput({
     isEditing,
     flat,
     onSubmit,
+    onBlur,
     placeholder,
     style,
     inputStyle,
@@ -48,6 +50,7 @@ export function TitleInput({
                 ref={titleInputRef}
                 value={title}
                 onChangeText={setTitle}
+                onBlur={onBlur}
                 placeholder={placeholder || t('create.placeholder_title')}
                 placeholderTextColor={colors.textMuted}
                 style={[

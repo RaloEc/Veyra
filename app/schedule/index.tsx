@@ -385,7 +385,7 @@ export default function ScheduleScreen() {
             return;
         }
         if (item.type === 'event') {
-            router.push({ pathname: '/events/create', params: { id: item.originalId } } as any);
+            router.push({ pathname: '/events/[id]', params: { id: item.originalId } } as any);
         } else {
             router.push(`/reminder/${item.originalId}` as any);
         }

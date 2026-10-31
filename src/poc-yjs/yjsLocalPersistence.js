@@ -114,8 +114,11 @@ class YjsLocalPersistence {
       [docId]
     );
     for (const row of updates) {
-      const updateBytes = base64ToBytes(row.updateData);
-      Y.applyUpdate(doc, updateBytes, "sqlite-load");
+      const rawData = row.update_data || row.updateData;
+      if (rawData) {
+        const updateBytes = base64ToBytes(rawData);
+        Y.applyUpdate(doc, updateBytes, "sqlite-load");
+      }
     }
     return {
       doc,
@@ -127,10 +130,17 @@ class YjsLocalPersistence {
    * Obtiene los deltas locales que aún no han sido confirmados por Supabase.
    */
   async getPendingLocalUpdates(docId) {
-    return await this.db.getAllAsync(
+    const rows = await this.db.getAllAsync(
       `SELECT id, doc_id, update_data, synced, created_at_ms FROM yjs_note_updates WHERE doc_id = ? AND synced = 0 ORDER BY id ASC`,
       [docId]
     );
+    return (rows || []).map(r => ({
+      id: r.id,
+      docId: r.doc_id || r.docId,
+      updateData: r.update_data || r.updateData,
+      synced: r.synced,
+      createdAtMs: r.created_at_ms || r.createdAtMs,
+    }));
   }
   /**
    * Marca un conjunto de IDs de actualización como sincronizados en el servidor.

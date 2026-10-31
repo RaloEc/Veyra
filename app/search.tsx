@@ -43,6 +43,7 @@ import {
     SearchFilterCategory,
     SearchEntityType,
     normalizeSearchText,
+    buildDiacriticRegexPattern,
 } from '../src/services/searchService';
 import { useStore } from '../src/store/useStore';
 
@@ -83,8 +84,11 @@ const HighlightedText: React.FC<HighlightedTextProps> = React.memo(({
     highlightStyle,
     numberOfLines,
 }) => {
-    if (!text || !terms || terms.length === 0) {
-        return <Text style={style} numberOfLines={numberOfLines}>{text || ''}</Text>;
+    if (!text) {
+        return <Text style={style} numberOfLines={numberOfLines} />;
+    }
+    if (!terms || terms.length === 0) {
+        return <Text style={style} numberOfLines={numberOfLines}>{text}</Text>;
     }
 
     const cleanTerms = terms.map(t => normalizeSearchText(t)).filter(t => t.length > 0);
@@ -92,19 +96,19 @@ const HighlightedText: React.FC<HighlightedTextProps> = React.memo(({
         return <Text style={style} numberOfLines={numberOfLines}>{text}</Text>;
     }
 
-    // Normalizar texto para ubicar índices
-    const normText = normalizeSearchText(text);
-
-    // Encontrar todas las ocurrencias y fusionar intervalos
+    // Encontrar todas las ocurrencias directamente en el texto original preservando índices exactos
     const intervals: [number, number][] = [];
     for (const term of cleanTerms) {
-        let start = 0;
-        while (start < normText.length) {
-            const idx = normText.indexOf(term, start);
-            if (idx === -1) break;
-            intervals.push([idx, idx + term.length]);
-            start = idx + term.length;
-        }
+        const pattern = buildDiacriticRegexPattern(term);
+        if (!pattern) continue;
+        try {
+            const regex = new RegExp(pattern, 'gi');
+            let match: RegExpExecArray | null;
+            while ((match = regex.exec(text)) !== null) {
+                intervals.push([match.index, match.index + match[0].length]);
+                if (match[0].length === 0) break;
+            }
+        } catch {}
     }
 
     if (intervals.length === 0) {
@@ -124,7 +128,7 @@ const HighlightedText: React.FC<HighlightedTextProps> = React.memo(({
         }
     }
 
-    // Reconstruir los chunks usando el texto original
+    // Reconstruir los chunks usando el texto original exactamente en sus posiciones reales
     const elements: React.ReactNode[] = [];
     let curIndex = 0;
 
@@ -278,7 +282,7 @@ export default function SearchScreen() {
 
             case 'event':
                 router.push({
-                    pathname: '/events/create',
+                    pathname: '/events/[id]',
                     params: { id: item.id },
                 });
                 break;
@@ -299,11 +303,17 @@ export default function SearchScreen() {
 
             case 'attachment':
                 if (item.parentId) {
-                    // Si el padre es recordatorio o nota
-                    router.push({
-                        pathname: '/notes/[id]',
-                        params: { id: item.parentId },
-                    });
+                    if (item.meta?.parentType === 'reminder') {
+                        router.push({
+                            pathname: '/reminder/[id]',
+                            params: { id: item.parentId },
+                        });
+                    } else {
+                        router.push({
+                            pathname: '/notes/[id]',
+                            params: { id: item.parentId },
+                        });
+                    }
                 }
                 break;
 
@@ -487,7 +497,7 @@ export default function SearchScreen() {
     ];
 
     return (
-        <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]} edges={['top']}>
+        <SafeAreaView style={[styles.container, { backgroundColor: colors.bg }]} edges={['top']}>
             {/* Barra Superior de Búsqueda */}
             <View style={styles.header}>
                 <TouchableOpacity

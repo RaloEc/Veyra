@@ -583,7 +583,7 @@ export default function CollaborationManagementScreen() {
                                                 !isLast && { borderBottomColor: colors.borderSubtle, borderBottomWidth: StyleSheet.hairlineWidth },
                                             ]}
                                         >
-                                            <View style={[styles.memberAvatar, { backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)' }]}>
+                                            <View style={[styles.memberAvatar, { backgroundColor: colors.borderSubtle }]}>
                                                 <Text style={[styles.memberAvatarInitial, { color: colors.textPrimary }]}>
                                                     {initial}
                                                 </Text>

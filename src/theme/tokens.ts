@@ -113,6 +113,31 @@ export const VEYRA_TOKENS = {
             glassBorder: 'rgba(255, 255, 255, 0.09)',
             glassBackdrop: 'rgba(0, 0, 0, 0.65)',
         },
+        amoled: {
+            // Background & Surfaces (Pure black #000000 for OLED power saving & contrast)
+            bg: '#000000',
+            navBar: '#000000',
+            surface: '#121212',
+            surfaceElevated: '#181818',
+            surfaceCard: '#121212',
+            surfaceHover: '#1A1A1A',
+
+            // Borders (Subtle 1px boundaries on pure black)
+            borderSubtle: 'rgba(255, 255, 255, 0.12)',
+            borderMedium: 'rgba(255, 255, 255, 0.18)',
+            borderStrong: 'rgba(255, 255, 255, 0.26)',
+
+            // Typography
+            textPrimary: '#F4F4F5',
+            textSecondary: '#A1A1AA',
+            textMuted: '#71717A',
+            textInverse: '#000000',
+
+            // Glass Surfaces (Contextual / Overlays on pure black)
+            glassBg: 'rgba(255, 255, 255, 0.06)',
+            glassBorder: 'rgba(255, 255, 255, 0.12)',
+            glassBackdrop: 'rgba(0, 0, 0, 0.75)',
+        },
         light: {
             // Background & Surfaces (Solid Core based on #FFFFFF)
             bg: '#FFFFFF',
@@ -194,3 +219,25 @@ export const VEYRA_TOKENS = {
 export type VeyraRadii = keyof typeof VEYRA_TOKENS.radii;
 export type VeyraSpacing = keyof typeof VEYRA_TOKENS.spacing;
 export type ControlLevelType = 'normal' | 'strict' | 'critical';
+
+export interface VeyraPalette {
+    bg: string;
+    navBar: string;
+    surface: string;
+    surfaceElevated: string;
+    surfaceCard: string;
+    surfaceHover: string;
+
+    borderSubtle: string;
+    borderMedium: string;
+    borderStrong: string;
+
+    textPrimary: string;
+    textSecondary: string;
+    textMuted: string;
+    textInverse: string;
+
+    glassBg: string;
+    glassBorder: string;
+    glassBackdrop: string;
+}

@@ -14,8 +14,9 @@ import {
     Vibration,
     useWindowDimensions,
     Image as RNImage,
+    BackHandler,
 } from 'react-native';
-import { AudioModule, useAudioRecorder, RecordingPresets } from 'expo-audio';
+import { AudioModule, RecordingPresets } from 'expo-audio';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
@@ -73,6 +74,7 @@ import {
     FileText,
     Trash2,
     Folder as FolderIcon,
+    FolderPlus,
     User,
     Search,
 } from '@tamagui/lucide-icons';
@@ -88,6 +90,7 @@ import { useAIQuickAdd } from '../../hooks/useAIQuickAdd';
 import { AIActionProposal, ReminderIntent, EventIntent, NoteIntent } from '../../lib/ai/schemas';
 import { CustomDateTimePicker } from '../CustomDateTimePicker';
 import { UserMenuMorphCard } from './UserMenuMorphCard';
+import { FolderCreateMorphCard } from '../notes/FolderCreateMorphCard';
 
 /**
  * BottomTabBar — Barra de navegación inferior flotante inspirada en Samsung One UI.
@@ -184,7 +187,7 @@ function BottomTabBarComponent() {
     const pathname = usePathname();
     const { bottom: bottomInset } = useScreenInsets();
     const { t } = useTranslation();
-    const { colors, accent, isDark } = useVeyraTheme();
+    const { colors, accent, isDark, isAmoled } = useVeyraTheme();
 
     const language = useStore(state => state.language);
     const mainActiveTab = useStore(state => state.mainActiveTab);
@@ -250,8 +253,8 @@ function BottomTabBarComponent() {
     const bottomOffset = Math.max(bottomInset + 20, 32);
 
     // Colores One UI para la píldora flotante
-    const dockBg = isDark ? '#202227' : '#FFFFFF';
-    const dockBorder = isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.06)';
+    const dockBg = isDark ? (isAmoled ? colors.surfaceCard : '#202227') : '#FFFFFF';
+    const dockBorder = colors.borderSubtle;
     const activePillBg = isDark ? `${accent.primary}2A` : `${accent.primary}18`;
 
     // Selección global para morphear el dock a selección múltiple
@@ -273,6 +276,37 @@ function BottomTabBarComponent() {
     useEffect(() => {
         isMenuOpenShared.value = isMenuOpen;
     }, [isMenuOpen]);
+
+    // Estado del modo Creación/Edición de Carpetas (Morph del Dock)
+    const isFolderMorphOpen = useFoldersStore((state) => state.isFolderMorphOpen);
+    const folderMorphParent = useFoldersStore((state) => state.folderMorphParent);
+    const folderMorphEdit = useFoldersStore((state) => state.folderMorphEdit);
+    const folderMorphProgress = useSharedValue(0);
+    const isFolderMorphOpenShared = useSharedValue(false);
+
+    useEffect(() => {
+        isFolderMorphOpenShared.value = isFolderMorphOpen;
+        if (isFolderMorphOpen) {
+            if (isCreating) closeCreate();
+            if (isMenuOpen) closeMenu();
+            if (isSharingEvents) useShareEventsStore.getState().closeShare();
+            folderMorphProgress.value = withSpring(1, {
+                damping: 19,
+                stiffness: 220,
+                mass: 0.8,
+            });
+            backdropOpacity.value = withTiming(1, { duration: 180, easing: Easing.out(Easing.cubic) });
+        } else {
+            folderMorphProgress.value = withSpring(0, {
+                damping: 20,
+                stiffness: 240,
+                mass: 0.8,
+            });
+            if (!isCreating && !isMenuOpen && !isSharingEvents) {
+                backdropOpacity.value = withTiming(0, { duration: 160, easing: Easing.in(Easing.cubic) });
+            }
+        }
+    }, [isFolderMorphOpen]);
 
     // Estado del modo Creación (Morph del Dock)
     const [isCreating, setIsCreating] = useState(false);
@@ -313,6 +347,7 @@ function BottomTabBarComponent() {
     const voiceModeRef = useRef<'speech' | 'audio'>('speech');
     const inputRef = useRef<TextInput>(null);
     const isKeyboardVisibleRef = useRef(false);
+    const isFocusedRef = useRef(true);
 
     // Eventos de Speech-to-Text nativo en tiempo real (Opción 1)
     useSpeechRecognitionEvent('result', (ev) => {
@@ -335,24 +370,42 @@ function BottomTabBarComponent() {
         setIsRecording(false);
     });
 
-    // Configuración ligera y mono optimizada para voz humana
-    const audioRecorder = useAudioRecorder({
-        extension: '.m4a',
-        sampleRate: 16000,
-        numberOfChannels: 1,
-        bitRate: 32000,
-        android: {
-            outputFormat: 'mpeg4',
-            audioEncoder: 'aac',
-        },
-        ios: {
-            outputFormat: 'mpeg4aac',
-            audioQuality: 0x20,
-            linearPCMBitDepth: 16,
-            linearPCMIsBigEndian: false,
-            linearPCMIsFloat: false,
-        },
-    } as any);
+    // Grabador de audio con inicialización diferida para evitar errores de actividad no disponible al recargar
+    const audioRecorderRef = useRef<any>(null);
+
+    const getOrCreateAudioRecorder = useCallback(() => {
+        if (!audioRecorderRef.current && AudioModule?.AudioRecorder) {
+            audioRecorderRef.current = new AudioModule.AudioRecorder({
+                extension: '.m4a',
+                sampleRate: 16000,
+                numberOfChannels: 1,
+                bitRate: 32000,
+                android: {
+                    outputFormat: 'mpeg4',
+                    audioEncoder: 'aac',
+                },
+                ios: {
+                    outputFormat: 'mpeg4aac',
+                    audioQuality: 0x20,
+                    linearPCMBitDepth: 16,
+                    linearPCMIsBigEndian: false,
+                    linearPCMIsFloat: false,
+                },
+            } as any);
+        }
+        return audioRecorderRef.current;
+    }, []);
+
+    useEffect(() => {
+        return () => {
+            if (audioRecorderRef.current) {
+                try {
+                    audioRecorderRef.current.release();
+                } catch (_) {}
+                audioRecorderRef.current = null;
+            }
+        };
+    }, []);
 
     // AI Quick Add Hook
     const {
@@ -515,12 +568,24 @@ function BottomTabBarComponent() {
         const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
 
         const showSub = Keyboard.addListener(showEvent, (e) => {
+            // Si la pantalla que contiene este dock NO está enfocada (está en segundo plano en el stack),
+            // ignorar por completo el evento de teclado de la pantalla hija
+            if (!isFocusedRef.current) {
+                return;
+            }
+
+            // Solo desplazarse si el dock mismo está en modo interactivo que requiere teclado (Creación o Carpeta)
+            if (!isCreatingShared.value && !isFolderMorphOpenShared.value) {
+                return;
+            }
+
             isKeyboardVisibleRef.current = true;
             keyboardOffset.value = withTiming(e.endCoordinates.height - (Platform.OS === 'android' ? 8 : 0), {
                 duration: 250,
                 easing: Easing.out(Easing.cubic),
             });
         });
+
         const hideSub = Keyboard.addListener(hideEvent, () => {
             isKeyboardVisibleRef.current = false;
             keyboardOffset.value = withTiming(0, {
@@ -533,7 +598,7 @@ function BottomTabBarComponent() {
             showSub.remove();
             hideSub.remove();
         };
-    }, []);
+    }, [keyboardOffset, isCreatingShared, isFolderMorphOpenShared]);
 
     // Resetear el desplazamiento del teclado si la pantalla recupera el foco o se navega fuera
     const resetKeyboardOffset = useCallback((immediate = false) => {
@@ -550,18 +615,42 @@ function BottomTabBarComponent() {
 
     useFocusEffect(
         useCallback(() => {
-            // Al volver de otra pantalla (ej. de una nota al buscador)
-            // Si el teclado nativo ya no está visible, resetear el dock al fondo de inmediato
-            const isVisible = typeof Keyboard.isVisible === 'function' ? Keyboard.isVisible() : false;
-            if (!isVisible) {
+            isFocusedRef.current = true;
+
+            // Al volver de cualquier otra pantalla (ej. de una nota, evento, recordatorio o modal):
+            // Si NO estamos activamente en modo creación o carpeta dentro del dock, SIEMPRE
+            // restablecer el desplazamiento del teclado a 0 de inmediato.
+            if (!isCreatingShared.value && !isFolderMorphOpenShared.value) {
                 resetKeyboardOffset(true);
+            } else {
+                const isVisible = typeof Keyboard.isVisible === 'function' ? Keyboard.isVisible() : false;
+                if (!isVisible) {
+                    resetKeyboardOffset(true);
+                }
             }
 
+            // Temporizadores de seguridad (100ms y 250ms) para garantizar que en Android, si la transición
+            // cerró el teclado nativo en paralelo, el dock quede exactamente en su base (0).
+            const timer1 = setTimeout(() => {
+                if (!isCreatingShared.value && !isFolderMorphOpenShared.value) {
+                    resetKeyboardOffset(true);
+                }
+            }, 100);
+
+            const timer2 = setTimeout(() => {
+                if (!isCreatingShared.value && !isFolderMorphOpenShared.value) {
+                    resetKeyboardOffset(true);
+                }
+            }, 250);
+
             return () => {
-                // Al salir de la pantalla (blur)
+                isFocusedRef.current = false;
+                clearTimeout(timer1);
+                clearTimeout(timer2);
+                // Al salir de la pantalla (blur) hacia otra pantalla, resetear siempre
                 resetKeyboardOffset(true);
             };
-        }, [resetKeyboardOffset])
+        }, [resetKeyboardOffset, isCreatingShared, isFolderMorphOpenShared])
     );
 
     // Sincronizar tabs activos
@@ -709,9 +798,14 @@ function BottomTabBarComponent() {
         transform: [{ scale: recordBtnScale.value }],
     }));
 
-    const dockContainerAnimatedStyle = useAnimatedStyle(() => ({
-        bottom: bottomOffset + keyboardOffset.value,
-    }));
+    const dockContainerAnimatedStyle = useAnimatedStyle(() => {
+        // Solo aplicar elevación por teclado si el dock mismo está en un modo interactivo de entrada (Creación o Carpeta)
+        const isDockInputActive = isCreatingShared.value || isFolderMorphOpenShared.value;
+        const currentOffset = isDockInputActive ? keyboardOffset.value : 0;
+        return {
+            bottom: bottomOffset + currentOffset,
+        };
+    });
 
     // Morph dinámico del contenedor del dock
     const dockAnimatedStyle = useAnimatedStyle(() => {
@@ -719,26 +813,31 @@ function BottomTabBarComponent() {
         const pCreate = createMorphProgress.value;
         const pShare = shareMorphProgress.value;
         const pMenu = menuMorphProgress.value;
+        const pFolder = folderMorphProgress.value;
 
         // Ancho
         const widthCreate = interpolate(pCreate, [0, 1], [normalDockWidth, morphedDockWidth], Extrapolation.CLAMP);
         const widthSel = interpolate(pSel, [0, 1], [widthCreate, morphedDockWidth], Extrapolation.CLAMP);
         const widthShare = interpolate(pShare, [0, 1], [widthSel, morphedDockWidth], Extrapolation.CLAMP);
-        const finalWidth = interpolate(pMenu, [0, 1], [widthShare, morphedDockWidth], Extrapolation.CLAMP);
+        const widthMenu = interpolate(pMenu, [0, 1], [widthShare, morphedDockWidth], Extrapolation.CLAMP);
+        const finalWidth = interpolate(pFolder, [0, 1], [widthMenu, morphedDockWidth], Extrapolation.CLAMP);
 
         // Alto
         const shareCardHeight = Math.min(screenHeight - bottomOffset - 36, 400);
         const menuCardHeight = Math.min(screenHeight - bottomOffset - 36, session ? 334 : 310);
+        const folderCardHeight = Math.min(screenHeight - bottomOffset - 36, 410);
         const heightCreate = interpolate(pCreate, [0, 1], [56, createHeightShared.value], Extrapolation.CLAMP);
         const heightSel = interpolate(pSel, [0, 1], [heightCreate, 108], Extrapolation.CLAMP);
         const heightShare = interpolate(pShare, [0, 1], [heightSel, shareCardHeight], Extrapolation.CLAMP);
-        const finalHeight = interpolate(pMenu, [0, 1], [heightShare, menuCardHeight], Extrapolation.CLAMP);
+        const heightMenu = interpolate(pMenu, [0, 1], [heightShare, menuCardHeight], Extrapolation.CLAMP);
+        const finalHeight = interpolate(pFolder, [0, 1], [heightMenu, folderCardHeight], Extrapolation.CLAMP);
 
         // Radio de borde
         const radiusCreate = interpolate(pCreate, [0, 1], [28, 22], Extrapolation.CLAMP);
         const radiusSel = interpolate(pSel, [0, 1], [radiusCreate, 22], Extrapolation.CLAMP);
         const radiusShare = interpolate(pShare, [0, 1], [radiusSel, 24], Extrapolation.CLAMP);
-        const finalRadius = interpolate(pMenu, [0, 1], [radiusShare, 24], Extrapolation.CLAMP);
+        const radiusMenu = interpolate(pMenu, [0, 1], [radiusShare, 24], Extrapolation.CLAMP);
+        const finalRadius = interpolate(pFolder, [0, 1], [radiusMenu, 24], Extrapolation.CLAMP);
 
         return {
             width: finalWidth,
@@ -749,8 +848,8 @@ function BottomTabBarComponent() {
 
     // Navegación normal (Tabs)
     const normalTabsAnimatedStyle = useAnimatedStyle(() => {
-        const p = Math.max(morphProgress.value, createMorphProgress.value, shareMorphProgress.value, menuMorphProgress.value);
-        const shouldHide = p >= 0.35 || isCreatingShared.value || isSharingEvents || isMenuOpenShared.value;
+        const p = Math.max(morphProgress.value, createMorphProgress.value, shareMorphProgress.value, menuMorphProgress.value, folderMorphProgress.value);
+        const shouldHide = p >= 0.35 || isCreatingShared.value || isSharingEvents || isMenuOpenShared.value || isFolderMorphOpenShared.value;
         return {
             opacity: interpolate(p, [0, 0.35], [1, 0], Extrapolation.CLAMP),
             display: shouldHide ? 'none' : 'flex',
@@ -798,6 +897,21 @@ function BottomTabBarComponent() {
             opacity: interpolate(p, [0.25, 1], [0, 1], Extrapolation.CLAMP),
             display: isVisible ? 'flex' : 'none',
             zIndex: isVisible ? 14 : -1,
+            transform: [
+                { scale: interpolate(p, [0.25, 1], [0.93, 1], Extrapolation.CLAMP) },
+                { translateY: interpolate(p, [0.25, 1], [8, 0], Extrapolation.CLAMP) },
+            ],
+        };
+    });
+
+    // Tarjeta de Creación/Edición de Carpeta Morpheada
+    const folderCardAnimatedStyle = useAnimatedStyle(() => {
+        const p = folderMorphProgress.value;
+        const isVisible = p > 0.05 || isFolderMorphOpenShared.value;
+        return {
+            opacity: interpolate(p, [0.25, 1], [0, 1], Extrapolation.CLAMP),
+            display: isVisible ? 'flex' : 'none',
+            zIndex: isVisible ? 15 : -1,
             transform: [
                 { scale: interpolate(p, [0.25, 1], [0.93, 1], Extrapolation.CLAMP) },
                 { translateY: interpolate(p, [0.25, 1], [8, 0], Extrapolation.CLAMP) },
@@ -865,7 +979,7 @@ function BottomTabBarComponent() {
             if (voiceModeRef.current === 'speech' && ExpoSpeechRecognitionModule) {
                 try { ExpoSpeechRecognitionModule.stop(); } catch {}
             } else {
-                try { await audioRecorder.stop(); } catch {}
+                try { await audioRecorderRef.current?.stop(); } catch {}
             }
             setIsRecording(false);
         }
@@ -874,6 +988,7 @@ function BottomTabBarComponent() {
         // Limpieza de estado síncrona inmediata para garantizar sincronía total y evitar bugs visuales
         isCreatingShared.value = false;
         setIsCreating(false);
+        resetKeyboardOffset(true);
         setInputPrompt('');
         setPendingAttachments([]);
         cancelProposal();
@@ -885,6 +1000,29 @@ function BottomTabBarComponent() {
         backdropOpacity.value = withTiming(0, { duration: 140, easing: Easing.in(Easing.cubic) });
         fabRotateProgress.value = withTiming(0, { duration: 160, easing: Easing.out(Easing.cubic) });
     };
+
+    // Manejador del botón físico Atrás (Android) para cerrar los morphs interactivos del dock
+    useFocusEffect(
+        useCallback(() => {
+            const onBack = () => {
+                if (isCreating) {
+                    closeCreate();
+                    return true;
+                }
+                if (isMenuOpen) {
+                    closeMenu();
+                    return true;
+                }
+                if (isFolderMorphOpen) {
+                    useFoldersStore.getState().closeFolderMorph();
+                    return true;
+                }
+                return false;
+            };
+            const backSub = BackHandler.addEventListener('hardwareBackPress', onBack);
+            return () => backSub.remove();
+        }, [isCreating, isMenuOpen, isFolderMorphOpen])
+    );
 
     const handleFabPress = () => {
         if (isCreating) {
@@ -1600,9 +1738,12 @@ function BottomTabBarComponent() {
             }
 
             voiceModeRef.current = 'audio';
-            await audioRecorder.prepareToRecordAsync();
-            audioRecorder.record();
-            setIsRecording(true);
+            const recorder = getOrCreateAudioRecorder();
+            if (recorder) {
+                await recorder.prepareToRecordAsync();
+                recorder.record();
+                setIsRecording(true);
+            }
         } catch (err: any) {
             console.error('[Voice] Error al iniciar grabación fallback:', err);
             recordBtnScale.value = withSpring(1);
@@ -1635,7 +1776,7 @@ function BottomTabBarComponent() {
             if (voiceModeRef.current === 'speech' && ExpoSpeechRecognitionModule) {
                 try { ExpoSpeechRecognitionModule.stop(); } catch {}
             } else {
-                try { await audioRecorder.stop(); } catch {}
+                try { await audioRecorderRef.current?.stop(); } catch {}
             }
             setInputPrompt('');
             return;
@@ -1665,8 +1806,13 @@ function BottomTabBarComponent() {
         // Fallback: expo-audio
         try {
             setInputPrompt(language === 'es' ? 'Analizando audio...' : 'Analyzing audio...');
-            await audioRecorder.stop();
-            const uri = audioRecorder.uri;
+            const recorder = audioRecorderRef.current;
+            if (!recorder) {
+                setInputPrompt('');
+                return;
+            }
+            await recorder.stop();
+            const uri = recorder.uri;
             if (!uri) {
                 setInputPrompt('');
                 return;
@@ -1703,9 +1849,33 @@ function BottomTabBarComponent() {
         }
     };
 
-    const handleManualNav = (route: string) => {
-        closeCreate();
-        router.push(route as any);
+    const handleManualNav = (route: string, extraParams?: Record<string, string>) => {
+        try { Vibration.vibrate(12); } catch {}
+        const cardH = Math.round(createHeightShared.value);
+        Keyboard.dismiss();
+
+        // Navegar directamente pasando el origen morph y la altura actual de la tarjeta
+        router.push({
+            pathname: route as any,
+            params: {
+                fromMorph: 'true',
+                cardHeight: String(cardH > 100 ? cardH : 165),
+                ...(extraParams || {}),
+            },
+        });
+
+        // Resetear el estado de creación en segundo plano después de que la pantalla
+        // de destino haya montado y cubierto la vista (sin animación destructiva visible)
+        setTimeout(() => {
+            setIsCreating(false);
+            isCreatingShared.value = false;
+            resetKeyboardOffset(true);
+            createMorphProgress.value = 0;
+            backdropOpacity.value = 0;
+            fabRotateProgress.value = 0;
+            setShowAttachMenu(false);
+            setExpandedSection('none');
+        }, 450);
     };
 
     const handleTabReminders = () => {
@@ -2539,10 +2709,12 @@ function BottomTabBarComponent() {
     return (
         <>
             {/* Backdrop oscuro translúcido para cerrar al pulsar fuera */}
-            {(isCreating || isSharingEvents || isMenuOpen) && (
+            {(isCreating || isSharingEvents || isMenuOpen || isFolderMorphOpen) && (
                 <TouchableWithoutFeedback
                     onPress={() => {
-                        if (isSharingEvents) {
+                        if (isFolderMorphOpen) {
+                            useFoldersStore.getState().closeFolderMorph();
+                        } else if (isSharingEvents) {
                             useShareEventsStore.getState().closeShare();
                         } else if (isCreating && !isLoading) {
                             closeCreate();
@@ -2584,9 +2756,9 @@ function BottomTabBarComponent() {
                         style={[
                             styles.normalNavRow,
                             normalTabsAnimatedStyle,
-                            (isCreating || Boolean(proposal) || isMenuOpen) && styles.normalNavRowHidden,
+                            (isCreating || Boolean(proposal) || isMenuOpen || isFolderMorphOpen) && styles.normalNavRowHidden,
                         ]}
-                        pointerEvents={isSelecting || isCreating || Boolean(proposal) || isMenuOpen ? 'none' : 'auto'}
+                        pointerEvents={isSelecting || isCreating || Boolean(proposal) || isMenuOpen || isFolderMorphOpen ? 'none' : 'auto'}
                     >
                         {/* 1. Tab Recordatorios */}
                         <TouchableOpacity
@@ -3580,14 +3752,10 @@ function BottomTabBarComponent() {
                                             { backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)' },
                                         ]}
                                         onPress={() => {
-                                            closeCreate();
                                             if (activeFolder) {
-                                                router.push({
-                                                    pathname: '/notes/create',
-                                                    params: { folderId: activeFolder.id },
-                                                });
+                                                handleManualNav('/notes/create', { folderId: activeFolder.id });
                                             } else {
-                                                router.push('/notes/create');
+                                                handleManualNav('/notes/create');
                                             }
                                         }}
                                         activeOpacity={0.7}
@@ -3599,6 +3767,25 @@ function BottomTabBarComponent() {
                                                 : (language === 'es' ? 'Nota' : 'Note')}
                                         </Text>
                                     </TouchableOpacity>
+
+                                    {isInsideFolder && activeFolder && (
+                                        <TouchableOpacity
+                                            style={[
+                                                styles.createManualChip,
+                                                { backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)' },
+                                            ]}
+                                            onPress={() => {
+                                                closeCreate();
+                                                useFoldersStore.getState().openFolderMorph(activeFolder, null);
+                                            }}
+                                            activeOpacity={0.7}
+                                        >
+                                            <FolderPlus size={16} color={(activeFolder.color || "#8B5CF6") as any} strokeWidth={2.4} />
+                                            <Text style={[styles.createManualChipText, { color: colors.textPrimary }]}>
+                                                {language === 'es' ? 'Subcarpeta' : 'Subfolder'}
+                                            </Text>
+                                        </TouchableOpacity>
+                                    )}
                                 </View>
                             </>
                         )}
@@ -3718,6 +3905,19 @@ function BottomTabBarComponent() {
                     >
                         <UserMenuMorphCard
                             onClose={closeMenu}
+                        />
+                    </Animated.View>
+
+                    {/* Capa 6: Tarjeta de Creación/Edición de Carpeta Morpheada */}
+                    <Animated.View
+                        style={[StyleSheet.absoluteFill, styles.userMenuContentContainer, folderCardAnimatedStyle]}
+                        pointerEvents={isFolderMorphOpen ? 'auto' : 'none'}
+                    >
+                        <FolderCreateMorphCard
+                            parentFolder={folderMorphParent}
+                            folderToEdit={folderMorphEdit}
+                            onClose={() => useFoldersStore.getState().closeFolderMorph()}
+                            onSuccess={() => useFoldersStore.getState().closeFolderMorph()}
                         />
                     </Animated.View>
                 </Animated.View>

@@ -1,11 +1,23 @@
 import { create } from 'zustand';
 import { NoteService } from '../services/noteService';
-import { Note } from '../types/db';
-import { useStore } from './useStore';
-import { WidgetService } from '../services/widgetService';
+import { Note, Folder } from '../types/db';
+import { useStore, registerExternalStoreReloader } from './useStore';
+import { WidgetService, registerWidgetStoreCallbacks } from '../services/widgetService';
 import { CollaborationService } from '../services/collaborationService';
+import { SyncService, registerSyncStoreHandlers } from '../services/syncService';
 import { computeNoteChangeDetail } from '../utils/diffNoteChanges';
 import { supabase } from '../lib/supabase';
+import { getDB } from '../db';
+import { computeNotePreviewText } from '../utils/pageUtils';
+
+let getFolderByIdCallback: ((id: string) => Folder | undefined) | null = null;
+export function registerFolderLookup(fn: (id: string) => Folder | undefined) {
+    getFolderByIdCallback = fn;
+}
+
+const sortNotesList = (notes: Note[]): Note[] => {
+    return [...notes].sort((a, b) => (b.is_pinned - a.is_pinned) || (b.updated_at_ms - a.updated_at_ms));
+};
 
 interface NotesState {
     notes: Note[];
@@ -34,9 +46,11 @@ interface NotesState {
     markNoteRevoked: (id: string, isRevoked?: boolean) => Promise<void>;
     setNoteRole: (id: string, role: string) => Promise<void>;
     checkRevokedNotes: () => Promise<void>;
+    markNoteOpened: (id: string) => Promise<void>;
 }
 
 let collabMonitorActiveUserId: string | null = null;
+let loadNotesInFlight: Promise<void> | null = null;
 
 export const useNotesStore = create<NotesState>((set, get) => ({
     notes: [],
@@ -48,54 +62,64 @@ export const useNotesStore = create<NotesState>((set, get) => ({
     selectedNotesIds: [],
 
     loadNotes: async () => {
+        if (loadNotesInFlight) {
+            return loadNotesInFlight;
+        }
         if (get().notes.length === 0) {
             set({ isLoading: true });
         }
-        try {
-            const notes = await NoteService.getNotes();
-            set({ notes, isNotesDirty: false, isLoading: false });
-            WidgetService.syncNotes(notes).catch(() => {});
 
-            // Verificar si alguna nota compartida tuvo su acceso revocado
-            get().checkRevokedNotes().catch(() => {});
+        loadNotesInFlight = (async () => {
+            try {
+                const notes = await NoteService.getNotes();
+                set({ notes, isNotesDirty: false, isLoading: false });
+                WidgetService.syncNotes(notes).catch(() => {});
 
-            // Iniciar listener en tiempo real de revocaciones para el usuario actual
-            const userId = useStore.getState().session?.user?.id;
-            if (userId && collabMonitorActiveUserId !== userId) {
-                collabMonitorActiveUserId = userId;
-                import('../lib/supabase').then(({ supabase }) => {
-                    supabase
-                        .channel(`user_collab_monitor_${userId}`)
-                        .on('broadcast', { event: 'LIVE_NOTE_CHANGE' }, ({ payload }) => {
-                            if (!payload) return;
-                            if (payload.changeType === 'PERMISSIONS_UPDATE' && payload.revoked) {
-                                if (payload.memberId && payload.memberId !== userId) {
-                                    return;
-                                }
-                                if (payload.targetId) {
-                                    const targetNote = get().notes.find(n => n.id === payload.targetId);
-                                    const isOwnNote = targetNote && (!targetNote.shared_owner_id || targetNote.shared_owner_id === userId || targetNote.user_id === userId || targetNote.user_id === 'local_user');
-                                    if (!isOwnNote) {
-                                        get().markNoteRevoked(payload.targetId, true);
+                // Verificar si alguna nota compartida tuvo su acceso revocado
+                get().checkRevokedNotes().catch(() => {});
+
+                // Iniciar listener en tiempo real de revocaciones para el usuario actual
+                const userId = useStore.getState().session?.user?.id;
+                if (userId && collabMonitorActiveUserId !== userId) {
+                    collabMonitorActiveUserId = userId;
+                    try {
+                        supabase
+                            .channel(`user_collab_monitor_${userId}`)
+                            .on('broadcast', { event: 'LIVE_NOTE_CHANGE' }, ({ payload }) => {
+                                if (!payload) return;
+                                if (payload.changeType === 'PERMISSIONS_UPDATE' && payload.revoked) {
+                                    if (payload.memberId && payload.memberId !== userId) {
+                                        return;
                                     }
+                                    if (payload.targetId) {
+                                        const targetNote = get().notes.find(n => n.id === payload.targetId);
+                                        const isOwnNote = targetNote && (!targetNote.shared_owner_id || targetNote.shared_owner_id === userId || targetNote.user_id === userId || targetNote.user_id === 'local_user');
+                                        if (!isOwnNote) {
+                                            get().markNoteRevoked(payload.targetId, true);
+                                        }
+                                    }
+                                    get().checkRevokedNotes();
                                 }
+                            })
+                            .on('postgres_changes', {
+                                event: '*',
+                                schema: 'public',
+                                table: 'collaborations',
+                            }, () => {
                                 get().checkRevokedNotes();
-                            }
-                        })
-                        .on('postgres_changes', {
-                            event: '*',
-                            schema: 'public',
-                            table: 'collaborations',
-                        }, () => {
-                            get().checkRevokedNotes();
-                        })
-                        .subscribe();
-                }).catch(() => {});
+                            })
+                            .subscribe();
+                    } catch {}
+                }
+            } catch (error) {
+                console.error('Failed to load notes', error);
+                set({ isLoading: false });
+            } finally {
+                loadNotesInFlight = null;
             }
-        } catch (error) {
-            console.error('Failed to load notes', error);
-            set({ isLoading: false });
-        }
+        })();
+
+        return loadNotesInFlight;
     },
 
     loadDeletedNotes: async () => {
@@ -110,8 +134,7 @@ export const useNotesStore = create<NotesState>((set, get) => ({
     addNote: async (title, content, attachments, links, isPinned, folderId, eventId, fontFamily) => {
         try {
             const userId = useStore.getState().session?.user?.id || undefined;
-            const { useFoldersStore } = await import('./useFoldersStore');
-            const folder = folderId ? useFoldersStore.getState().folders.find(f => f.id === folderId) : null;
+            const folder = folderId ? getFolderByIdCallback?.(folderId) ?? null : null;
             const isFolderShared = Boolean(folder && (folder.is_shared === 1 || Boolean(folder.shared_owner_id)));
 
             const noteIsShared = isFolderShared ? 1 : 0;
@@ -136,19 +159,16 @@ export const useNotesStore = create<NotesState>((set, get) => ({
             // Optimistic prepend
             if (newNote) {
                 set(state => ({
-                    notes: [newNote, ...state.notes]
+                    notes: sortNotesList([newNote, ...state.notes.filter(n => n.id !== newNote.id)])
                 }));
             }
 
             if (userId && isFolderShared && newNote) {
                 try {
-                    const { supabase } = await import('../lib/supabase');
-                    const { SyncService } = await import('../services/syncService');
                     const ownerId = noteSharedOwnerId || userId;
                     const remote = SyncService.localNoteToRemote(newNote, ownerId);
                     await supabase.from('notes').upsert(remote, { onConflict: 'id' });
 
-                    const { CollaborationService } = await import('../services/collaborationService');
                     CollaborationService.notifyChange({
                         targetType: 'note',
                         targetId: newNote.id,
@@ -175,8 +195,7 @@ export const useNotesStore = create<NotesState>((set, get) => ({
         const now = Date.now();
         const idsSet = new Set(ids);
 
-        const { useFoldersStore } = await import('./useFoldersStore');
-        const targetFolder = folderId ? useFoldersStore.getState().folders.find(f => f.id === folderId) : null;
+        const targetFolder = folderId ? getFolderByIdCallback?.(folderId) ?? null : null;
         const isFolderShared = Boolean(targetFolder && (targetFolder.is_shared === 1 || Boolean(targetFolder.shared_owner_id)));
         const userId = useStore.getState().session?.user?.id;
         const sharedOwnerId = isFolderShared
@@ -185,22 +204,22 @@ export const useNotesStore = create<NotesState>((set, get) => ({
 
         // Optimistic batch update
         set(state => ({
-            notes: state.notes.map(n => {
+            notes: sortNotesList(state.notes.map(n => {
                 if (!idsSet.has(n.id)) return n;
                 return {
                     ...n,
                     folder_id: folderId,
                     updated_at_ms: now,
+                    last_modified_ms: now,
                     ...(isFolderShared ? { is_shared: 1, shared_owner_id: sharedOwnerId || n.shared_owner_id } : {})
                 };
-            })
+            }))
         }));
 
         try {
             await NoteService.moveNotesToFolder(ids, folderId);
 
             if (isFolderShared) {
-                const { getDB } = await import('../db');
                 const db = await getDB();
                 for (const id of ids) {
                     await db.runAsync('UPDATE notes SET is_shared = 1, shared_owner_id = ? WHERE id = ?', [sharedOwnerId || null, id]);
@@ -208,8 +227,6 @@ export const useNotesStore = create<NotesState>((set, get) => ({
 
                 if (userId) {
                     try {
-                        const { supabase } = await import('../lib/supabase');
-                        const { SyncService } = await import('../services/syncService');
                         const updatedNotes = get().notes.filter(n => idsSet.has(n.id));
                         const remoteNotes = updatedNotes.map(n => SyncService.localNoteToRemote(n, sharedOwnerId || userId));
                         await supabase.from('notes').upsert(remoteNotes, { onConflict: 'id' });
@@ -231,20 +248,29 @@ export const useNotesStore = create<NotesState>((set, get) => ({
     updateNote: async (id, updates) => {
         const previousNote = get().notes.find(n => n.id === id);
         const now = Date.now();
+        const optimisticUpdates: Partial<Note> = { ...updates };
+        if (optimisticUpdates.content !== undefined && optimisticUpdates.preview_text === undefined) {
+            optimisticUpdates.preview_text = computeNotePreviewText(optimisticUpdates.content);
+        }
+
         // Optimistic update
         set(state => ({
-            notes: state.notes.map(n => n.id === id ? { ...n, ...updates, updated_at_ms: now } : n)
+            notes: sortNotesList(
+                state.notes.map(n =>
+                    n.id === id
+                        ? { ...n, ...optimisticUpdates, updated_at_ms: now, last_modified_ms: now }
+                        : n
+                )
+            )
         }));
 
         try {
             let isShared = previousNote && (previousNote.is_shared === 1 || Boolean(previousNote.shared_owner_id));
             if (!isShared && previousNote?.folder_id) {
-                const { useFoldersStore } = await import('./useFoldersStore');
-                const folder = useFoldersStore.getState().folders.find(f => f.id === previousNote.folder_id);
+                const folder = getFolderByIdCallback?.(previousNote.folder_id);
                 if (folder && (folder.is_shared === 1 || Boolean(folder.shared_owner_id))) {
                     isShared = true;
                     try {
-                        const { getDB } = await import('../db');
                         const db = await getDB();
                         await db.runAsync('UPDATE notes SET is_shared = 1 WHERE id = ?', [previousNote.id]);
                         set(state => ({
@@ -266,7 +292,6 @@ export const useNotesStore = create<NotesState>((set, get) => ({
 
                     if (collab) {
                         isShared = true;
-                        const { getDB } = await import('../db');
                         const db = await getDB();
                         await db.runAsync('UPDATE notes SET is_shared = 1 WHERE id = ?', [previousNote.id]);
                         set(state => ({
@@ -277,19 +302,19 @@ export const useNotesStore = create<NotesState>((set, get) => ({
             }
 
             if (isShared && previousNote) {
-                const diff = computeNoteChangeDetail(previousNote, updates);
+                const diff = computeNoteChangeDetail(previousNote, optimisticUpdates);
                 if (diff) {
                     CollaborationService.notifyChange({
                         targetType: 'note',
                         targetId: previousNote.id,
                         action: 'edited',
-                        itemTitle: updates.title || previousNote.title || 'Nota',
+                        itemTitle: optimisticUpdates.title || previousNote.title || 'Nota',
                         details: diff.jsonString,
                     });
                 }
             }
 
-            await NoteService.updateNote(id, updates);
+            await NoteService.updateNote(id, optimisticUpdates);
 
             if (useStore.getState().session?.user?.id && useStore.getState().cloudSyncEnabled) {
                 useStore.getState().triggerSync(false, true);
@@ -307,7 +332,13 @@ export const useNotesStore = create<NotesState>((set, get) => ({
 
         // Optimistic update in one single synchronous atomic state update
         set(state => ({
-            notes: state.notes.map(n => idsSet.has(n.id) ? { ...n, ...updates, updated_at_ms: now } : n)
+            notes: sortNotesList(
+                state.notes.map(n =>
+                    idsSet.has(n.id)
+                        ? { ...n, ...updates, updated_at_ms: now, last_modified_ms: now }
+                        : n
+                )
+            )
         }));
 
         try {
@@ -517,7 +548,6 @@ export const useNotesStore = create<NotesState>((set, get) => ({
         );
 
         try {
-            const { supabase } = await import('../lib/supabase');
             const [noteCollabsRes, folderCollabsRes] = await Promise.all([
                 supabase
                     .from('collaborations')
@@ -550,4 +580,27 @@ export const useNotesStore = create<NotesState>((set, get) => ({
             console.warn('[useNotesStore] Error checking revoked notes:', e);
         }
     },
+
+    markNoteOpened: async (id: string) => {
+        const now = Date.now();
+        set(state => ({
+            notes: state.notes.map(n => n.id === id ? { ...n, last_opened_ms: now } : n)
+        }));
+        try {
+            await NoteService.markNoteOpened(id);
+        } catch (e) {
+            console.warn('[useNotesStore] markNoteOpened failed:', e);
+        }
+    },
 }));
+
+registerWidgetStoreCallbacks({
+    getNotes: () => useNotesStore.getState().notes,
+});
+
+registerSyncStoreHandlers({
+    loadNotes: () => useNotesStore.getState().loadNotes(),
+});
+
+registerExternalStoreReloader(() => useNotesStore.getState().loadNotes());
+

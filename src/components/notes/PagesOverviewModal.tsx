@@ -21,8 +21,6 @@ import {
     X,
     Plus,
     Trash2,
-    Columns,
-    Rows,
     Check,
     GripVertical,
     Copy,
@@ -30,11 +28,11 @@ import {
     ChevronUp,
     ChevronDown,
     MoreVertical,
+    FileText,
 } from '@tamagui/lucide-icons';
 import { useVeyraTheme } from '../../theme/useVeyraTheme';
 import { VeyraSurface } from '../ui/VeyraSurface';
 import { VeyraIconButton } from '../ui/VeyraIconButton';
-import { VeyraButton } from '../ui/VeyraButton';
 import { NotePage, PageLayoutMode } from '../../utils/pageUtils';
 
 export interface PagesOverviewModalProps {
@@ -50,11 +48,11 @@ export interface PagesOverviewModalProps {
     onRenamePage?: (index: number, newTitle: string) => void;
     onMovePage?: (index: number, direction: 'up' | 'down') => void;
     onReorderPages?: (fromIndex: number, toIndex: number) => void;
-    layout: PageLayoutMode;
-    onChangeLayout: (layout: PageLayoutMode) => void;
+    layout?: PageLayoutMode;
+    onChangeLayout?: (layout: PageLayoutMode) => void;
 }
 
-const CARD_HEIGHT = 64;
+const CARD_HEIGHT = 68;
 const CARD_MARGIN = 8;
 const SLOT_HEIGHT = CARD_HEIGHT + CARD_MARGIN;
 const AUTO_SCROLL_ZONE = 60;
@@ -119,7 +117,7 @@ function PageRowItem({
         });
     }, [index, onDragStart, onDragMove, onDragEnd]);
 
-    const formattedNumber = index < 9 ? `0${index + 1}` : `${index + 1}`;
+    const isBlank = snippet === t('notes.empty_page', { defaultValue: 'Página en blanco' });
 
     return (
         <View
@@ -142,7 +140,9 @@ function PageRowItem({
                 style={[
                     styles.pageCard,
                     {
-                        backgroundColor: isDark ? '#1C1F26' : '#FFFFFF',
+                        backgroundColor: isCurrent
+                            ? (isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.05)')
+                            : (isDark ? (colors.bg === '#000000' ? colors.surfaceCard : '#1C1F26') : '#FFFFFF'),
                         borderColor: isCurrent ? accent.primary : colors.borderSubtle,
                         borderWidth: 1,
                         borderLeftWidth: isCurrent ? 3.5 : 1,
@@ -163,72 +163,71 @@ function PageRowItem({
                     },
                 ]}
             >
-                {/* Tirador de Arrastre Táctil */}
-                {totalPages > 1 ? (
-                    <View
-                        style={styles.dragHandle}
-                        hitSlop={{ top: 12, bottom: 12, left: 8, right: 8 }}
-                        {...panResponder.panHandlers}
-                    >
-                        <GripVertical
-                            size={18}
-                            color={isBeingDragged ? accent.primary : (colors.textMuted as any)}
-                        />
-                    </View>
-                ) : (
-                    <View style={styles.dragHandleSpacer} />
-                )}
-
-                {/* Número de Hoja Minimalista (01, 02) */}
-                <Text
-                    style={[
-                        styles.pageNumberText,
-                        {
-                            color: isCurrent ? accent.primary : colors.textSecondary,
-                            fontWeight: isCurrent ? '700' : '500',
-                        },
-                    ]}
-                >
-                    {formattedNumber}
-                </Text>
-
                 {/* Contenido / Tap para seleccionar hoja */}
                 <TouchableOpacity
                     activeOpacity={0.7}
                     onPress={onSelect}
                     style={styles.pageCardBody}
                 >
-                    <View style={styles.pageMetaRow}>
+                    <View style={styles.docIconContainer}>
+                        <FileText
+                            size={18}
+                            color={isCurrent ? accent.primary : (colors.textSecondary as any)}
+                        />
+                    </View>
+
+                    <View style={styles.pageTextCol}>
                         <Text
                             style={[
                                 styles.pageTitleLabel,
                                 {
                                     color: isCurrent ? accent.primary : colors.textPrimary,
-                                    fontWeight: isCurrent ? '700' : '600',
+                                    fontWeight: '700',
                                 },
                             ]}
                             numberOfLines={1}
                         >
-                            {page.title || `${t('notes.page_single', { defaultValue: 'Hoja' })} ${index + 1}`}
+                            {page.title || t('notes.untitled_page', { defaultValue: 'Hoja sin título' })}
+                        </Text>
+
+                        <Text
+                            style={[
+                                styles.pageSnippet,
+                                {
+                                    color: isBlank ? colors.textMuted : colors.textSecondary,
+                                    fontStyle: isBlank ? 'italic' : 'normal',
+                                },
+                            ]}
+                            numberOfLines={2}
+                        >
+                            {snippet}
                         </Text>
                     </View>
+                </TouchableOpacity>
 
-                    <Text
-                        style={[styles.pageSnippet, { color: colors.textSecondary }]}
-                        numberOfLines={1}
+                {/* Acciones a la derecha: Menú de Opciones y Tirador de Arrastre */}
+                <View style={styles.rightActionsRow}>
+                    <TouchableOpacity
+                        onPress={onOpenOptions}
+                        hitSlop={{ top: 10, bottom: 10, left: 8, right: 8 }}
+                        style={styles.moreOptionsBtn}
                     >
-                        {snippet}
-                    </Text>
-                </TouchableOpacity>
+                        <MoreVertical size={16} color={colors.textSecondary as any} />
+                    </TouchableOpacity>
 
-                {/* Botón de Menú de Opciones (3 Puntos Minimalista) */}
-                <TouchableOpacity
-                    onPress={onOpenOptions}
-                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                    style={styles.moreOptionsBtn}
-                >
-                    <MoreVertical size={16} color={colors.textSecondary as any} />
-                </TouchableOpacity>
+                    {totalPages > 1 && (
+                        <View
+                            style={styles.dragHandle}
+                            hitSlop={{ top: 10, bottom: 10, left: 6, right: 6 }}
+                            {...panResponder.panHandlers}
+                        >
+                            <GripVertical
+                                size={15}
+                                color={isBeingDragged ? accent.primary : (colors.textMuted as any)}
+                            />
+                        </View>
+                    )}
+                </View>
             </Animated.View>
         </View>
     );
@@ -438,7 +437,7 @@ export function PagesOverviewModal({
     }, [dragTranslateY, stopAutoScroll]);
 
     const getPageSnippet = (content?: string): string => {
-        if (!content) return t('notes.empty_page', { defaultValue: 'Hoja en blanco' });
+        if (!content) return t('notes.empty_page', { defaultValue: 'Página en blanco' });
         const clean = content
             .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
             .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
@@ -451,7 +450,7 @@ export function PagesOverviewModal({
             .replace(/&gt;/gi, '>')
             .replace(/\s+/g, ' ')
             .trim();
-        return clean || t('notes.empty_page', { defaultValue: 'Hoja en blanco' });
+        return clean || t('notes.empty_page', { defaultValue: 'Página en blanco' });
     };
 
     const handleDelete = (index: number) => {
@@ -474,6 +473,7 @@ export function PagesOverviewModal({
                     onPress: () => {
                         setActionSheetIndex(null);
                         onDeletePage(index);
+                        onClose();
                     },
                 },
             ]
@@ -541,72 +541,7 @@ export function PagesOverviewModal({
                             />
                         </View>
 
-                        {/* Barra de Controles: Selector de Orientación (Vertical / Horizontal) */}
-                        <View style={styles.toolbarRow}>
-                            <Text style={[styles.toolbarLabel, { color: colors.textSecondary }]}>
-                                {t('notes.scroll_layout', { defaultValue: 'Desplazamiento' })}
-                            </Text>
-
-                            {/* Selector de Orientación de Lectura */}
-                            <View style={[styles.compactSegmentGroup, { backgroundColor: isDark ? '#1C1F26' : '#F1F5F9' }]}>
-                                <TouchableOpacity
-                                    activeOpacity={0.7}
-                                    onPress={() => onChangeLayout('vertical')}
-                                    style={[
-                                        styles.compactSegmentBtn,
-                                        layout === 'vertical' && [
-                                            styles.compactSegmentBtnActive,
-                                            { backgroundColor: isDark ? '#2D323E' : '#FFFFFF' },
-                                        ],
-                                    ]}
-                                >
-                                    <Rows
-                                        size={14}
-                                        color={(layout === 'vertical' ? accent.primary : colors.textMuted) as any}
-                                    />
-                                    <Text
-                                        style={[
-                                            styles.compactSegmentText,
-                                            {
-                                                color: layout === 'vertical' ? colors.textPrimary : colors.textSecondary,
-                                                fontWeight: layout === 'vertical' ? '700' : '500',
-                                            },
-                                        ]}
-                                    >
-                                        {t('notes.layout_vertical', { defaultValue: 'Vertical' })}
-                                    </Text>
-                                </TouchableOpacity>
-                                <TouchableOpacity
-                                    activeOpacity={0.7}
-                                    onPress={() => onChangeLayout('horizontal')}
-                                    style={[
-                                        styles.compactSegmentBtn,
-                                        layout === 'horizontal' && [
-                                            styles.compactSegmentBtnActive,
-                                            { backgroundColor: isDark ? '#2D323E' : '#FFFFFF' },
-                                        ],
-                                    ]}
-                                >
-                                    <Columns
-                                        size={14}
-                                        color={(layout === 'horizontal' ? accent.primary : colors.textMuted) as any}
-                                    />
-                                    <Text
-                                        style={[
-                                            styles.compactSegmentText,
-                                            {
-                                                color: layout === 'horizontal' ? colors.textPrimary : colors.textSecondary,
-                                                fontWeight: layout === 'horizontal' ? '700' : '500',
-                                            },
-                                        ]}
-                                    >
-                                        {t('notes.layout_horizontal', { defaultValue: 'Horizontal' })}
-                                    </Text>
-                                </TouchableOpacity>
-                            </View>
-                        </View>
-
-                        {/* Contenedor Principal: Lista de Hojas */}
+                        {/* Contenedor Principal: Lista de Hojas Compacta */}
                         <ScrollView
                             ref={scrollViewRef}
                             style={styles.pagesList}
@@ -659,23 +594,31 @@ export function PagesOverviewModal({
                                         />
                                     );
                                 })}
+
+                                {/* Fila final integrada: Agregar nueva hoja */}
+                                <TouchableOpacity
+                                    activeOpacity={0.7}
+                                    onPress={() => {
+                                        onAddPage();
+                                        onClose();
+                                    }}
+                                    style={[
+                                        styles.addPageRow,
+                                        {
+                                            backgroundColor: isDark ? 'rgba(255, 255, 255, 0.03)' : 'rgba(0, 0, 0, 0.02)',
+                                            borderColor: colors.borderSubtle,
+                                        },
+                                    ]}
+                                >
+                                    <View style={[styles.addIconCircle, { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.06)' }]}>
+                                        <Plus size={16} color={accent.primary as any} strokeWidth={2.4} />
+                                    </View>
+                                    <Text style={[styles.addPageRowText, { color: colors.textPrimary }]}>
+                                        {t('notes.add_page', { defaultValue: 'Agregar nueva hoja' })}
+                                    </Text>
+                                </TouchableOpacity>
                             </View>
                         </ScrollView>
-
-                        {/* Botón Inferior: Agregar Hoja */}
-                        <View style={styles.sheetFooter}>
-                            <VeyraButton
-                                variant="primary"
-                                size="md"
-                                radius="lg"
-                                label={t('notes.add_page', { defaultValue: 'Agregar Hoja' })}
-                                iconLeft={<Plus size={17} color={isDark ? '#1B1B1B' : '#FFFFFF'} strokeWidth={2.6} />}
-                                onPress={() => {
-                                    onAddPage();
-                                    onClose();
-                                }}
-                            />
-                        </View>
                     </VeyraSurface>
                 </View>
             </GestureHandlerRootView>
@@ -699,7 +642,7 @@ export function PagesOverviewModal({
                             style={[
                                 styles.actionSheetContent,
                                 {
-                                    backgroundColor: isDark ? '#1C1F26' : '#FFFFFF',
+                                    backgroundColor: isDark ? (colors.bg === '#000000' ? colors.surfaceCard : '#1C1F26') : '#FFFFFF',
                                     borderColor: colors.borderSubtle,
                                 },
                             ]}
@@ -723,22 +666,24 @@ export function PagesOverviewModal({
                             {/* Lista de Opciones */}
                             <View style={styles.actionOptionsList}>
                                 {/* Renombrar */}
-                                <TouchableOpacity
-                                    activeOpacity={0.7}
-                                    onPress={() => {
-                                        if (actionSheetIndex !== null) {
-                                            openRenameDialog(actionSheetIndex);
-                                        }
-                                    }}
-                                    style={styles.actionOptionRow}
-                                >
-                                    <View style={[styles.actionIconContainer, { backgroundColor: isDark ? '#2D323E' : '#F1F5F9' }]}>
-                                        <Edit3 size={16} color={colors.textPrimary as any} />
-                                    </View>
-                                    <Text style={[styles.actionOptionLabel, { color: colors.textPrimary }]}>
-                                        {t('notes.rename_page', { defaultValue: 'Renombrar hoja' })}
-                                    </Text>
-                                </TouchableOpacity>
+                                {onRenamePage && (
+                                    <TouchableOpacity
+                                        activeOpacity={0.7}
+                                        onPress={() => {
+                                            if (actionSheetIndex !== null) {
+                                                openRenameDialog(actionSheetIndex);
+                                            }
+                                        }}
+                                        style={styles.actionOptionRow}
+                                    >
+                                        <View style={[styles.actionIconContainer, { backgroundColor: isDark ? '#2D323E' : '#F1F5F9' }]}>
+                                            <Edit3 size={16} color={colors.textPrimary as any} />
+                                        </View>
+                                        <Text style={[styles.actionOptionLabel, { color: colors.textPrimary }]}>
+                                            {t('notes.rename_page', { defaultValue: 'Renombrar hoja' })}
+                                        </Text>
+                                    </TouchableOpacity>
+                                )}
 
                                 {/* Duplicar */}
                                 {onDuplicatePage && (
@@ -899,7 +844,7 @@ export function PagesOverviewModal({
                         style={[
                             styles.renameDialogContainer,
                             {
-                                backgroundColor: isDark ? '#1C1F26' : '#FFFFFF',
+                                backgroundColor: isDark ? (colors.bg === '#000000' ? colors.surfaceCard : '#1C1F26') : '#FFFFFF',
                                 borderColor: colors.borderSubtle,
                             },
                         ]}
@@ -998,50 +943,14 @@ const styles = StyleSheet.create({
         fontSize: 12,
         fontWeight: '400',
     },
-    toolbarRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        gap: 8,
-    },
-    toolbarLabel: {
-        fontSize: 12.5,
-        fontWeight: '500',
-    },
-    compactSegmentGroup: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        padding: 3,
-        borderRadius: 10,
-        gap: 2,
-    },
-    compactSegmentBtn: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 6,
-        paddingVertical: 6,
-        paddingHorizontal: 10,
-        borderRadius: 8,
-    },
-    compactSegmentText: {
-        fontSize: 12,
-        letterSpacing: 0.1,
-    },
-    compactSegmentBtnActive: {
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.12,
-        shadowRadius: 2.5,
-        elevation: 2,
-    },
     pagesList: {
-        maxHeight: 350,
+        maxHeight: 380,
     },
     pagesListContent: {
-        paddingVertical: 2,
+        paddingVertical: 4,
     },
 
-    /* Estilos Vista Lista */
+    /* Estilos Vista Lista Compacta */
     listContainer: {
         gap: CARD_MARGIN,
     },
@@ -1054,52 +963,76 @@ const styles = StyleSheet.create({
         borderRadius: 12,
         flexDirection: 'row',
         alignItems: 'center',
-        paddingHorizontal: 10,
-        gap: 10,
-    },
-    dragHandle: {
-        width: 26,
-        height: '100%',
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    dragHandleSpacer: {
-        width: 6,
-    },
-    pageNumberText: {
-        fontSize: 13,
-        letterSpacing: 0.2,
-        minWidth: 18,
-        textAlign: 'center',
+        paddingHorizontal: 12,
+        paddingVertical: 10,
+        gap: 8,
     },
     pageCardBody: {
         flex: 1,
-        justifyContent: 'center',
-        gap: 2,
-    },
-    pageMetaRow: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
+        gap: 10,
+    },
+    docIconContainer: {
+        width: 30,
+        height: 30,
+        borderRadius: 8,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    pageTextCol: {
+        flex: 1,
+        gap: 2,
     },
     pageTitleLabel: {
         fontSize: 13.5,
-        flexShrink: 1,
+        letterSpacing: -0.1,
     },
     pageSnippet: {
         fontSize: 11.5,
+        lineHeight: 15,
+    },
+    rightActionsRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 2,
     },
     moreOptionsBtn: {
         padding: 6,
         alignItems: 'center',
         justifyContent: 'center',
     },
+    dragHandle: {
+        width: 22,
+        height: 28,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    addPageRow: {
+        height: CARD_HEIGHT,
+        borderRadius: 12,
+        borderWidth: 1,
+        borderStyle: 'dashed',
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingHorizontal: 14,
+        gap: 12,
+        marginTop: 2,
+    },
+    addIconCircle: {
+        width: 28,
+        height: 28,
+        borderRadius: 14,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    addPageRowText: {
+        fontSize: 13.5,
+        fontWeight: '600',
+    },
 
     btnDisabled: {
         opacity: 0.35,
-    },
-    sheetFooter: {
-        paddingTop: 4,
     },
 
     /* Sub-modal: Acciones */

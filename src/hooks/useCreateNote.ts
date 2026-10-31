@@ -20,6 +20,7 @@ import { getCollabContentHash, logCollabEvent, normalizeToEpochMs } from '../uti
 
 export interface UseCreateNoteOptions {
     isEditMode?: boolean;
+    yjsProviderRef?: React.MutableRefObject<any>;
 }
 
 export function useCreateNote(
@@ -89,6 +90,9 @@ export function useCreateNote(
     const cachedRole: CollabRole = isOwnerCached ? 'editor' : (cachedNote?.collab_role === 'viewer' ? 'viewer' : 'editor');
     const isRevokedCached = isOwnerCached ? false : (cachedNote?.is_revoked === 1);
     const canEditCached = isOwnerCached ? true : (cachedRole === 'editor' && !isRevokedCached);
+    const currentNoteFromStore = useNotesStore(state => (id && id !== 'create') ? state.notes.find(n => n.id === id) : null);
+    const syncMode = currentNoteFromStore?.sync_mode || cachedNote?.sync_mode || 'rest';
+    const isYjsMode = syncMode === 'yjs';
 
     const [userPermission, setUserPermission] = useState<{
         isOwner: boolean;
@@ -145,9 +149,28 @@ export function useCreateNote(
                 } else if (resolvedPerm.role) {
                     useNotesStore.getState().setNoteRole(activeId, resolvedPerm.role).catch(() => {});
                 }
+
+                // CRÍTICO (Fase 3.3): Si la nota ya fue activada en modo 'yjs' en Supabase pero
+                // este dispositivo aún la tenía en 'rest', recuperar el modo remoto inmediatamente
+                // para que el editor cambie a Yjs y Pell no sobrescriba el contenido.
+                if (!isYjsMode) {
+                    Promise.resolve(
+                        supabase
+                            .from('notes')
+                            .select('sync_mode')
+                            .eq('id', activeId)
+                            .maybeSingle()
+                    )
+                        .then(({ data }: any) => {
+                            if (data?.sync_mode === 'yjs') {
+                                updateNote(activeId, { sync_mode: 'yjs' });
+                            }
+                        })
+                        .catch(() => {});
+                }
             })
             .catch(() => {});
-    }, [id, createdNoteId, isOwnerCached]);
+    }, [id, createdNoteId, isOwnerCached, isYjsMode, updateNote]);
 
     const refreshPermsRef = useRef(refreshPerms);
     useEffect(() => {
@@ -216,6 +239,9 @@ export function useCreateNote(
     const onApplySnapshot = useCallback((snapshot: NoteHistorySnapshot) => {
         isLocallyInteractedRef.current = true;
         lastLocalEditTimeRef.current = Date.now();
+        currentValuesRef.current.title = snapshot.title;
+        currentValuesRef.current.pages = snapshot.pages;
+        currentValuesRef.current.currentPageIndex = snapshot.currentPageIndex;
         setTitle(snapshot.title);
         setPages(snapshot.pages);
         setCurrentPageIndex(snapshot.currentPageIndex);
@@ -294,8 +320,10 @@ export function useCreateNote(
     const lastLocalSaveTimeRef = useRef<number>(0);
     const isLocallyInteractedRef = useRef<boolean>(false);
 
-    // Mutex para evitar guardados concurrentes
+    // Mutex para evitar guardados concurrentes sin descartar cambios pendientes
     const isSavingRef = useRef(false);
+    const activeSavePromiseRef = useRef<Promise<void> | null>(null);
+    const pendingSaveRequestedRef = useRef(false);
 
     // UI states
     const [isLoading, setIsLoading] = useState(false);
@@ -360,8 +388,7 @@ export function useCreateNote(
 
         // Comprobar si los datos en el store difieren de lo último guardado/conocido localmente
         const lastSaved = lastSavedValuesRef.current;
-        const hasExternalChanges = (
-            noteContent !== lastSaved.serializedContent ||
+        const hasMetadataChanges = (
             noteTitle !== lastSaved.title ||
             noteAttachments !== lastSaved.attachments ||
             notePinned !== lastSaved.isPinned ||
@@ -369,6 +396,8 @@ export function useCreateNote(
             noteEventId !== lastSaved.eventId ||
             noteFontFamily !== lastSaved.fontFamily
         );
+        const hasContentChanges = !isYjsMode && noteContent !== lastSaved.serializedContent;
+        const hasExternalChanges = hasMetadataChanges || hasContentChanges;
 
         if (!hasExternalChanges) {
             return;
@@ -386,7 +415,6 @@ export function useCreateNote(
         const lastLocalSaveTime = normalizeToEpochMs(lastLocalSaveTimeRef.current);
 
         const currentVals = currentValuesRef.current;
-        const currentSerialized = serializeNotePages(currentVals.pages, currentVals.scrollLayout);
         const hasLocalContent = currentVals.pages.some(p => Boolean(p.content.replace(/<[^>]+>/g, '').trim()) || p.content.includes('<img') || p.content.includes('<input') || p.content.includes('x-todo'));
 
         // REGLA DE PROTECCIÓN 1: Si la nota del store proviene de un timestamp anterior a nuestra última edición local
@@ -415,7 +443,7 @@ export function useCreateNote(
         }
 
         // REGLA DE PROTECCIÓN 3: Si localmente tenemos contenido y el payload del store está vacío, proteger contra vaciado accidental
-        if (hasLocalContent && !noteContent.trim()) {
+        if (!isYjsMode && hasLocalContent && !noteContent.trim()) {
             logCollabEvent('STORE_UPDATE', {
                 noteId: id,
                 origin: 'sqlite_load',
@@ -447,26 +475,51 @@ export function useCreateNote(
             hash: getCollabContentHash(noteContent),
         });
 
-        // Aplicar la actualización externa en vivo
-        const parsed = parseNotePages(noteContent);
+        // Aplicar actualización de metadatos
         setTitle(noteTitle);
-        setPages(parsed.pages);
-        setScrollLayout(parsed.layout);
+        currentValuesRef.current.title = noteTitle;
         setIsPinned(notePinned);
+        currentValuesRef.current.isPinned = notePinned;
         setFolderId(noteFolderId);
+        currentValuesRef.current.folderId = noteFolderId;
         setEventId(noteEventId);
+        currentValuesRef.current.eventId = noteEventId;
         setFontFamily(noteFontFamily);
+        currentValuesRef.current.fontFamily = noteFontFamily;
 
         if (noteAttachments) {
             try {
                 const parsedAtts = JSON.parse(noteAttachments);
-                setAttachments(Array.isArray(parsedAtts) ? parsedAtts : []);
+                const validAtts = Array.isArray(parsedAtts) ? parsedAtts : [];
+                setAttachments(validAtts);
+                currentValuesRef.current.attachments = validAtts;
             } catch {
                 setAttachments([]);
+                currentValuesRef.current.attachments = [];
             }
         } else {
             setAttachments([]);
+            currentValuesRef.current.attachments = [];
         }
+
+        if (isYjsMode) {
+            lastSavedValuesRef.current = {
+                ...lastSavedValuesRef.current,
+                title: noteTitle,
+                attachments: noteAttachments,
+                isPinned: notePinned,
+                folderId: noteFolderId,
+                eventId: noteEventId,
+                fontFamily: noteFontFamily,
+            };
+            return;
+        }
+
+        const parsed = parseNotePages(noteContent);
+        setPages(parsed.pages);
+        currentValuesRef.current.pages = parsed.pages;
+        setScrollLayout(parsed.layout);
+        currentValuesRef.current.scrollLayout = parsed.layout;
 
         // Actualizar lastSavedValuesRef inmediatamente para evitar que el auto-guardado
         // detecte esto como un cambio local y lo vuelva a escribir en bucle a la BD
@@ -525,7 +578,7 @@ export function useCreateNote(
             clearTimeout(t1);
             clearTimeout(t2);
         };
-    }, [id, notes, effectiveEditorRefs]);
+    }, [id, notes, effectiveEditorRefs, isYjsMode]);
 
     // ─── CANALES PRIVADOS DE TRANSMISIÓN EN VIVO (WEBSOCKETS REALTIME PRIVADOS) ───
     // Separación de tráfico para seguridad y aislamiento por RLS:
@@ -534,6 +587,11 @@ export function useCreateNote(
     useEffect(() => {
         const activeId = id && id !== 'create' ? id : (noteIdRef.current || createdNoteId);
         if (!activeId) return;
+
+        // CRÍTICO (Fase 3.3): Para notas en modo 'yjs', el tráfico colaborativo se gestiona
+        // exclusivamente por SupabaseYjsProvider a través del canal note_yjs_${id}.
+        // Se omiten las suscripciones a note_live_edit_ y note_live_cursor_ para evitar interferencias.
+        if (isYjsMode) return;
 
         // 1. Canal privado de edición de contenido
         const editChannelName = `note_live_edit_${activeId}`;
@@ -1050,6 +1108,7 @@ export function useCreateNote(
             hash: getCollabContentHash(newTitle),
         });
 
+        currentValuesRef.current.title = newTitle;
         setTitle(newTitle);
         recordChange({
             title: newTitle,
@@ -1099,6 +1158,18 @@ export function useCreateNote(
             if (cleanLast === cleanNew) return;
         }
 
+        const prevPages = currentValuesRef.current.pages;
+        if (index >= 0 && index < prevPages.length && prevPages[index].content === newHtml) {
+            return;
+        }
+        const updatedPages = [...prevPages];
+        if (index >= 0 && index < updatedPages.length) {
+            updatedPages[index] = { ...updatedPages[index], content: newHtml };
+        } else if (index === updatedPages.length) {
+            updatedPages.push(createPage(newHtml));
+        }
+        currentValuesRef.current.pages = updatedPages;
+
         setPages(prev => {
             const next = [...prev];
             if (index >= 0 && index < next.length) {
@@ -1107,6 +1178,7 @@ export function useCreateNote(
             } else if (index === next.length) {
                 next.push(createPage(newHtml));
             }
+            currentValuesRef.current.pages = next;
             recordChange({
                 title: currentValuesRef.current.title,
                 pages: next,
@@ -1129,15 +1201,60 @@ export function useCreateNote(
     }, [id, createdNoteId, recordChange, broadcastLiveChange]);
 
     /**
+     * Sincroniza la lista de páginas locales a partir del pageOrder autoritativo de Yjs.
+     */
+    const syncPagesFromYjs = useCallback((pageIds: string[]) => {
+        if (!pageIds || pageIds.length === 0) return;
+        setPages(prev => {
+            if (prev.length === pageIds.length && prev.every((p, idx) => p.id === pageIds[idx])) {
+                return prev;
+            }
+            const existingMap = new Map<string, NotePage>();
+            prev.forEach(p => existingMap.set(p.id, p));
+
+            const next: NotePage[] = pageIds.map(pageId => {
+                const existing = existingMap.get(pageId);
+                if (existing) return existing;
+                return {
+                    id: pageId,
+                    content: '',
+                };
+            });
+
+            currentValuesRef.current.pages = next;
+            return next;
+        });
+
+        setCurrentPageIndex(prevIndex => {
+            const nextIdx = prevIndex >= pageIds.length ? Math.max(0, pageIds.length - 1) : prevIndex;
+            currentValuesRef.current.currentPageIndex = nextIdx;
+            return nextIdx;
+        });
+    }, []);
+
+    /**
      * Agrega una nueva página en blanco al final.
      */
     const addPage = useCallback(() => {
         if (!userPermissionRef.current.canEdit || !userPermissionRef.current.hasAccess || userPermissionRef.current.isRevoked) return;
         isLocallyInteractedRef.current = true;
         lastLocalEditTimeRef.current = Date.now();
+
+        // Si estamos en modo Yjs, delegar al Y.Doc del proveedor
+        if (isYjsMode && options?.yjsProviderRef?.current) {
+            const newPageId = `page_${Math.random().toString(36).substring(2, 9)}_${Date.now().toString(36)}`;
+            const nextIndex = currentValuesRef.current.pages.length;
+            options.yjsProviderRef.current.addPage(newPageId);
+            currentValuesRef.current.currentPageIndex = nextIndex;
+            setCurrentPageIndex(nextIndex);
+            return;
+        }
+
         setPages(prev => {
             const next = [...prev, createPage('')];
             const nextIndex = next.length - 1;
+            currentValuesRef.current.pages = next;
+            currentValuesRef.current.currentPageIndex = nextIndex;
             setCurrentPageIndex(nextIndex);
             recordChange({
                 title: currentValuesRef.current.title,
@@ -1155,19 +1272,37 @@ export function useCreateNote(
 
             return next;
         });
-    }, [recordChange, broadcastLiveChange]);
+    }, [isYjsMode, options?.yjsProviderRef, recordChange, broadcastLiveChange]);
 
     /**
      * Elimina una página por su índice.
      */
-    const deletePage = useCallback((index: number) => {
+    const deletePage = useCallback((index: number, pageId?: string) => {
         if (!userPermissionRef.current.canEdit || !userPermissionRef.current.hasAccess || userPermissionRef.current.isRevoked) return;
         isLocallyInteractedRef.current = true;
         lastLocalEditTimeRef.current = Date.now();
+
+        // Si estamos en modo Yjs, delegar al Y.Doc del proveedor
+        if (isYjsMode && options?.yjsProviderRef?.current) {
+            const currentPages = currentValuesRef.current.pages;
+            if (currentPages.length <= 1) return;
+            const target = currentPages[index];
+            const targetId = pageId || target?.id;
+            if (targetId) {
+                options.yjsProviderRef.current.removePage(targetId);
+                const nextIndex = Math.max(0, Math.min(currentValuesRef.current.currentPageIndex, currentPages.length - 2));
+                currentValuesRef.current.currentPageIndex = nextIndex;
+                setCurrentPageIndex(nextIndex);
+            }
+            return;
+        }
+
         setPages(prev => {
             if (prev.length <= 1) return prev;
             const next = prev.filter((_, i) => i !== index);
             const nextIndex = Math.min(currentValuesRef.current.currentPageIndex, next.length - 1);
+            currentValuesRef.current.pages = next;
+            currentValuesRef.current.currentPageIndex = nextIndex;
             setCurrentPageIndex(nextIndex);
             recordChange({
                 title: currentValuesRef.current.title,
@@ -1185,7 +1320,7 @@ export function useCreateNote(
 
             return next;
         });
-    }, [recordChange, broadcastLiveChange]);
+    }, [isYjsMode, options?.yjsProviderRef, recordChange, broadcastLiveChange]);
 
     /**
      * Duplica una página por su índice e inserta la copia inmediatamente después.
@@ -1194,6 +1329,17 @@ export function useCreateNote(
         if (!userPermissionRef.current.canEdit || !userPermissionRef.current.hasAccess || userPermissionRef.current.isRevoked) return;
         isLocallyInteractedRef.current = true;
         lastLocalEditTimeRef.current = Date.now();
+
+        // Si estamos en modo Yjs, delegar al Y.Doc del proveedor
+        if (isYjsMode && options?.yjsProviderRef?.current) {
+            const newPageId = `page_${Math.random().toString(36).substring(2, 9)}_${Date.now().toString(36)}`;
+            const insertAt = index + 1;
+            options.yjsProviderRef.current.addPage(newPageId, insertAt);
+            currentValuesRef.current.currentPageIndex = insertAt;
+            setCurrentPageIndex(insertAt);
+            return;
+        }
+
         setPages(prev => {
             if (index < 0 || index >= prev.length) return prev;
             const source = prev[index];
@@ -1202,6 +1348,8 @@ export function useCreateNote(
             const next = [...prev];
             next.splice(index + 1, 0, copy);
             const nextIndex = index + 1;
+            currentValuesRef.current.pages = next;
+            currentValuesRef.current.currentPageIndex = nextIndex;
             setCurrentPageIndex(nextIndex);
             recordChange({
                 title: currentValuesRef.current.title,
@@ -1219,7 +1367,7 @@ export function useCreateNote(
 
             return next;
         });
-    }, [recordChange, t, broadcastLiveChange]);
+    }, [isYjsMode, options?.yjsProviderRef, recordChange, t, broadcastLiveChange]);
 
     /**
      * Inserta una nueva hoja en blanco inmediatamente después del índice especificado.
@@ -1228,10 +1376,23 @@ export function useCreateNote(
         if (!userPermissionRef.current.canEdit || !userPermissionRef.current.hasAccess || userPermissionRef.current.isRevoked) return;
         isLocallyInteractedRef.current = true;
         lastLocalEditTimeRef.current = Date.now();
+
+        // Si estamos en modo Yjs, delegar al Y.Doc del proveedor
+        if (isYjsMode && options?.yjsProviderRef?.current) {
+            const newPageId = `page_${Math.random().toString(36).substring(2, 9)}_${Date.now().toString(36)}`;
+            const targetIndex = Math.max(0, Math.min(currentValuesRef.current.pages.length, index + 1));
+            options.yjsProviderRef.current.addPage(newPageId, targetIndex);
+            currentValuesRef.current.currentPageIndex = targetIndex;
+            setCurrentPageIndex(targetIndex);
+            return;
+        }
+
         setPages(prev => {
             const next = [...prev];
             const insertAt = Math.max(0, Math.min(next.length, index + 1));
             next.splice(insertAt, 0, createPage(''));
+            currentValuesRef.current.pages = next;
+            currentValuesRef.current.currentPageIndex = insertAt;
             setCurrentPageIndex(insertAt);
             recordChange({
                 title: currentValuesRef.current.title,
@@ -1249,7 +1410,7 @@ export function useCreateNote(
 
             return next;
         });
-    }, [recordChange, broadcastLiveChange]);
+    }, [isYjsMode, options?.yjsProviderRef, recordChange, broadcastLiveChange]);
 
     /**
      * Actualiza el título personalizado de una página.
@@ -1262,6 +1423,7 @@ export function useCreateNote(
             if (index < 0 || index >= prev.length) return prev;
             const next = [...prev];
             next[index] = { ...next[index], title: newTitle.trim() || undefined };
+            currentValuesRef.current.pages = next;
             recordChange({
                 title: currentValuesRef.current.title,
                 pages: next,
@@ -1288,6 +1450,19 @@ export function useCreateNote(
         if (!userPermissionRef.current.canEdit || !userPermissionRef.current.hasAccess || userPermissionRef.current.isRevoked) return;
         isLocallyInteractedRef.current = true;
         lastLocalEditTimeRef.current = Date.now();
+
+        // Si estamos en modo Yjs, delegar al Y.Doc del proveedor
+        if (isYjsMode && options?.yjsProviderRef?.current) {
+            options.yjsProviderRef.current.movePage(fromIndex, toIndex);
+            let nextIndex = currentValuesRef.current.currentPageIndex;
+            if (nextIndex === fromIndex) nextIndex = toIndex;
+            else if (fromIndex < nextIndex && toIndex >= nextIndex) nextIndex = nextIndex - 1;
+            else if (fromIndex > nextIndex && toIndex <= nextIndex) nextIndex = nextIndex + 1;
+            currentValuesRef.current.currentPageIndex = nextIndex;
+            setCurrentPageIndex(nextIndex);
+            return;
+        }
+
         setPages(prev => {
             if (
                 fromIndex < 0 ||
@@ -1305,6 +1480,8 @@ export function useCreateNote(
             if (nextIndex === fromIndex) nextIndex = toIndex;
             else if (fromIndex < nextIndex && toIndex >= nextIndex) nextIndex = nextIndex - 1;
             else if (fromIndex > nextIndex && toIndex <= nextIndex) nextIndex = nextIndex + 1;
+            currentValuesRef.current.pages = next;
+            currentValuesRef.current.currentPageIndex = nextIndex;
             setCurrentPageIndex(nextIndex);
             recordChange({
                 title: currentValuesRef.current.title,
@@ -1322,7 +1499,7 @@ export function useCreateNote(
 
             return next;
         });
-    }, [recordChange, broadcastLiveChange]);
+    }, [isYjsMode, options?.yjsProviderRef, recordChange, broadcastLiveChange]);
 
     /**
      * Mueve una página un paso hacia arriba o hacia abajo.
@@ -1335,6 +1512,7 @@ export function useCreateNote(
     const handleSetScrollLayout = useCallback((newLayout: PageLayoutMode) => {
         isLocallyInteractedRef.current = true;
         lastLocalEditTimeRef.current = Date.now();
+        currentValuesRef.current.scrollLayout = newLayout;
         setScrollLayout(newLayout);
         if (!isApplyingRemoteBroadcastRef.current) {
             broadcastLiveChange({
@@ -1356,7 +1534,7 @@ export function useCreateNote(
     /**
      * Guarda la nota silenciosamente en segundo plano sin navegar ni bloquear la UI.
      */
-    const saveSilently = async () => {
+    const saveSilently = async (): Promise<void> => {
         if (!userPermissionRef.current.canEdit || !userPermissionRef.current.hasAccess || userPermissionRef.current.isRevoked) {
             return;
         }
@@ -1366,96 +1544,118 @@ export function useCreateNote(
             return;
         }
 
-        flushPendingDebounce();
-        const {
-            title: currentTitle,
-            pages: currentPages,
-            scrollLayout: currentLayout,
-            attachments: currentAtts,
-            isPinned: currentPinned,
-            folderId: currentFolderId,
-            eventId: currentEventId,
-            fontFamily: currentFontFamily,
-        } = currentValuesRef.current;
-        const currentAttsJson = currentAtts.length > 0 ? JSON.stringify(currentAtts) : '[]';
-        const serializedContent = serializeNotePages(currentPages, currentLayout);
-
-        // Si la nota está totalmente vacía y no existe en BD, no crear una nota fantasma
-        const hasContent = currentPages.some(p => Boolean(p.content.replace(/<[^>]+>/g, '').trim()) || p.content.includes('<img') || p.content.includes('<input') || p.content.includes('x-todo'));
-        if (!currentTitle.trim() && !hasContent && currentAtts.length === 0 && !noteIdRef.current) {
-            return;
-        }
-
-        // Si los valores no han cambiado respecto a la última persistencia, omitir guardado
-        const last = lastSavedValuesRef.current;
-        if (
-            noteIdRef.current &&
-            last.title === currentTitle &&
-            last.serializedContent === serializedContent &&
-            last.attachments === currentAttsJson &&
-            last.isPinned === currentPinned &&
-            last.folderId === currentFolderId &&
-            last.eventId === currentEventId &&
-            last.fontFamily === currentFontFamily
-        ) {
-            return;
-        }
-
-        if (isSavingRef.current) return;
-        isSavingRef.current = true;
-        lastLocalSaveTimeRef.current = Date.now();
-
-        const activeId = noteIdRef.current || createdNoteId;
-        logCollabEvent('SAVE_START', {
-            noteId: activeId,
-            origin: 'local_save',
-            action: 'save_silently',
-            length: serializedContent.length,
-            hash: getCollabContentHash(serializedContent),
-        });
-
-        try {
-            const attsJsonToSave = currentAtts.length > 0 ? currentAttsJson : undefined;
-            if (noteIdRef.current) {
-                await updateNote(noteIdRef.current, {
-                    title: currentTitle,
-                    content: serializedContent,
-                    attachments: attsJsonToSave,
-                    is_pinned: currentPinned ? 1 : 0,
-                    folder_id: currentFolderId,
-                    event_id: currentEventId,
-                    font_family: currentFontFamily,
-                });
-            } else {
-                const created = await addNote(currentTitle, serializedContent, attsJsonToSave, undefined, currentPinned, currentFolderId, currentEventId, currentFontFamily);
-                if (created?.id) {
-                    noteIdRef.current = created.id;
-                    setCreatedNoteId(created.id);
-                }
+        if (isSavingRef.current) {
+            pendingSaveRequestedRef.current = true;
+            if (activeSavePromiseRef.current) {
+                await activeSavePromiseRef.current;
             }
-
-            lastSavedValuesRef.current = {
-                title: currentTitle,
-                serializedContent: serializedContent,
-                attachments: currentAttsJson,
-                isPinned: currentPinned,
-                folderId: currentFolderId,
-                eventId: currentEventId,
-                fontFamily: currentFontFamily,
-            };
-
-            logCollabEvent('SAVE_DONE', {
-                noteId: noteIdRef.current || createdNoteId,
-                origin: 'local_save',
-                action: 'save_silently',
-                length: serializedContent.length,
-                hash: getCollabContentHash(serializedContent),
-            });
-        } catch (error) {
-            console.error('Error in saveSilently:', error);
-        } finally {
-            isSavingRef.current = false;
+            return;
         }
+
+        isSavingRef.current = true;
+        const runLoop = (async () => {
+            try {
+                do {
+                    pendingSaveRequestedRef.current = false;
+                    flushPendingDebounce();
+                    const {
+                        title: currentTitle,
+                        pages: currentPages,
+                        scrollLayout: currentLayout,
+                        attachments: currentAtts,
+                        isPinned: currentPinned,
+                        folderId: currentFolderId,
+                        eventId: currentEventId,
+                        fontFamily: currentFontFamily,
+                    } = currentValuesRef.current;
+                    const currentAttsJson = currentAtts.length > 0 ? JSON.stringify(currentAtts) : '[]';
+                    const serializedContent = serializeNotePages(currentPages, currentLayout);
+
+                    // Si la nota está totalmente vacía y no existe en BD, no crear una nota fantasma
+                    const hasContent = currentPages.some(p => Boolean(p.content.replace(/<[^>]+>/g, '').trim()) || p.content.includes('<img') || p.content.includes('<input') || p.content.includes('x-todo'));
+                    if (!currentTitle.trim() && !hasContent && currentAtts.length === 0 && !noteIdRef.current) {
+                        break;
+                    }
+
+                    // Si los valores no han cambiado respecto a la última persistencia, omitir guardado
+                    const last = lastSavedValuesRef.current;
+                    const contentUnchanged = isYjsMode || last.serializedContent === serializedContent;
+                    if (
+                        noteIdRef.current &&
+                        last.title === currentTitle &&
+                        contentUnchanged &&
+                        last.attachments === currentAttsJson &&
+                        last.isPinned === currentPinned &&
+                        last.folderId === currentFolderId &&
+                        last.eventId === currentEventId &&
+                        last.fontFamily === currentFontFamily
+                    ) {
+                        break;
+                    }
+
+                    lastLocalSaveTimeRef.current = Date.now();
+
+                    const activeId = noteIdRef.current || createdNoteId;
+                    logCollabEvent('SAVE_START', {
+                        noteId: activeId,
+                        origin: 'local_save',
+                        action: 'save_silently',
+                        length: serializedContent.length,
+                        hash: getCollabContentHash(serializedContent),
+                    });
+
+                    const attsJsonToSave = currentAtts.length > 0 ? currentAttsJson : undefined;
+                    if (noteIdRef.current) {
+                        // CRÍTICO (Fase 3.3): En notas en modo 'yjs', el autoguardado REST NUNCA debe modificar 'content'.
+                        // La persistencia de contenido se realiza exclusivamente a través de los deltas binarios Yjs (SQLite / Supabase RPC).
+                        const updatePayload: Partial<any> = {
+                            title: currentTitle,
+                            attachments: attsJsonToSave,
+                            is_pinned: currentPinned ? 1 : 0,
+                            folder_id: currentFolderId,
+                            event_id: currentEventId,
+                            font_family: currentFontFamily,
+                        };
+                        if (!isYjsMode) {
+                            updatePayload.content = serializedContent;
+                        }
+                        await updateNote(noteIdRef.current, updatePayload);
+                    } else {
+                        const created = await addNote(currentTitle, serializedContent, attsJsonToSave, undefined, currentPinned, currentFolderId, currentEventId, currentFontFamily);
+                        if (created?.id) {
+                            noteIdRef.current = created.id;
+                            setCreatedNoteId(created.id);
+                        }
+                    }
+
+                    lastSavedValuesRef.current = {
+                        title: currentTitle,
+                        serializedContent: isYjsMode ? lastSavedValuesRef.current.serializedContent : serializedContent,
+                        attachments: currentAttsJson,
+                        isPinned: currentPinned,
+                        folderId: currentFolderId,
+                        eventId: currentEventId,
+                        fontFamily: currentFontFamily,
+                    };
+
+                    logCollabEvent('SAVE_DONE', {
+                        noteId: noteIdRef.current || createdNoteId,
+                        origin: 'local_save',
+                        action: 'save_silently',
+                        length: serializedContent.length,
+                        hash: getCollabContentHash(serializedContent),
+                    });
+                } while (pendingSaveRequestedRef.current);
+            } catch (error) {
+                console.error('Error in saveSilently:', error);
+            } finally {
+                isSavingRef.current = false;
+                activeSavePromiseRef.current = null;
+            }
+        })();
+
+        activeSavePromiseRef.current = runLoop;
+        await runLoop;
     };
 
     // Auto-guardado con debounce mientras el usuario edita
@@ -1603,7 +1803,9 @@ export function useCreateNote(
                 });
                 isLocallyInteractedRef.current = true;
                 lastLocalEditTimeRef.current = Date.now();
-                setAttachments([...attachments, { uri: newPath, name }]);
+                const nextAtts = [...currentValuesRef.current.attachments, { uri: newPath, name }];
+                currentValuesRef.current.attachments = nextAtts;
+                setAttachments(nextAtts);
             }
         } catch (error) {
             console.error(error);
@@ -1614,33 +1816,41 @@ export function useCreateNote(
     const removeAttachment = (index: number) => {
         isLocallyInteractedRef.current = true;
         lastLocalEditTimeRef.current = Date.now();
-        const newAtts = [...attachments];
+        const newAtts = [...currentValuesRef.current.attachments];
         newAtts.splice(index, 1);
+        currentValuesRef.current.attachments = newAtts;
         setAttachments(newAtts);
     };
 
     const handleSetFolderId = useCallback((newFolderId: string | null) => {
         isLocallyInteractedRef.current = true;
         lastLocalEditTimeRef.current = Date.now();
+        currentValuesRef.current.folderId = newFolderId;
         setFolderId(newFolderId);
     }, []);
 
     const handleSetEventId = useCallback((newEventId: string | null) => {
         isLocallyInteractedRef.current = true;
         lastLocalEditTimeRef.current = Date.now();
+        currentValuesRef.current.eventId = newEventId;
         setEventId(newEventId);
     }, []);
 
     const handleSetFontFamily = useCallback((newFont: string) => {
         isLocallyInteractedRef.current = true;
         lastLocalEditTimeRef.current = Date.now();
+        currentValuesRef.current.fontFamily = newFont;
         setFontFamily(newFont);
     }, []);
 
     const handleSetIsPinned = useCallback((valOrFn: boolean | ((prev: boolean) => boolean)) => {
         isLocallyInteractedRef.current = true;
         lastLocalEditTimeRef.current = Date.now();
-        setIsPinned(valOrFn);
+        setIsPinned(prev => {
+            const next = typeof valOrFn === 'function' ? valOrFn(prev) : valOrFn;
+            currentValuesRef.current.isPinned = next;
+            return next;
+        });
     }, []);
 
     const openAttachment = async (uri: string) => {
@@ -1668,6 +1878,7 @@ export function useCreateNote(
         title, setTitle: handleSetTitle,
         pages, setPages,
         currentPageIndex, setCurrentPageIndex,
+        syncPagesFromYjs,
         undo,
         redo,
         canUndo,
@@ -1718,5 +1929,7 @@ export function useCreateNote(
         isViewer: !userPermission.canEdit || !userPermission.hasAccess || userPermission.isRevoked,
         hasAccess: userPermission.hasAccess && !userPermission.isRevoked,
         isRevoked: userPermission.isRevoked || !userPermission.hasAccess,
+        syncMode,
+        isYjsMode,
     };
 }

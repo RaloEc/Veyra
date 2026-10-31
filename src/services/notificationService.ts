@@ -6,6 +6,8 @@ import { format } from 'date-fns';
 import { getSoundName } from '../constants/sounds';
 import i18n from '../lib/i18n';
 import { VeyraAlarm } from './veyraAlarm';
+import { getDB } from '../db';
+import { supabase } from '../lib/supabase';
 
 export const DEFAULT_SOUND_SETTINGS = {
     normal: 'ping_brillante.wav',
@@ -26,8 +28,12 @@ const stripExtension = (filename: string): string => {
 
 export const CURRENT_CHANNEL_VERSION = 'v7';
 
+let isHandlerInitialized = false;
+
 export const NotificationService = {
     async setup() {
+        if (isHandlerInitialized) return;
+        isHandlerInitialized = true;
         console.log('[NotificationService] 🚀 Inicializando NotificationHandler');
         Notifications.setNotificationHandler({
             handleNotification: async (notification) => {
@@ -194,7 +200,8 @@ export const NotificationService = {
         try {
             const permissions = await Notifications.getPermissionsAsync();
             let channels: Notifications.NotificationChannel[] = [];
-            if (Platform.OS === 'android') {
+            const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient || (Constants as any).appOwnership === 'expo';
+            if (Platform.OS === 'android' && !isExpoGo) {
                 channels = await Notifications.getNotificationChannelsAsync();
             }
             const scheduled = await Notifications.getAllScheduledNotificationsAsync();
@@ -221,7 +228,16 @@ export const NotificationService = {
     },
 
     async scheduleReminderNotification(reminder: Reminder, soundSettings?: { normal?: string; strict?: string; critical?: string }): Promise<string[]> {
-        const trigger = reminder.due_date_ms;
+        let trigger = reminder.due_date_ms;
+        if (reminder.event_id) {
+            try {
+                const db = await getDB();
+                const ev = await db.getFirstAsync<any>('SELECT start_time_ms FROM events WHERE id = ? AND deleted = 0', [reminder.event_id]);
+                if (ev && ev.start_time_ms) {
+                    trigger = ev.start_time_ms + (reminder.offset_minutes || 0) * 60000;
+                }
+            } catch (err) {}
+        }
         const notificationIds: string[] = [];
         if (trigger < Date.now()) return [];
 
@@ -598,7 +614,6 @@ export const NotificationService = {
 
             if (!token) return null;
 
-            const { supabase } = await import('../lib/supabase');
             const platform = Platform.OS === 'ios' ? 'ios' : Platform.OS === 'android' ? 'android' : 'web';
 
             const { error } = await supabase.from('push_tokens').upsert(
@@ -653,7 +668,6 @@ export const NotificationService = {
             const token = tokenData?.data;
 
             if (token) {
-                const { supabase } = await import('../lib/supabase');
                 await supabase.from('push_tokens').delete().match({ user_id: userId, token });
                 console.log('[NotificationService] Push token removido de Supabase');
             }

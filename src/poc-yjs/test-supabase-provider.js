@@ -189,18 +189,19 @@ class TestClientNode {
             Y.applyUpdate(this.doc, bytes, 'remote');
         });
 
-        // Enviar deltas locales
+        // Enviar deltas locales (filtra orígenes remotos)
         this.doc.on('update', (update, origin) => {
-            if (origin !== 'remote') {
-                this.channel.send({
-                    type: 'broadcast',
-                    event: 'YJS_UPDATE',
-                    payload: {
-                        senderClientId: this.clientId,
-                        update: uint8ArrayToBase64(update)
-                    }
-                });
+            if (origin === 'remote-replay-load' || origin === 'remote-broadcast' || origin === 'remote') {
+                return;
             }
+            this.channel.send({
+                type: 'broadcast',
+                event: 'YJS_UPDATE',
+                payload: {
+                    senderClientId: this.clientId,
+                    update: uint8ArrayToBase64(update)
+                }
+            });
         });
 
         // Enviar awareness local

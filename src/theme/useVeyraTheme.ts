@@ -1,25 +1,23 @@
-import { useColorScheme } from 'react-native';
 import { useStore } from '../store/useStore';
-import { useAccentColor, AccentTheme, AccentPalette } from './accentColors';
-import { VEYRA_TOKENS, ControlLevelType } from './tokens';
+import { useAccentColor, AccentTheme } from './accentColors';
+import { useResolvedTheme } from './useResolvedTheme';
+import { VEYRA_TOKENS, ControlLevelType, VeyraPalette } from './tokens';
 
 /**
  * useVeyraTheme
- * Hook unificado para acceder a tokens, modo claro/oscuro, color de acento y colores semánticos.
- * Se adapta automáticamente al modo claro/oscuro del sistema cuando themeMode es 'system'.
+ * Hook unificado para acceder a tokens, modo claro/oscuro/amoled, color de acento y colores semánticos.
+ * Se adapta automáticamente al modo claro/oscuro del sistema cuando themeMode es 'system',
+ * y aplica negro puro cuando isAmoled está activo en modo oscuro.
  */
 export function useVeyraTheme() {
-    const systemColorScheme = useColorScheme();
+    const { resolvedTheme, isAmoled, isDark } = useResolvedTheme();
     const themeMode = useStore(state => state.theme) || 'system';
     const accentTheme = (useStore(state => state.accentTheme) || 'blue') as AccentTheme;
     const accentPalette = useAccentColor();
 
-    const resolvedTheme: 'light' | 'dark' = themeMode === 'system'
-        ? (systemColorScheme === 'dark' ? 'dark' : 'light')
-        : themeMode;
-
-    const isDark = resolvedTheme === 'dark';
-    const modeColors = isDark ? VEYRA_TOKENS.colors.dark : VEYRA_TOKENS.colors.light;
+    const modeColors: VeyraPalette = isAmoled
+        ? VEYRA_TOKENS.colors.amoled
+        : (isDark ? VEYRA_TOKENS.colors.dark : VEYRA_TOKENS.colors.light);
 
     // Helper for semantic control level tokens
     const getControlLevelColor = (level?: string | null) => {
@@ -54,6 +52,7 @@ export function useVeyraTheme() {
     return {
         // State
         isDark,
+        isAmoled,
         themeMode,
         resolvedTheme,
         accentTheme,
