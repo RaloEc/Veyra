@@ -36,6 +36,27 @@ export const ReminderService = {
         offsetMinutes?: number | null
     ): Promise<Reminder> {
         const db = await getDB();
+
+        // 1. BLINDAJE DE SPAM: Máximo 5 recordatorios asociados a un mismo evento
+        if (eventId) {
+            const existingEventReminders = await db.getAllAsync<{ id: string }>(
+                'SELECT id FROM reminders WHERE event_id = ? AND deleted = 0',
+                [eventId]
+            );
+            if (existingEventReminders && existingEventReminders.length >= 5) {
+                throw new Error('Límite alcanzado: Máximo 5 recordatorios o alarmas permitidas por evento.');
+            }
+        }
+
+        // 2. BLINDAJE DE SPAM: Cuota de seguridad de recordatorios pendientes por usuario (máx. 300)
+        const pendingCount = await db.getFirstAsync<{ count: number }>(
+            `SELECT COUNT(*) as count FROM reminders WHERE user_id = ? AND status = 'pending' AND deleted = 0`,
+            [userId]
+        );
+        if (pendingCount && pendingCount.count >= 300) {
+            throw new Error('Límite de seguridad alcanzado: Tienes más de 300 recordatorios activos pendientes. Completa o archiva los existentes.');
+        }
+
         const id = Crypto.randomUUID();
         const now = Date.now();
 
@@ -252,5 +273,20 @@ export const ReminderService = {
             `UPDATE reminders SET status = 'failed' WHERE id = ?`,
             [id]
         );
+    },
+
+    /**
+     * Archiva de forma segura los recordatorios completados que tengan más de 90 días.
+     * Cambia el estado a 'archived' para liberar las consultas de la agenda diaria
+     * sin perder el historial del usuario.
+     */
+    async archiveOldCompletedReminders(daysThreshold: number = 90): Promise<number> {
+        const db = await getDB();
+        const cutoffMs = Date.now() - (daysThreshold * 24 * 60 * 60 * 1000);
+        const result = await db.runAsync(
+            `UPDATE reminders SET status = 'archived', last_modified_ms = ? WHERE status = 'completed' AND last_modified_ms < ?`,
+            [Date.now(), cutoffMs]
+        );
+        return result.changes ?? 0;
     }
 };

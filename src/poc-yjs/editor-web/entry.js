@@ -1,4 +1,4 @@
-import { Editor } from '@tiptap/core';
+import { Editor, Node } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
 import Collaboration from '@tiptap/extension-collaboration';
 import CollaborationCursor from '@tiptap/extension-collaboration-cursor';
@@ -10,11 +10,13 @@ import TextStyle from '@tiptap/extension-text-style';
 import FontFamily from '@tiptap/extension-font-family';
 import TaskList from '@tiptap/extension-task-list';
 import TaskItem from '@tiptap/extension-task-item';
-import Image from '@tiptap/extension-image';
+import { CustomImage } from './image-node.js';
+import { createYouTubeNodeView } from './youtube-nodeview.js';
 import * as Y from 'yjs';
 import * as awarenessProtocol from 'y-protocols/awareness';
 import { ySyncPluginKey, yCursorPluginKey, absolutePositionToRelativePosition } from 'y-prosemirror';
 import { DOMSerializer } from 'prosemirror-model';
+import { Plugin, PluginKey } from 'prosemirror-state';
 
 // Conversión binaria Uint8Array <-> Base64
 function uint8ArrayToBase64(bytes) {
@@ -48,50 +50,227 @@ let currentUser = {
 let isAwarenessDestroyed = false;
 let areCursorsVisible = true;
 let lastClickedImagePos = null;
+let suppressImageDismissedUntil = 0;
+let lastClickedYoutubePos = null;
+let suppressYoutubeDismissedUntil = 0;
 
-const CustomImage = Image.extend({
+// ═══════════════════════════════════════════════════════════════
+// NODO PERSONALIZADO YOUTUBE (Tiptap v2 + Vanilla JS Facade)
+// ═══════════════════════════════════════════════════════════════
+const YT_REGEX = /^(?:https?:\/\/)?(?:www\.|m\.)?(?:youtube\.com\/(?:watch\?(?:.*&)?v=|shorts\/|embed\/|v\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})(?:[?&#].*)?$/i;
+
+const YoutubeNode = Node.create({
+    name: 'youtube',
+    group: 'block',
+    atom: true,
+    draggable: true,
+    selectable: true,
+    inline: false,
+
     addAttributes() {
         return {
-            ...this.parent?.(),
-            style: {
+            videoId: {
                 default: null,
-                parseHTML: element => element.getAttribute('style'),
+                parseHTML: element => {
+                    const fromData = element.getAttribute('data-video-id');
+                    if (fromData) return fromData;
+
+                    if (element.tagName && element.tagName.toLowerCase() === 'iframe') {
+                        const src = element.getAttribute('src') || '';
+                        const match = src.match(/(?:youtube\.com|youtube-nocookie\.com)\/embed\/([a-zA-Z0-9_-]{11})/i);
+                        return match ? match[1] : null;
+                    }
+                    return null;
+                },
+            },
+            embed: {
+                default: true,
+                parseHTML: element => {
+                    const val = element.getAttribute('data-embed');
+                    return val !== 'false';
+                },
+            },
+            width: {
+                default: 100,
+                parseHTML: element => {
+                    const w = element.getAttribute('data-width') || (element.style && element.style.width);
+                    return w ? parseInt(w, 10) : 100;
+                },
                 renderHTML: attributes => {
-                    if (!attributes.style) return {};
-                    return { style: attributes.style };
-                }
-            }
+                    return {
+                        'data-width': attributes.width || 100,
+                    };
+                },
+            },
+            textAlign: {
+                default: 'center',
+                parseHTML: element => {
+                    return element.getAttribute('data-align') || 'center';
+                },
+                renderHTML: attributes => {
+                    return {
+                        'data-align': attributes.textAlign || 'center',
+                    };
+                },
+            },
         };
-    }
-}).configure({
-    inline: false
+    },
+
+    parseHTML() {
+        return [
+            { tag: 'div[data-youtube-video]' },
+            { tag: 'iframe[src*="youtube.com/embed/"]' },
+            { tag: 'iframe[src*="youtube-nocookie.com/embed/"]' },
+        ];
+    },
+
+    renderHTML({ node }) {
+        const videoId = (node.attrs && node.attrs.videoId) || '';
+        const embed = node.attrs && node.attrs.embed !== false;
+
+        if (embed) {
+            return [
+                'div',
+                {
+                    'data-youtube-video': '',
+                    'data-video-id': videoId,
+                    'data-embed': 'true',
+                },
+                [
+                    'iframe',
+                    {
+                        loading: 'lazy',
+                        src: 'https://www.youtube.com/embed/' + videoId,
+                        frameborder: '0',
+                        allow: 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share',
+                        referrerpolicy: 'strict-origin-when-cross-origin',
+                        allowfullscreen: 'true',
+                    },
+                ],
+            ];
+        }
+
+        return [
+            'div',
+            {
+                'data-youtube-video': '',
+                'data-video-id': videoId,
+                'data-embed': 'false',
+            },
+            [
+                'a',
+                {
+                    href: 'https://www.youtube.com/watch?v=' + videoId,
+                },
+                'https://www.youtube.com/watch?v=' + videoId,
+            ],
+        ];
+    },
+
+    addCommands() {
+        return {
+            setYoutube: options => ({ commands }) => {
+                return commands.insertContent({
+                    type: this.name,
+                    attrs: {
+                        videoId: options.videoId,
+                        embed: options.embed !== undefined ? options.embed : true,
+                    },
+                });
+            },
+            toggleYoutubeEmbed: () => ({ tr, state, dispatch }) => {
+                const { selection } = state;
+                let nodePos = null;
+                let currentNode = null;
+
+                if (selection.$from.node().type.name === this.name) {
+                    nodePos = selection.$from.before();
+                    currentNode = selection.$from.node();
+                } else if (selection.node && selection.node.type.name === this.name) {
+                    nodePos = selection.from;
+                    currentNode = selection.node;
+                } else {
+                    state.doc.nodesBetween(selection.from, selection.to, (node, pos) => {
+                        if (node.type.name === this.name && nodePos === null) {
+                            nodePos = pos;
+                            currentNode = node;
+                            return false;
+                        }
+                    });
+                }
+
+                if (nodePos !== null && currentNode && dispatch) {
+                    const currentEmbed = currentNode.attrs.embed !== false;
+                    tr.setNodeMarkup(nodePos, undefined, {
+                        ...currentNode.attrs,
+                        embed: !currentEmbed,
+                    });
+                    dispatch(tr);
+                    return true;
+                }
+                return false;
+            },
+        };
+    },
+
+    addKeyboardShortcuts() {
+        return {
+            'Mod-Shift-y': () => this.editor.commands.toggleYoutubeEmbed(),
+            'Mod-Shift-Y': () => this.editor.commands.toggleYoutubeEmbed(),
+        };
+    },
+
+    addProseMirrorPlugins() {
+        return [
+            new Plugin({
+                key: new PluginKey('youtubePasteHandler'),
+                props: {
+                    handlePaste: (view, event) => {
+                        const cd = event.clipboardData;
+                        const plain = cd ? cd.getData('text/plain') : '';
+                        const html = cd ? cd.getData('text/html') : '';
+                        const uri = cd ? cd.getData('text/uri-list') : '';
+                        const debugData = {
+                            types: cd ? Array.from(cd.types) : [],
+                            plain: JSON.stringify(plain),
+                            html: JSON.stringify(html.substring(0, 300)),
+                            uri: JSON.stringify(uri),
+                            plainTrim: JSON.stringify(plain.trim()),
+                            match: plain.trim().match(YT_REGEX)
+                        };
+                        console.log('[YT paste DEBUG]', debugData);
+                        try {
+                            sendToNative({
+                                type: 'DIAG_LOG',
+                                message: '[YT paste DEBUG]',
+                                payload: debugData
+                            });
+                        } catch (e) {}
+
+                        if (!plain.trim()) return false;
+
+                        const match = plain.trim().match(YT_REGEX);
+                        if (match && match[1]) {
+                            event.preventDefault();
+                            this.editor
+                                .chain()
+                                .focus()
+                                .setYoutube({ videoId: match[1], embed: true })
+                                .run();
+                            return true;
+                        }
+                        return false;
+                    },
+                },
+            }),
+        ];
+    },
+
+    addNodeView() {
+        return props => createYouTubeNodeView(props);
+    },
 });
 
-// Reglas CSS dinámicas para ocultar cursores en modo visualización
-if (typeof document !== 'undefined') {
-    const styleId = 'veyra-cursor-visibility-styles';
-    if (!document.getElementById(styleId)) {
-        const styleEl = document.createElement('style');
-        styleEl.id = styleId;
-        styleEl.textContent = `
-            .veyra-no-cursors .collaboration-cursor__caret,
-            .veyra-no-cursors .collaboration-cursor__label,
-            .veyra-no-cursors .ProseMirror-yjs-cursor {
-                display: none !important;
-                visibility: hidden !important;
-            }
-
-            .veyra-no-cursors .ProseMirror-yjs-selection,
-            .veyra-no-cursors .collaboration-cursor__selection {
-                background-color: transparent !important;
-                background: transparent !important;
-                border-color: transparent !important;
-                /* NO usar display: none, NO usar visibility: hidden */
-            }
-        `;
-        (document.head || document.documentElement).appendChild(styleEl);
-    }
-}
 
 // Evitar que Tiptap/ProseMirror bloquee el gesto nativo de pinch-to-zoom
 if (typeof document !== 'undefined') {
@@ -104,7 +283,7 @@ if (typeof document !== 'undefined') {
 
 // Evitar que pérdidas temporales de foco DOM en Android borren el cursor colaborativo
 const originalSetLocalStateField = awareness.setLocalStateField.bind(awareness);
-awareness.setLocalStateField = function(field, value) {
+awareness.setLocalStateField = function (field, value) {
     if (isAwarenessDestroyed) return;
     if (field === 'cursor' && !areCursorsVisible) {
         return originalSetLocalStateField('cursor', null);
@@ -132,6 +311,7 @@ const providerMock = {
 
 let editor = null;
 let currentFragmentName = (typeof window !== 'undefined' && window.VEYRA_INITIAL_PAGE_ID) ? window.VEYRA_INITIAL_PAGE_ID : 'default';
+let lastSelectionSnapshot = null;
 
 function logToNative(origin, action, sizeBytes, extra = {}) {
     sendToNative({
@@ -169,10 +349,10 @@ function getToolbarState() {
         textAlign: editor.isActive({ textAlign: 'center' })
             ? 'center'
             : editor.isActive({ textAlign: 'right' })
-            ? 'right'
-            : editor.isActive({ textAlign: 'justify' })
-            ? 'justify'
-            : 'left',
+                ? 'right'
+                : editor.isActive({ textAlign: 'justify' })
+                    ? 'justify'
+                    : 'left',
         textColor: (editor.getAttributes('textStyle') && editor.getAttributes('textStyle').color) || null,
         highlightColor: (editor.getAttributes('highlight') && editor.getAttributes('highlight').color) || (editor.isActive('highlight') ? 'rgba(250, 204, 21, 0.35)' : null),
         fontFamily: (editor.getAttributes('textStyle') && editor.getAttributes('textStyle').fontFamily) || null,
@@ -220,7 +400,7 @@ function initEditor(fragmentName) {
     if (editor) {
         try {
             editor.destroy();
-        } catch (_) {}
+        } catch (_) { }
         editor = null;
     }
 
@@ -242,6 +422,7 @@ function initEditor(fragmentName) {
                 types: ['heading', 'paragraph', 'image']
             }),
             CustomImage,
+            YoutubeNode,
             TaskList,
             TaskItem.configure({
                 nested: true,
@@ -257,19 +438,14 @@ function initEditor(fragmentName) {
                 render: (user) => {
                     const cursor = document.createElement('span');
                     cursor.classList.add('collaboration-cursor__caret');
-                    cursor.setAttribute('style', `border-left-color: ${user.color || '#8B5CF6'} !important; border-color: ${user.color || '#8B5CF6'} !important;`);
+                    cursor.setAttribute('style', `border-color: ${user.color || '#8B5CF6'}; border-left-color: ${user.color || '#8B5CF6'};`);
 
                     const label = document.createElement('div');
                     label.classList.add('collaboration-cursor__label');
-                    label.setAttribute('style', `background-color: ${user.color || '#8B5CF6'} !important;`);
+                    label.setAttribute('style', `background-color: ${user.color || '#8B5CF6'};`);
                     label.insertBefore(document.createTextNode(user.name || 'Invitado'), null);
 
-                    const space1 = document.createTextNode('\u2060');
-                    const space2 = document.createTextNode('\u2060');
-                    cursor.insertBefore(space1, null);
                     cursor.insertBefore(label, null);
-                    cursor.insertBefore(space2, null);
-
                     return cursor;
                 }
             })
@@ -316,43 +492,84 @@ function initEditor(fragmentName) {
                 updateLocalCursor();
             }
             window.veyraBroadcastAwareness();
+        },
+        editorProps: {
+            handlePaste: (view, event) => {
+                const diagProps = {
+                    hasCD: !!event.clipboardData,
+                    plain: event.clipboardData ? event.clipboardData.getData('text/plain') : ''
+                };
+                console.log('[YT diag editorProps.handlePaste]', diagProps);
+                try {
+                    sendToNative({
+                        type: 'DIAG_LOG',
+                        message: '[YT diag editorProps.handlePaste]',
+                        payload: diagProps
+                    });
+                } catch (_) {}
 
-            // Gestión de selección de texto y coordenadas para menú flotante (Tooltip)
-            try {
-                if (editor && editor.state && editor.state.selection) {
-                    const { from, to } = editor.state.selection;
-                    if (from !== to) {
-                        const fromCoords = editor.view.coordsAtPos(from);
-                        const toCoords = editor.view.coordsAtPos(to);
-                        const topY = Math.min(fromCoords.top, toCoords.top);
-                        const bottomY = Math.max(fromCoords.bottom, toCoords.bottom);
-                        const leftX = Math.min(fromCoords.left, toCoords.left);
-                        const rightX = Math.max(fromCoords.right, toCoords.right);
-                        const width = Math.max(1, Math.abs(rightX - leftX));
-                        const height = Math.max(1, Math.abs(bottomY - topY));
-                        const centerX = leftX + (width / 2);
-                        const selectedText = editor.state.doc.textBetween(from, to, ' ');
+                const clipboardData = event.clipboardData;
+                if (!clipboardData) return false;
 
-                        sendToNative({
-                            type: 'TEXT_SELECTED',
-                            rect: { x: centerX, y: topY, width, height, top: topY, bottom: bottomY, left: leftX, right: rightX },
-                            text: selectedText,
-                            hasText: true,
-                        });
-                    } else {
-                        sendToNative({ type: 'TEXT_SELECTED', hasText: false });
+                // 1. Detección de archivos de imagen pegados directamente
+                const items = clipboardData.items;
+                if (items && items.length > 0) {
+                    for (let i = 0; i < items.length; i++) {
+                        const item = items[i];
+                        if (item.type && item.type.startsWith('image/')) {
+                            event.preventDefault();
+                            sendToNative({
+                                type: 'IMAGE_BLOCKED_BASE64',
+                                reason: 'direct_paste_file'
+                            });
+                            return true;
+                        }
                     }
                 }
-            } catch (selErr) {
-                console.warn('[YJS-SELECTION] error calculando coords:', selErr);
+
+                // 2. Detección de código HTML con <img src="data:image/..."> incrustado
+                const html = clipboardData.getData('text/html');
+                if (html && /<img[^>]+src=["']data:image\/[^"']+["']/i.test(html)) {
+                    event.preventDefault();
+                    sendToNative({
+                        type: 'IMAGE_BLOCKED_BASE64',
+                        reason: 'data_uri_html'
+                    });
+                    return true;
+                }
+
+                return false;
+            },
+            handleDrop: (view, event) => {
+                const dataTransfer = event.dataTransfer;
+                if (!dataTransfer) return false;
+
+                const files = dataTransfer.files;
+                if (files && files.length > 0) {
+                    for (let i = 0; i < files.length; i++) {
+                        if (files[i].type && files[i].type.startsWith('image/')) {
+                            event.preventDefault();
+                            sendToNative({
+                                type: 'IMAGE_BLOCKED_BASE64',
+                                reason: 'drag_and_drop_file'
+                            });
+                            return true;
+                        }
+                    }
+                }
+                return false;
             }
         }
     });
 
     if (editor && editor.view && editor.view.dom) {
         editor.view.dom.addEventListener('scroll', () => {
-            sendToNative({ type: 'TEXT_SELECTED', hasText: false });
-            sendToNative({ type: 'IMAGE_DISMISSED' });
+            if (Date.now() >= suppressImageDismissedUntil) {
+                sendToNative({ type: 'IMAGE_DISMISSED' });
+            }
+            if (Date.now() >= suppressYoutubeDismissedUntil) {
+                sendToNative({ type: 'YOUTUBE_DISMISSED' });
+            }
         }, { passive: true });
         editor.view.dom.addEventListener('focus', () => {
             if (areCursorsVisible) {
@@ -361,6 +578,9 @@ function initEditor(fragmentName) {
             }
         });
         editor.view.dom.addEventListener('click', (e) => {
+            if (editor && editor.state && editor.state.selection && editor.state.selection.empty) {
+                lastSelectionSnapshot = null;
+            }
             if (areCursorsVisible) {
                 updateLocalCursor();
                 window.veyraBroadcastAwareness();
@@ -369,14 +589,23 @@ function initEditor(fragmentName) {
             const target = e.target;
 
             // Interacción con click en imagen: abrir visor / menú tooltip en React Native
-            if (target && target.tagName === 'IMG') {
+            if (target && target.tagName === 'IMG' && target.closest('.veyra-image-node')) {
+                let attrs = {};
                 try {
                     const pos = editor.view.posAtDOM(target, 0);
                     lastClickedImagePos = pos;
                     if (typeof pos === 'number' && pos >= 0 && editor.isEditable) {
                         editor.chain().setNodeSelection(pos).run();
+                        const node = editor.state.doc.nodeAt(pos);
+                        if (node && node.attrs) {
+                            attrs = {
+                                width: node.attrs.width || null,
+                                caption: node.attrs.caption || null,
+                                textAlign: node.attrs.textAlign || null
+                            };
+                        }
                     }
-                } catch (_) {}
+                } catch (_) { }
                 let rect = null;
                 try {
                     const r = target.getBoundingClientRect();
@@ -390,10 +619,20 @@ function initEditor(fragmentName) {
                         left: r.left,
                         right: r.right,
                     };
-                } catch (_) {}
-                sendToNative({ type: 'IMAGE_CLICKED', url: target.src, rect });
+                } catch (_) { }
+                sendToNative({ type: 'IMAGE_CLICKED', url: target.src, rect, attrs });
+            } else if (target && target.closest && (target.closest('.veyra-image-wrapper') || target.closest('.veyra-figcaption-container'))) {
+                // Click dentro del wrapper de imagen (handles, píldora) o pie de foto
+            } else if (target && target.closest && target.closest('.veyra-youtube-wrapper')) {
+                // Click dentro del wrapper de youtube (video, handles, píldora)
             } else {
-                sendToNative({ type: 'IMAGE_DISMISSED' });
+                // Click en cualquier otro lugar (incluyendo el espacio en blanco al lado de la imagen o video): deseleccionar
+                if (Date.now() >= suppressImageDismissedUntil) {
+                    sendToNative({ type: 'IMAGE_DISMISSED' });
+                }
+                if (Date.now() >= suppressYoutubeDismissedUntil) {
+                    sendToNative({ type: 'YOUTUBE_DISMISSED' });
+                }
             }
 
             // Manejo táctil de Checklist / TaskItem (tanto en modo edición como en modo lectura)
@@ -453,6 +692,119 @@ function initEditor(fragmentName) {
         });
     }
 
+    if (!window.__ytDiagListenersAttached) {
+        window.__ytDiagListenersAttached = true;
+
+        // A) paste en document con capture (diagnóstico / teclado físico)
+        document.addEventListener('paste', (event) => {
+            const cd = event.clipboardData;
+            const payload = {
+                hasCD: !!cd,
+                types: cd ? Array.from(cd.types) : [],
+                plain: cd ? cd.getData('text/plain') : '',
+                uri: cd ? cd.getData('text/uri-list') : '',
+                html: cd ? cd.getData('text/html').substring(0, 200) : ''
+            };
+            console.log('[YT diag paste-cap]', payload);
+            try {
+                sendToNative({ type: 'DIAG_LOG', message: '[YT diag paste-cap]', payload });
+            } catch (_) {}
+        }, true);
+
+        // B) MECANISMO A: beforeinput en document con capture (cubre Gboard / commitText)
+        document.addEventListener('beforeinput', (event) => {
+            const diagV2 = {
+                inputType: event.inputType,
+                data: event.data,
+                dataLen: event.data ? event.data.length : 0,
+                hasDT: !!event.dataTransfer,
+                dtTypes: event.dataTransfer ? Array.from(event.dataTransfer.types) : [],
+                targetTag: event.target ? event.target.tagName : null
+            };
+            console.log('[YT diag-v2 beforeinput]', diagV2);
+            try {
+                sendToNative({ type: 'DIAG_LOG', message: '[YT diag-v2 beforeinput]', payload: diagV2 });
+            } catch (_) {}
+
+            const it = event.inputType || '';
+            const isPasteLike =
+                it.indexOf('insertFromPaste') === 0
+                || it === 'insertText'
+                || it === 'insertCompositionText'
+                || it === 'insertReplacementText';
+            if (!isPasteLike) return;
+
+            let text = event.data || '';
+            if (!text && event.dataTransfer) {
+                text = event.dataTransfer.getData('text/plain')
+                    || event.dataTransfer.getData('text/uri-list')
+                    || '';
+            }
+            if (!text) return;
+
+            // Filtrar escritura manual carácter por carácter
+            if (text.length < 11) return;
+
+            const cleaned = text.split(/\r?\n/)[0].replace(/[\u200B-\u200D\uFEFF\r\n\t]/g, '').trim();
+            const m = cleaned.match(YT_REGEX);
+            if (m && m[1]) {
+                event.preventDefault();
+                event.stopPropagation();
+                console.log('[YT fix MECANISMO A fired]', { videoId: m[1] });
+                try {
+                    sendToNative({ type: 'DIAG_LOG', message: '[YT fix MECANISMO A fired]', payload: { videoId: m[1] } });
+                } catch (_) {}
+                if (editor) {
+                    editor.chain().focus().setYoutube({ videoId: m[1], embed: true }).run();
+                }
+            }
+        }, true);
+
+        // C) MECANISMO B: input con debounce (red de seguridad si A no engancha)
+        let __ytDebounce = null;
+        document.addEventListener('input', (event) => {
+            const diagV2 = {
+                inputType: event.inputType,
+                data: event.data,
+                targetTag: event.target ? event.target.tagName : null
+            };
+            console.log('[YT diag-v2 input]', diagV2);
+            try {
+                sendToNative({ type: 'DIAG_LOG', message: '[YT diag-v2 input]', payload: diagV2 });
+            } catch (_) {}
+
+            // Solo procesar inputs largos (paste-like). Filtra escritura manual.
+            if (!event.data || event.data.length < 11) return;
+
+            if (__ytDebounce) clearTimeout(__ytDebounce);
+            __ytDebounce = setTimeout(() => {
+                try {
+                    if (!editor) return;
+                    const sel = editor.state.selection;
+                    const $from = sel.$from;
+                    const parent = $from.parent;
+                    if (!parent || parent.type.name !== 'paragraph') return;
+                    const text = parent.textContent.trim();
+                    const cleaned = text.replace(/[\u200B-\u200D\uFEFF\r\n\t]/g, '').trim();
+                    const m = cleaned.match(YT_REGEX);
+                    if (!m || !m[1]) return;
+                    console.log('[YT fix MECANISMO B fired]', { videoId: m[1] });
+                    try {
+                        sendToNative({ type: 'DIAG_LOG', message: '[YT fix MECANISMO B fired]', payload: { videoId: m[1] } });
+                    } catch (_) {}
+                    const start = $from.start();
+                    const end = start + parent.content.size;
+                    editor.chain().focus()
+                        .deleteRange({ from: start, to: end })
+                        .setYoutube({ videoId: m[1], embed: true })
+                        .run();
+                } catch (e) {
+                    console.error('[YT fix debounce]', e);
+                }
+            }, 80);
+        }, true);
+    }
+
     setTimeout(() => {
         trySetInitialCursor(0);
     }, 200);
@@ -478,7 +830,7 @@ function initEditor(fragmentName) {
                                 lineHeight: getComputedStyle(pEl).lineHeight,
                             });
                         }
-                    } catch (_) {}
+                    } catch (_) { }
                 });
             });
         }
@@ -650,8 +1002,8 @@ awareness.on('update', ({ added, updated, removed }, origin) => {
     }
 });
 
-// 3. Watchdog de presencia (TTL de 5 segundos para entornos móviles)
-// Si un cliente remoto no renueva su señal en más de 5 segundos, se purga localmente sin re-emitir
+// 3. Watchdog de presencia (TTL de 15 segundos para entornos móviles)
+// Si un cliente remoto no renueva su señal en más de 15 segundos, se purga localmente sin re-emitir
 const clientLastSeen = new Map();
 const peerSenderMap = new Map(); // senderClientId -> Set of Yjs clientIds
 const clientToSenderMap = new Map(); // Yjs clientId -> senderClientId
@@ -669,7 +1021,7 @@ setInterval(() => {
     const now = Date.now();
     const staleClients = [];
     clientLastSeen.forEach((lastSeen, clientId) => {
-        if (now - lastSeen > 5000) {
+        if (now - lastSeen > 15000) {
             staleClients.push(clientId);
         }
     });
@@ -684,7 +1036,7 @@ setInterval(() => {
             try {
                 const tr = editor.state.tr.setMeta(yCursorPluginKey, { awarenessUpdated: true });
                 editor.view.dispatch(tr);
-            } catch (_) {}
+            } catch (_) { }
         }
         logToNative('watchdog', 'purge-stale-carets', 0, { purgedClients: staleClients.length });
     }
@@ -703,7 +1055,7 @@ setInterval(() => {
                 update: uint8ArrayToBase64(awarenessUpdate)
             });
         }
-    } catch (_) {}
+    } catch (_) { }
 }, 5000);
 
 // =========================================================================
@@ -711,7 +1063,7 @@ setInterval(() => {
 // =========================================================================
 
 // Emite el estado de Awareness local para mantener cursores visibles
-window.veyraBroadcastAwareness = function() {
+window.veyraBroadcastAwareness = function () {
     try {
         if (isAwarenessDestroyed || awareness.getLocalState() === null) return;
         updateLocalCursor();
@@ -726,7 +1078,7 @@ window.veyraBroadcastAwareness = function() {
 };
 
 // Renueva la marca de tiempo de actividad de un par remoto recibido por Heartbeat
-window.veyraTouchPeer = function(remoteClientId) {
+window.veyraTouchPeer = function (remoteClientId) {
     const now = Date.now();
     if (typeof remoteClientId === 'number') {
         clientLastSeen.set(remoteClientId, now);
@@ -742,7 +1094,7 @@ window.veyraTouchPeer = function(remoteClientId) {
 };
 
 // Aplica delta remoto recibido de Supabase (individual o batch)
-window.veyraApplyUpdate = function(base64Payload, customOrigin) {
+window.veyraApplyUpdate = function (base64Payload, customOrigin) {
     try {
         const originRemoto = customOrigin || 'remote-broadcast';
         let payload = base64Payload;
@@ -797,7 +1149,7 @@ window.veyraApplyUpdate = function(base64Payload, customOrigin) {
             try {
                 const tr = editor.state.tr.setMeta(yCursorPluginKey, { awarenessUpdated: true });
                 editor.view.dispatch(tr);
-            } catch (_) {}
+            } catch (_) { }
         }
 
         const pageIdActivo = currentFragmentName;
@@ -816,7 +1168,7 @@ window.veyraApplyUpdate = function(base64Payload, customOrigin) {
     }
 };
 
-window.veyraSetPage = function(pageId) {
+window.veyraSetPage = function (pageId) {
     if (!pageId || typeof pageId !== 'string' || pageId === currentFragmentName) return;
     if (typeof window !== 'undefined') {
         window.VEYRA_EXPLICIT_PAGE_SET = true;
@@ -825,15 +1177,40 @@ window.veyraSetPage = function(pageId) {
     logToNative('local-editor', 'switch-page', 0, { pageId });
 };
 
-window.veyraGetActivePage = function() {
+window.veyraGetActivePage = function () {
     return currentFragmentName;
 };
 
 // Aplica actualización de Awareness remota recibida de Supabase
-window.veyraApplyAwareness = function(base64Awareness, senderClientId) {
+window.veyraApplyAwareness = function (base64Awareness, senderClientId) {
     try {
+        // 1. Antes de aplicar Awareness
         const update = base64ToUint8Array(base64Awareness);
+        console.log('🔍 [WebView Awareness PRE]', {
+            base64Length: base64Awareness ? base64Awareness.length : 0,
+            byteLength: update.byteLength,
+            senderClientId: senderClientId || null
+        });
+
         awarenessProtocol.applyAwarenessUpdate(awareness, update, 'remote');
+
+        // 2. Después de aplicar Awareness
+        const remoteStates = [];
+        let remoteWithCursorCount = 0;
+        awareness.getStates().forEach((state, cid) => {
+            if (cid !== ydoc.clientID && state) {
+                if (state.cursor) remoteWithCursorCount++;
+                remoteStates.push({
+                    clientId: cid,
+                    user: state.user || null,
+                    cursor: state.cursor || null,
+                    hasCursor: Boolean(state.cursor)
+                });
+            }
+        });
+
+        // 3. Comprobar la instancia
+        const isSameAwareness = (awareness === providerMock.awareness);
 
         if (senderClientId) {
             let peerSet = peerSenderMap.get(senderClientId);
@@ -849,13 +1226,61 @@ window.veyraApplyAwareness = function(base64Awareness, senderClientId) {
             });
         }
 
-        // Forzar inmediatamente re-evaluación del yCursorPlugin de ProseMirror
+        // 4. Comprobar el plugin y 5. Comprobar decoraciones
+        let pluginKeyFound = false;
+        let decoCount = 0;
+        let decoSummary = [];
+        let docSize = 0;
+
         if (editor && editor.view && !editor.isDestroyed) {
             try {
+                const pluginKeys = editor.state.plugins.map(p => p.key);
+                pluginKeyFound = pluginKeys.some(k => k && k.includes('yjs-cursor'));
+                docSize = editor.state.doc.content.size;
+
                 const tr = editor.state.tr.setMeta(yCursorPluginKey, { awarenessUpdated: true });
                 editor.view.dispatch(tr);
-            } catch (_) {}
+
+                const cursorPluginState = yCursorPluginKey.getState(editor.state);
+                if (cursorPluginState && typeof cursorPluginState.find === 'function') {
+                    const decos = cursorPluginState.find();
+                    decoCount = decos.length;
+                    decoSummary = decos.map(d => ({
+                        from: d.from,
+                        to: d.to,
+                        isWithinDoc: d.from <= docSize && d.to <= docSize,
+                        side: d.spec?.side,
+                        key: d.spec?.key
+                    }));
+                }
+            } catch (err) {
+                console.error('[YJS-CURSOR] Error al despachar tr:', err);
+                sendToNative({
+                    type: 'DIAG_LOG_REMOTE',
+                    event: 'cursor_dispatch_error',
+                    payload: { error: String(err) }
+                });
+            }
         }
+
+        // 6. Comprobar el DOM
+        let domCarets = 0;
+        let domLabels = 0;
+        if (editor && editor.view && editor.view.dom) {
+            domCarets = editor.view.dom.querySelectorAll('.collaboration-cursor__caret').length;
+            domLabels = editor.view.dom.querySelectorAll('.collaboration-cursor__label').length;
+        }
+
+        console.log('🔍 [WebView Awareness AUDIT]', {
+            isSameAwareness,
+            pluginKeyFound,
+            docSize,
+            decoCount,
+            decoSummary,
+            domCarets,
+            domLabels,
+            remoteStates
+        });
 
         // Notificar a React Native sobre los pares remotos activos
         const peers = [];
@@ -875,13 +1300,33 @@ window.veyraApplyAwareness = function(base64Awareness, senderClientId) {
             type: 'AWARENESS_PEERS_CHANGED',
             peers
         });
+
+        sendToNative({
+            type: 'DIAG_LOG_REMOTE',
+            event: 'awareness_audit',
+            payload: {
+                isSameAwareness,
+                pluginKeyFound,
+                docSize,
+                remoteWithCursorCount,
+                decoCount,
+                domCarets,
+                domLabels,
+                remoteStates: remoteStates.map(s => ({
+                    clientId: s.clientId,
+                    name: s.user?.name,
+                    color: s.user?.color,
+                    hasCursor: s.hasCursor
+                }))
+            }
+        });
     } catch (e) {
         console.error('Error aplicando Awareness remoto:', e);
     }
 };
 
 // Elimina inmediatamente un par específico por su client ID o retiro voluntario
-window.veyraRemovePeer = function(remoteClientId) {
+window.veyraRemovePeer = function (remoteClientId) {
     try {
         const toRemove = [];
         if (typeof remoteClientId === 'number') {
@@ -926,7 +1371,7 @@ window.veyraRemovePeer = function(remoteClientId) {
             try {
                 const tr = editor.state.tr.setMeta(yCursorPluginKey, { awarenessUpdated: true });
                 editor.view.dispatch(tr);
-            } catch (_) {}
+            } catch (_) { }
         }
 
         // Notificar cambio de lista de pares a React Native
@@ -955,7 +1400,7 @@ window.veyraRemovePeer = function(remoteClientId) {
 };
 
 // Solicita a este WebView generar su StateVector para el Handshake inicial (SYNC_STEP_1)
-window.veyraRequestSyncStep1 = function(correlationId) {
+window.veyraRequestSyncStep1 = function (correlationId) {
     try {
         const sv = Y.encodeStateVector(ydoc);
         logToNative('handshake', 'generate-sync-step-1', sv.byteLength);
@@ -973,7 +1418,7 @@ window.veyraRequestSyncStep1 = function(correlationId) {
 // Recibe el StateVector de un colaborador remoto:
 // 1. Calcula la diferencia exacta que le falta al par (SYNC_STEP_2)
 // 2. Y también genera su propio StateVector para que el otro par responda con lo que falta (Bidireccional)
-window.veyraHandleSyncStep1 = function(base64RemoteSv, correlationId, isReturnHandshake = false) {
+window.veyraHandleSyncStep1 = function (base64RemoteSv, correlationId, isReturnHandshake = false) {
     try {
         const remoteSv = base64ToUint8Array(base64RemoteSv);
         const diffUpdate = Y.encodeStateAsUpdate(ydoc, remoteSv);
@@ -1005,7 +1450,7 @@ window.veyraHandleSyncStep1 = function(base64RemoteSv, correlationId, isReturnHa
 };
 
 // Destruye o limpia el estado de Awareness al desconectar o pasar a segundo plano
-window.veyraDestroyAwareness = function() {
+window.veyraDestroyAwareness = function () {
     try {
         isAwarenessDestroyed = true;
         awareness.setLocalState(null);
@@ -1016,7 +1461,7 @@ window.veyraDestroyAwareness = function() {
 };
 
 // Reactiva la presencia local cuando la app vuelve a primer plano
-window.veyraRestoreAwareness = function() {
+window.veyraRestoreAwareness = function () {
     try {
         isAwarenessDestroyed = false;
         awareness.setLocalState({
@@ -1031,7 +1476,7 @@ window.veyraRestoreAwareness = function() {
 };
 
 // Configuración de usuario local
-window.veyraSetUser = function(name, color, isEditing, userId) {
+window.veyraSetUser = function (name, color, isEditing, userId) {
     currentUser = {
         id: userId || (currentUser ? currentUser.id : null),
         name,
@@ -1045,16 +1490,66 @@ window.veyraSetUser = function(name, color, isEditing, userId) {
     window.veyraBroadcastAwareness();
 };
 
-window.veyraSetEditing = function(isEditing) {
+window.veyraSetEditing = function (isEditing) {
+    const editing = Boolean(isEditing);
     if (currentUser) {
-        currentUser.isEditing = Boolean(isEditing);
+        currentUser.isEditing = editing;
     }
     awareness.setLocalStateField('user', currentUser);
     window.veyraBroadcastAwareness();
+
+    if (editor && typeof editor.setEditable === 'function') {
+        try {
+            editor.setEditable(editing);
+        } catch (_) { }
+    }
+
+    if (typeof document !== 'undefined') {
+        if (document.body) {
+            document.body.classList.toggle('is-readonly', !editing);
+            document.body.classList.toggle('is-editing', editing);
+        }
+        const pm = document.querySelector('.ProseMirror');
+        if (pm) {
+            pm.setAttribute('contenteditable', String(editing));
+        }
+        const ed = document.getElementById('editor');
+        if (ed) {
+            ed.removeAttribute('contenteditable');
+        }
+        const figures = document.querySelectorAll('.veyra-image-node');
+        figures.forEach(fig => {
+            fig.dataset.editable = String(editing);
+            fig.classList.toggle('is-readonly', !editing);
+        });
+        const ytNodes = document.querySelectorAll('.veyra-youtube-node');
+        ytNodes.forEach(yt => {
+            yt.dataset.editable = String(editing);
+            yt.classList.toggle('is-readonly', !editing);
+        });
+    }
+
+    // Gestión de visibilidad e interactividad de controles de YouTube según modo (Lectura vs Edición)
+    try {
+        const elements = document.querySelectorAll('[data-youtube-video] .yt-overlay, [data-youtube-video] .yt-play');
+        if (!editing) {
+            elements.forEach(el => {
+                el.style.pointerEvents = 'none';
+                el.style.opacity = '0';
+            });
+        } else {
+            elements.forEach(el => {
+                el.style.removeProperty('pointer-events');
+                el.style.removeProperty('opacity');
+            });
+        }
+    } catch (err) {
+        console.warn('[veyraSetEditing] error actualizando controles de youtube:', err);
+    }
 };
 
 // Control de visibilidad de cursores según modo (visualización vs edición)
-window.veyraSetCursorVisible = function(visible) {
+window.veyraSetCursorVisible = function (visible) {
     areCursorsVisible = Boolean(visible);
 
     if (areCursorsVisible) {
@@ -1069,40 +1564,44 @@ window.veyraSetCursorVisible = function(visible) {
         try {
             const tr = editor.state.tr.setMeta(yCursorPluginKey, { awarenessUpdated: true });
             editor.view.dispatch(tr);
-        } catch (_) {}
+        } catch (_) { }
     }
 };
 
 // Comandos de formato del editor
-window.veyraToggleBold = function() {
+window.veyraToggleBold = function () {
     if (editor) {
+        if (window.veyraRestoreSelection) window.veyraRestoreSelection();
         editor.chain().focus().toggleBold().run();
         notifyToolbarStateChanged();
     }
 };
 
-window.veyraToggleItalic = function() {
+window.veyraToggleItalic = function () {
     if (editor) {
+        if (window.veyraRestoreSelection) window.veyraRestoreSelection();
         editor.chain().focus().toggleItalic().run();
         notifyToolbarStateChanged();
     }
 };
 
-window.veyraToggleUnderline = function() {
+window.veyraToggleUnderline = function () {
     if (editor) {
+        if (window.veyraRestoreSelection) window.veyraRestoreSelection();
         editor.chain().focus().toggleUnderline().run();
         notifyToolbarStateChanged();
     }
 };
 
-window.veyraToggleStrike = function() {
+window.veyraToggleStrike = function () {
     if (editor) {
+        if (window.veyraRestoreSelection) window.veyraRestoreSelection();
         editor.chain().focus().toggleStrike().run();
         notifyToolbarStateChanged();
     }
 };
 
-window.veyraSetHeading = function(level) {
+window.veyraSetHeading = function (level) {
     if (!editor) return;
     const lvl = Number(level);
     if (lvl === 1 || lvl === 2 || lvl === 3) {
@@ -1113,14 +1612,14 @@ window.veyraSetHeading = function(level) {
     notifyToolbarStateChanged();
 };
 
-window.veyraToggleBlockquote = function() {
+window.veyraToggleBlockquote = function () {
     if (editor) {
         editor.chain().focus().toggleBlockquote().run();
         notifyToolbarStateChanged();
     }
 };
 
-window.veyraToggleBulletList = function() {
+window.veyraToggleBulletList = function () {
     if (editor) {
         if (editor.isActive('bulletList')) {
             editor.chain().focus().toggleBulletList().run();
@@ -1133,7 +1632,7 @@ window.veyraToggleBulletList = function() {
     }
 };
 
-window.veyraToggleOrderedList = function() {
+window.veyraToggleOrderedList = function () {
     if (editor) {
         if (editor.isActive('orderedList')) {
             editor.chain().focus().toggleOrderedList().run();
@@ -1146,7 +1645,7 @@ window.veyraToggleOrderedList = function() {
     }
 };
 
-window.veyraToggleTaskList = function() {
+window.veyraToggleTaskList = function () {
     if (editor) {
         if (editor.isActive('taskList')) {
             editor.chain().focus().toggleTaskList().run();
@@ -1159,59 +1658,355 @@ window.veyraToggleTaskList = function() {
     }
 };
 
-window.veyraSetAlign = function(align) {
+function blurWebViewSafely() {
+    requestAnimationFrame(() => {
+        const active = document.activeElement;
+        if (active && active.isContentEditable) {
+            active.blur();
+        }
+    });
+}
+
+window.veyraSetAlign = function (align) {
     if (editor && align) {
         if (!editor.isActive('image') && lastClickedImagePos !== null) {
             try {
-                editor.chain().focus().setNodeSelection(lastClickedImagePos).setTextAlign(align).run();
+                editor.chain().setNodeSelection(lastClickedImagePos).setTextAlign(align).run();
             } catch (_) {
-                editor.chain().focus().setTextAlign(align).run();
+                editor.chain().setTextAlign(align).run();
             }
         } else {
-            editor.chain().focus().setTextAlign(align).run();
+            editor.chain().setTextAlign(align).run();
         }
         notifyToolbarStateChanged();
+        blurWebViewSafely();
     }
 };
 
-window.veyraInsertImage = function(url) {
+window.veyraInsertImage = function (url) {
     if (editor && url) {
         editor.chain().focus().setImage({ src: url }).run();
         notifyToolbarStateChanged();
     }
 };
 
-window.veyraReplaceImageSrc = function(oldLocalUri, newRemoteUrl) {
+window.veyraReplaceImageSrc = function (oldLocalUri, newRemoteUrl) {
     if (!editor || !oldLocalUri || !newRemoteUrl) return;
     try {
         let replaced = false;
         editor.state.doc.descendants((node, pos) => {
             if (node.type.name === 'image' && node.attrs && node.attrs.src === oldLocalUri) {
-                editor.chain().focus().setNodeSelection(pos).updateAttributes('image', { src: newRemoteUrl }).run();
+                editor.chain().setNodeSelection(pos).updateAttributes('image', { src: newRemoteUrl }).run();
                 replaced = true;
             }
         });
         if (replaced) {
             notifyToolbarStateChanged();
+            blurWebViewSafely();
         }
     } catch (e) {
         console.error('Error en veyraReplaceImageSrc:', e);
     }
 };
 
-window.veyraSetImageSize = function(percentage) {
+window.veyraSetImageSize = function (percentage) {
     if (!editor) return;
+    const pct = Number(percentage);
+    suppressImageDismissedUntil = Date.now() + 1500;
+    const targetPos = (editor.isActive('image') && editor.state.selection.from !== undefined)
+        ? editor.state.selection.from
+        : lastClickedImagePos;
+
+    if (typeof targetPos === 'number') {
+        try {
+            editor.chain().setNodeSelection(targetPos).updateAttributes('image', {
+                width: pct,
+                style: `width: ${pct}%; height: auto;`
+            }).setNodeSelection(targetPos).run();
+        } catch (_) {
+            editor.chain().updateAttributes('image', {
+                width: pct,
+                style: `width: ${pct}%; height: auto;`
+            }).run();
+        }
+    } else if (editor.isActive('image')) {
+        editor.chain().updateAttributes('image', {
+            width: pct,
+            style: `width: ${pct}%; height: auto;`
+        }).run();
+    }
+    notifyToolbarStateChanged();
+    blurWebViewSafely();
+
+    requestAnimationFrame(() => {
+        const selectedImg = editor.view.dom.querySelector('.veyra-image-node.is-selected img, .veyra-image-node[data-selected="true"] img');
+        if (selectedImg) {
+            const r = selectedImg.getBoundingClientRect();
+            sendToNative({
+                type: 'IMAGE_CLICKED',
+                url: selectedImg.src,
+                rect: {
+                    x: r.left + (r.width / 2),
+                    y: r.top,
+                    width: r.width,
+                    height: r.height,
+                    top: r.top,
+                    bottom: r.bottom,
+                    left: r.left,
+                    right: r.right,
+                },
+                attrs: { width: pct, textAlign: editor.getAttributes('image').textAlign || null }
+            });
+        }
+    });
+};
+
+window.veyraSetImageCaption = function (caption) {
+    if (!editor) return;
+    const val = caption ? String(caption).trim() : null;
     if (editor.isActive('image')) {
-        editor.chain().focus().updateAttributes('image', { style: `width: ${percentage}%; height: auto;` }).run();
+        editor.chain().updateAttributes('image', { caption: val }).run();
     } else if (lastClickedImagePos !== null) {
         try {
-            editor.chain().focus().setNodeSelection(lastClickedImagePos).updateAttributes('image', { style: `width: ${percentage}%; height: auto;` }).run();
-        } catch (_) {}
+            editor.chain().setNodeSelection(lastClickedImagePos).updateAttributes('image', { caption: val }).run();
+        } catch (_) { }
+    }
+    notifyToolbarStateChanged();
+    blurWebViewSafely();
+};
+
+window.veyraToggleCaption = function () {
+    if (!editor) return;
+
+    const findNodeView = (targetPos) => {
+        const nv = (editor.view.nodeViews || {})[targetPos];
+        if (nv && typeof nv.toggleCaption === 'function') return nv;
+
+        try {
+            const dom = editor.view.nodeDOM(targetPos);
+            if (dom && dom._nodeView && typeof dom._nodeView.toggleCaption === 'function') {
+                return dom._nodeView;
+            }
+        } catch (_) { }
+
+        const selectedFigure = editor.view.dom.querySelector('.veyra-image-node[data-selected="true"], .veyra-image-node.is-selected');
+        if (selectedFigure && selectedFigure._nodeView && typeof selectedFigure._nodeView.toggleCaption === 'function') {
+            return selectedFigure._nodeView;
+        }
+
+        return null;
+    };
+
+    let pos = editor.state.selection.from;
+    if (lastClickedImagePos !== null && (!editor.isActive('image') || editor.state.selection.empty)) {
+        pos = lastClickedImagePos;
+    }
+
+    const nodeView = findNodeView(pos);
+    if (nodeView) {
+        nodeView.toggleCaption();
+    } else {
+        // Fallback: si no hay NodeView activo, forzar selección y reintentar en el próximo frame
+        const $pos = editor.state.doc.resolve(pos);
+        const node = $pos.nodeAfter || $pos.nodeBefore;
+        if (node && node.type.name === 'image') {
+            const targetPos = $pos.nodeAfter ? pos : pos - node.nodeSize;
+            editor.commands.setNodeSelection(targetPos);
+            requestAnimationFrame(() => {
+                const nv = findNodeView(targetPos);
+                if (nv) {
+                    nv.toggleCaption();
+                }
+            });
+        }
+    }
+};
+
+window.veyraDeleteImage = function () {
+    if (!editor) return;
+    if (editor.isActive('image')) {
+        editor.chain().focus().deleteSelection().run();
+    } else if (lastClickedImagePos !== null) {
+        try {
+            editor.chain().focus().setNodeSelection(lastClickedImagePos).deleteSelection().run();
+        } catch (_) { }
+    }
+    lastClickedImagePos = null;
+    notifyToolbarStateChanged();
+};
+
+window.veyraSetImageAlign = function (align) {
+    if (!editor || !align) return;
+    suppressImageDismissedUntil = Date.now() + 1500;
+    const targetPos = (editor.isActive('image') && editor.state.selection.from !== undefined)
+        ? editor.state.selection.from
+        : lastClickedImagePos;
+
+    if (typeof targetPos === 'number') {
+        try {
+            editor.chain().setNodeSelection(targetPos).setTextAlign(align).setNodeSelection(targetPos).run();
+        } catch (_) {
+            editor.chain().setTextAlign(align).run();
+        }
+    } else if (editor.isActive('image')) {
+        editor.chain().setTextAlign(align).run();
+    }
+    notifyToolbarStateChanged();
+    blurWebViewSafely();
+
+    requestAnimationFrame(() => {
+        const selectedImg = editor.view.dom.querySelector('.veyra-image-node.is-selected img, .veyra-image-node[data-selected="true"] img');
+        if (selectedImg) {
+            const r = selectedImg.getBoundingClientRect();
+            sendToNative({
+                type: 'IMAGE_CLICKED',
+                url: selectedImg.src,
+                rect: {
+                    x: r.left + (r.width / 2),
+                    y: r.top,
+                    width: r.width,
+                    height: r.height,
+                    top: r.top,
+                    bottom: r.bottom,
+                    left: r.left,
+                    right: r.right,
+                },
+                attrs: { width: editor.getAttributes('image').width || null, textAlign: align }
+            });
+        }
+    });
+};
+
+window.veyraSetYoutubeSize = function (percentage) {
+    if (!editor) return;
+    const pct = Number(percentage);
+    suppressYoutubeDismissedUntil = Date.now() + 1500;
+    const targetPos = (editor.isActive('youtube') && editor.state.selection.from !== undefined)
+        ? editor.state.selection.from
+        : lastClickedYoutubePos;
+
+    if (typeof targetPos === 'number') {
+        try {
+            editor.chain().setNodeSelection(targetPos).updateAttributes('youtube', { width: pct }).run();
+        } catch (_) { }
+    }
+    notifyToolbarStateChanged();
+    blurWebViewSafely();
+
+    requestAnimationFrame(() => {
+        const selectedYt = editor.view.dom.querySelector('.veyra-youtube-node.is-selected .veyra-youtube-wrapper, .veyra-youtube-node[data-selected="true"] .veyra-youtube-wrapper');
+        if (selectedYt) {
+            const r = selectedYt.getBoundingClientRect();
+            const videoId = selectedYt.closest('.veyra-youtube-node')?.getAttribute('data-video-id') || '';
+            sendToNative({
+                type: 'YOUTUBE_CLICKED',
+                videoId,
+                rect: {
+                    x: r.left + (r.width / 2),
+                    y: r.top,
+                    width: r.width,
+                    height: r.height,
+                    top: r.top,
+                    bottom: r.bottom,
+                    left: r.left,
+                    right: r.right,
+                },
+                attrs: { width: pct, textAlign: editor.getAttributes('youtube').textAlign || null }
+            });
+        }
+    });
+};
+
+window.veyraSetYoutubeAlign = function (align) {
+    if (!editor || !align) return;
+    suppressYoutubeDismissedUntil = Date.now() + 1500;
+    const targetPos = (editor.isActive('youtube') && editor.state.selection.from !== undefined)
+        ? editor.state.selection.from
+        : lastClickedYoutubePos;
+
+    if (typeof targetPos === 'number') {
+        try {
+            editor.chain().setNodeSelection(targetPos).updateAttributes('youtube', { textAlign: align }).run();
+        } catch (_) { }
+    }
+    notifyToolbarStateChanged();
+    blurWebViewSafely();
+
+    requestAnimationFrame(() => {
+        const selectedYt = editor.view.dom.querySelector('.veyra-youtube-node.is-selected .veyra-youtube-wrapper, .veyra-youtube-node[data-selected="true"] .veyra-youtube-wrapper');
+        if (selectedYt) {
+            const r = selectedYt.getBoundingClientRect();
+            const videoId = selectedYt.closest('.veyra-youtube-node')?.getAttribute('data-video-id') || '';
+            sendToNative({
+                type: 'YOUTUBE_CLICKED',
+                videoId,
+                rect: {
+                    x: r.left + (r.width / 2),
+                    y: r.top,
+                    width: r.width,
+                    height: r.height,
+                    top: r.top,
+                    bottom: r.bottom,
+                    left: r.left,
+                    right: r.right,
+                },
+                attrs: { width: editor.getAttributes('youtube').width || 100, textAlign: align }
+            });
+        }
+    });
+};
+
+window.veyraPlayYoutube = function () {
+    if (!editor) return;
+    suppressYoutubeDismissedUntil = Date.now() + 1500;
+    const targetPos = (editor.isActive('youtube') && editor.state.selection.from !== undefined)
+        ? editor.state.selection.from
+        : lastClickedYoutubePos;
+
+    if (typeof targetPos === 'number') {
+        try {
+            const dom = editor.view.nodeDOM(targetPos);
+            const nv = dom?._nodeView || editor.view.dom.querySelector('.veyra-youtube-node.is-selected')?._nodeView;
+            if (nv && typeof nv.activate === 'function') {
+                nv.activate();
+            } else {
+                const btn = dom?.querySelector?.('.yt-play') || dom?.querySelector?.('.yt-thumbnail');
+                if (btn) btn.click();
+            }
+        } catch (_) { }
+    }
+};
+
+window.veyraDeleteYoutube = function () {
+    if (!editor) return;
+    if (editor.isActive('youtube')) {
+        editor.chain().focus().deleteSelection().run();
+    } else if (lastClickedYoutubePos !== null) {
+        try {
+            editor.chain().focus().setNodeSelection(lastClickedYoutubePos).deleteSelection().run();
+        } catch (_) { }
+    }
+    lastClickedYoutubePos = null;
+    sendToNative({ type: 'YOUTUBE_DISMISSED' });
+    notifyToolbarStateChanged();
+};
+
+window.veyraToggleYoutubeEmbed = function () {
+    if (!editor) return;
+    suppressYoutubeDismissedUntil = Date.now() + 1500;
+    const targetPos = (editor.isActive('youtube') && editor.state.selection.from !== undefined)
+        ? editor.state.selection.from
+        : lastClickedYoutubePos;
+
+    if (typeof targetPos === 'number') {
+        try {
+            editor.chain().setNodeSelection(targetPos).toggleYoutubeEmbed().run();
+        } catch (_) { }
     }
     notifyToolbarStateChanged();
 };
 
-window.veyraSetColor = function(color) {
+window.veyraSetColor = function (color) {
     if (!editor) return;
     if (!color || color === 'default') {
         editor.chain().focus().unsetColor().run();
@@ -1221,7 +2016,7 @@ window.veyraSetColor = function(color) {
     notifyToolbarStateChanged();
 };
 
-window.veyraSetHighlight = function(color) {
+window.veyraSetHighlight = function (color) {
     if (!editor) return;
     if (!color || color === 'transparent') {
         const textStyle = editor.getAttributes('textStyle');
@@ -1242,7 +2037,7 @@ window.veyraSetHighlight = function(color) {
     notifyToolbarStateChanged();
 };
 
-window.veyraSetFont = function(fontFamily) {
+window.veyraSetFont = function (fontFamily) {
     if (!editor) return;
     if (!fontFamily || fontFamily === 'default' || fontFamily === 'inherit') {
         editor.chain().focus().unsetFontFamily().run();
@@ -1252,7 +2047,7 @@ window.veyraSetFont = function(fontFamily) {
     notifyToolbarStateChanged();
 };
 
-window.veyraUnsetFormat = function() {
+window.veyraUnsetFormat = function () {
     if (!editor) return;
     editor.chain().focus()
         .unsetAllMarks()
@@ -1265,27 +2060,27 @@ window.veyraUnsetFormat = function() {
     notifyToolbarStateChanged();
 };
 
-window.veyraUndo = function() {
+window.veyraUndo = function () {
     if (editor) {
         editor.chain().focus().undo().run();
         notifyToolbarStateChanged();
     }
 };
 
-window.veyraRedo = function() {
+window.veyraRedo = function () {
     if (editor) {
         editor.chain().focus().redo().run();
         notifyToolbarStateChanged();
     }
 };
 
-window.veyraFocus = function() {
+window.veyraFocus = function () {
     if (editor) {
         editor.commands.focus('end');
     }
 };
 
-window.veyraCopy = function(text) {
+window.veyraCopy = function (text) {
     try {
         if (text && navigator.clipboard && navigator.clipboard.writeText) {
             navigator.clipboard.writeText(text);
@@ -1295,15 +2090,51 @@ window.veyraCopy = function(text) {
     } catch (_) {
         try {
             document.execCommand('copy');
-        } catch (_) {}
+        } catch (_) { }
     }
 };
 
-window.veyraGetHTML = function() {
+window.veyraRestoreSelection = function () {
+    if (!editor || !lastSelectionSnapshot) return false;
+    try {
+        editor.chain().focus().setTextSelection(lastSelectionSnapshot).run();
+        return true;
+    } catch (e) {
+        console.warn('[veyraRestoreSelection]', e);
+        return false;
+    }
+};
+
+window.veyraPaste = function (text) {
+    console.log('[paste diag]', { isEditable: editor ? editor.isEditable : null, textLen: text ? text.length : 0 });
+    if (!editor || typeof text !== 'string') return;
+    if (!editor.isEditable) return; // Bloqueo en modo lectura
+    // Restaurar selección si hay snapshot
+    if (lastSelectionSnapshot) {
+        try {
+            editor.chain().focus().setTextSelection(lastSelectionSnapshot).run();
+        } catch (e) { /* ignorar */ }
+    }
+    const cleaned = text.split(/\r?\n/)[0].replace(/[\u200B-\u200D\uFEFF\r\n\t]/g, '').trim();
+    const m = cleaned.match(YT_REGEX);
+    if (m && m[1]) {
+        editor.chain().focus().setYoutube({ videoId: m[1], embed: true }).run();
+    } else {
+        editor.chain().focus().insertContent(text).run();
+    }
+    // Actualizar snapshot tras la inserción
+    lastSelectionSnapshot = {
+        from: editor.state.selection.from,
+        to: editor.state.selection.to
+    };
+    notifyToolbarStateChanged();
+};
+
+window.veyraGetHTML = function () {
     return editor ? editor.getHTML() : '';
 };
 
-window.veyraSetTheme = function(theme) {
+window.veyraSetTheme = function (theme) {
     const isAmoled = theme === 'amoled';
     const isDark = theme === 'dark' || isAmoled;
     const root = document.documentElement;
@@ -1338,12 +2169,12 @@ window.veyraSetTheme = function(theme) {
     }
 };
 
-window.veyraGetStateVector = function() {
+window.veyraGetStateVector = function () {
     const sv = Y.encodeStateVector(ydoc);
     return uint8ArrayToBase64(sv);
 };
 
-window.veyraGetFullDocUpdate = function() {
+window.veyraGetFullDocUpdate = function () {
     const update = Y.encodeStateAsUpdate(ydoc);
     return uint8ArrayToBase64(update);
 };
@@ -1353,8 +2184,8 @@ function derivePreviewTextFromYDoc(doc) {
     if (!doc) return '';
     try {
         const pageOrder = doc.getArray('pageOrder');
-        const pageIds = pageOrder && pageOrder.length > 0 
-            ? pageOrder.toArray().map(String) 
+        const pageIds = pageOrder && pageOrder.length > 0
+            ? pageOrder.toArray().map(String)
             : ['default'];
 
         const allParagraphs = [];
@@ -1377,17 +2208,17 @@ function derivePreviewTextFromYDoc(doc) {
 
             if (node instanceof Y.XmlElement) {
                 const name = (node.nodeName || '').toLowerCase();
-                const isBlock = 
-                    name === 'paragraph' || 
-                    name === 'heading' || 
-                    name === 'p' || 
-                    name === 'h1' || 
-                    name === 'h2' || 
-                    name === 'h3' || 
-                    name === 'h4' || 
-                    name === 'h5' || 
-                    name === 'h6' || 
-                    name === 'blockquote' || 
+                const isBlock =
+                    name === 'paragraph' ||
+                    name === 'heading' ||
+                    name === 'p' ||
+                    name === 'h1' ||
+                    name === 'h2' ||
+                    name === 'h3' ||
+                    name === 'h4' ||
+                    name === 'h5' ||
+                    name === 'h6' ||
+                    name === 'blockquote' ||
                     name === 'taskitem';
 
                 if (isBlock) {
@@ -1467,11 +2298,11 @@ function derivePreviewTextFromYDoc(doc) {
     }
 }
 
-window.veyraGetPreview = function() {
+window.veyraGetPreview = function () {
     return derivePreviewTextFromYDoc(ydoc);
 };
 
-window.veyraRequestPreview = function() {
+window.veyraRequestPreview = function () {
     const preview = window.veyraGetPreview();
     sendToNative({ type: 'PREVIEW_RESULT', preview });
 };
@@ -1492,7 +2323,7 @@ if (typeof window !== 'undefined') {
         try {
             const data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
             handleNativeIncomingMessage(data);
-        } catch (_) {}
+        } catch (_) { }
     });
 }
 
@@ -1501,21 +2332,18 @@ if (typeof document !== 'undefined') {
         try {
             const data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
             handleNativeIncomingMessage(data);
-        } catch (_) {}
+        } catch (_) { }
     });
-}
-
-if (typeof document !== 'undefined') {
-    document.addEventListener('contextmenu', (event) => event.preventDefault());
-    document.addEventListener('scroll', () => {
-        sendToNative({ type: 'TEXT_SELECTED', hasText: false });
-    }, { passive: true });
 }
 
 if (typeof window !== 'undefined') {
     window.addEventListener('scroll', () => {
-        sendToNative({ type: 'TEXT_SELECTED', hasText: false });
-        sendToNative({ type: 'IMAGE_DISMISSED' });
+        if (Date.now() >= suppressImageDismissedUntil) {
+            sendToNative({ type: 'IMAGE_DISMISSED' });
+        }
+        if (Date.now() >= suppressYoutubeDismissedUntil) {
+            sendToNative({ type: 'YOUTUBE_DISMISSED' });
+        }
     }, { passive: true });
 }
 

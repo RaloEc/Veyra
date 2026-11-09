@@ -483,10 +483,13 @@ export class SupabaseYjsProvider {
             },
         });
 
-        // 1. Recepción de deltas por Realtime
+        // 1. Recepción de deltas por Realtime (Documento Yjs)
         this.channel.on('broadcast', { event: 'YJS_UPDATE' }, async ({ payload }) => {
             diagLog('broadcast_received', { topic: 'YJS_UPDATE', bytes: payload?.update?.length });
-            console.log('[YJS-DIAG] evento recibido', { tipo: 'broadcast', payload });
+            console.log('[YJS-TRANSPORT] DOCUMENT_UPDATE recibido', {
+                senderClientId: payload?.senderClientId,
+                base64Length: payload?.update?.length
+            });
             if (this.isDestroyed || currentAttempt !== this.connectionAttemptId) return;
             if (!payload || payload.senderClientId === this.clientId) return;
 
@@ -559,13 +562,23 @@ export class SupabaseYjsProvider {
             }
         });
 
-        // 2. Awareness (cursores)
+        // 2. Awareness (cursores remotos)
         this.channel.on('broadcast', { event: 'AWARENESS_UPDATE' }, ({ payload }) => {
-            diagLog('broadcast_received', { topic: 'AWARENESS_UPDATE', bytes: payload?.update?.length });
-            console.log('[YJS-DIAG] evento recibido', { tipo: 'broadcast', payload });
+            const isValid = Boolean(payload && typeof payload.update === 'string');
+            console.log('[YJS-AWARENESS] AWARENESS_UPDATE recibido', {
+                senderClientId: payload?.senderClientId,
+                base64Length: payload?.update?.length
+            });
+            diagLog('awareness_received_native', {
+                documentId: this.documentId,
+                senderClientId: payload?.senderClientId,
+                bytes: payload?.update?.length || 0,
+                isValid,
+            });
             if (this.isDestroyed || currentAttempt !== this.connectionAttemptId) return;
             if (!payload || payload.senderClientId === this.clientId) return;
-            if (typeof payload.update === 'string') {
+            if (isValid) {
+                console.log('[YJS-AWARENESS] Enrutando a onRemoteAwareness -> RN Bridge');
                 this.onRemoteAwareness?.(payload.update, payload.senderClientId);
             }
         });
@@ -573,7 +586,7 @@ export class SupabaseYjsProvider {
         // 3. Handshake Paso 1
         this.channel.on('broadcast', { event: 'SYNC_STEP_1' }, ({ payload }) => {
             diagLog('broadcast_received', { topic: 'SYNC_STEP_1', bytes: payload?.sv?.length });
-            console.log('[YJS-DIAG] evento recibido', { tipo: 'broadcast', payload });
+            console.log('[YJS-HANDSHAKE] SYNC_STEP_1 recibido', { senderClientId: payload?.senderClientId, svLength: payload?.sv?.length });
             if (this.isDestroyed || currentAttempt !== this.connectionAttemptId) return;
             if (!payload || payload.senderClientId === this.clientId) return;
             if (typeof payload.sv === 'string') {
@@ -594,7 +607,7 @@ export class SupabaseYjsProvider {
         // 4. Handshake Paso 2
         this.channel.on('broadcast', { event: 'SYNC_STEP_2' }, async ({ payload }) => {
             diagLog('broadcast_received', { topic: 'SYNC_STEP_2', bytes: payload?.update?.length });
-            console.log('[YJS-DIAG] evento recibido', { tipo: 'broadcast', payload });
+            console.log('[YJS-HANDSHAKE] SYNC_STEP_2 recibido', { senderClientId: payload?.senderClientId, base64Length: payload?.update?.length });
             if (this.isDestroyed || currentAttempt !== this.connectionAttemptId) return;
             if (!payload || payload.senderClientId === this.clientId) return;
             if (payload.targetClientId && payload.targetClientId !== this.clientId) return;
@@ -652,7 +665,7 @@ export class SupabaseYjsProvider {
         // 5. Salida de par
         this.channel.on('broadcast', { event: 'PEER_LEFT' }, ({ payload }) => {
             diagLog('broadcast_received', { topic: 'PEER_LEFT', bytes: 0 });
-            console.log('[YJS-DIAG] evento recibido', { tipo: 'broadcast', payload });
+            console.log('[YJS-PRESENCE] PEER_LEFT recibido', { senderClientId: payload?.senderClientId });
             if (this.isDestroyed || currentAttempt !== this.connectionAttemptId) return;
             if (!payload || payload.senderClientId === this.clientId) return;
             this.onPeerLeft?.(payload.senderClientId);
@@ -661,7 +674,7 @@ export class SupabaseYjsProvider {
         // 6. Heartbeat
         this.channel.on('broadcast', { event: 'HEARTBEAT' }, ({ payload }) => {
             diagLog('broadcast_received', { topic: 'HEARTBEAT', bytes: 0 });
-            console.log('[YJS-DIAG] evento recibido', { tipo: 'broadcast', payload });
+            console.log('[YJS-HEARTBEAT] HEARTBEAT recibido', { senderClientId: payload?.senderClientId });
             if (this.isDestroyed || currentAttempt !== this.connectionAttemptId) return;
             if (!payload || payload.senderClientId === this.clientId) return;
             this.onHeartbeat?.(payload.senderClientId);

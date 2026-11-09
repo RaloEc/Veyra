@@ -47,6 +47,8 @@ import { VeyraIconButton, VeyraButton, VeyraSurface } from '../../src/components
 import { useAdaptiveKeyboard } from '../../src/hooks/useAdaptiveKeyboard';
 import { PagesOverviewModal } from '../../src/components/notes/PagesOverviewModal';
 import { FolderIconRenderer } from '../../src/components/notes/FolderIconRenderer';
+import { NoteUnifiedBreadcrumb } from '../../src/components/notes/NoteUnifiedBreadcrumb';
+import { navigateToFolderInNotes } from '../../src/utils/folderNavigationUtils';
 import { MoveToFolderModal } from '../../src/components/notes/MoveToFolderModal';
 import { FolderModal } from '../../src/components/notes/FolderModal';
 import { NoteOptionsMenu } from '../../src/components/notes/NoteOptionsMenu';
@@ -65,7 +67,7 @@ export default function CreateNoteScreen() {
         eventId?: string;
         initialTitle?: string;
     }>();
-    const { colors, typography, isDark, accent, radii } = useVeyraTheme();
+    const { colors, typography, isDark, isAmoled, accent, radii } = useVeyraTheme();
     const [isNotesFocused, setIsNotesFocused] = useState(false);
     const { lift, isKeyboardVisible } = useAdaptiveKeyboard(insets.bottom);
 
@@ -379,6 +381,7 @@ export default function CreateNoteScreen() {
                                         description={page.content}
                                         setDescription={html => updatePageContent(index, html)}
                                         isDark={isDark}
+                                        isAmoled={isAmoled}
                                         fontFamily={fontFamily}
                                         editorRef={{
                                             get current() {
@@ -535,6 +538,7 @@ export default function CreateNoteScreen() {
                                             description={page.content}
                                             setDescription={html => updatePageContent(index, html)}
                                             isDark={isDark}
+                                            isAmoled={isAmoled}
                                             fontFamily={fontFamily}
                                             editorRef={{
                                                 get current() {
@@ -622,64 +626,21 @@ export default function CreateNoteScreen() {
                     </View>
 
                     <View style={styles.headerActions}>
-                        {/* Selector de Carpeta */}
-                        <TouchableOpacity
-                            style={[
-                                styles.headerFolderBtn,
-                                {
-                                    backgroundColor: currentFolder
-                                        ? `${currentFolder.color || '#8B5CF6'}${isDark ? '25' : '15'}`
-                                        : (isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)'),
-                                    borderColor: currentFolder
-                                        ? `${currentFolder.color || '#8B5CF6'}40`
-                                        : colors.borderSubtle,
-                                },
-                            ]}
-                            onPress={() => setIsMoveModalVisible(true)}
-                            activeOpacity={0.7}
-                        >
-                            <FolderIconRenderer
-                                name={currentFolder ? currentFolder.icon : 'folder'}
-                                size={14}
-                                color={currentFolder ? (currentFolder.color || '#8B5CF6') : colors.textSecondary}
-                                strokeWidth={2}
-                            />
-                            {currentFolder && (
-                                <Text
-                                    style={[styles.headerFolderText, { color: currentFolder.color || '#8B5CF6' }]}
-                                    numberOfLines={1}
-                                >
-                                    {currentFolder.name}
-                                </Text>
-                            )}
-                        </TouchableOpacity>
-
-                        {/* Evento Vinculado */}
-                        {linkedEvent && (
-                            <TouchableOpacity
-                                activeOpacity={0.75}
-                                onPress={() => router.push({ pathname: '/events/[id]', params: { id: linkedEvent.id } })}
-                                style={[
-                                    styles.headerFolderBtn,
-                                    {
-                                        backgroundColor: `${linkedEvent.color || '#3B82F6'}${isDark ? '25' : '15'}`,
-                                        borderColor: `${linkedEvent.color || '#3B82F6'}40`,
-                                    },
-                                ]}
-                            >
-                                <Calendar
-                                    size={13}
-                                    color={linkedEvent.color || '#3B82F6'}
-                                    strokeWidth={2.2}
-                                />
-                                <Text
-                                    style={[styles.headerFolderText, { color: linkedEvent.color || '#3B82F6', maxWidth: 100 }]}
-                                    numberOfLines={1}
-                                >
-                                    {linkedEvent.title}
-                                </Text>
-                            </TouchableOpacity>
-                        )}
+                        {/* Breadcrumb Unificado en la Cabecera de la Nota */}
+                        <NoteUnifiedBreadcrumb
+                            folder={currentFolder}
+                            event={linkedEvent}
+                            allFolders={folders}
+                            onFolderPress={(f) => navigateToFolderInNotes(f, folders)}
+                            onParentFolderPress={(pf) => navigateToFolderInNotes(pf, folders)}
+                            onEventPress={(ev) => router.push({ pathname: '/events/[id]', params: { id: ev.id } })}
+                            onCategoryPress={() => {
+                                useStore.getState().setMainActiveTab('notes');
+                                router.push('/notes');
+                            }}
+                            onSelectFolderPress={() => setIsMoveModalVisible(true)}
+                            onFolderLongPress={() => setIsMoveModalVisible(true)}
+                        />
 
                         {/* Botones de Deshacer y Rehacer */}
                         <VeyraIconButton

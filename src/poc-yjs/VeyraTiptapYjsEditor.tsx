@@ -1,5 +1,5 @@
 import React, { useRef, useImperativeHandle, forwardRef, useCallback, useEffect } from 'react';
-import { View, StyleSheet, Platform } from 'react-native';
+import { View, StyleSheet, Platform, Alert } from 'react-native';
 import { WebView, WebViewMessageEvent } from 'react-native-webview';
 import { getTiptapHtml } from './editor-web/htmlTemplate';
 import { diagLog } from './diagLog';
@@ -35,6 +35,16 @@ export interface VeyraTiptapEditorRef {
     insertImage: (url: string) => void;
     replaceImageSrc: (oldLocalUri: string, newRemoteUrl: string) => void;
     setImageSize: (percentage: number) => void;
+    deleteImage: () => void;
+    setImageAlign: (align: 'left' | 'center' | 'right') => void;
+    setImageCaption: (caption: string) => void;
+    toggleCaption: () => void;
+    setYoutubeSize: (percentage: number) => void;
+    setYoutubeAlign: (align: 'left' | 'center' | 'right') => void;
+    playYoutube: () => void;
+    deleteYoutube: () => void;
+    toggleYoutubeEmbed: () => void;
+    injectJS: (code: string) => void;
     setPageId: (pageId: string) => void;
     setCursorVisible: (visible: boolean) => void;
     getPreviewFromWebView: () => Promise<string>;
@@ -42,6 +52,8 @@ export interface VeyraTiptapEditorRef {
     setTheme: (theme: 'dark' | 'light' | 'amoled') => void;
     focus: () => void;
     copy: (text?: string) => void;
+    restoreSelection: () => void;
+    pasteText: (text: string) => void;
     sendAction: (action: string, type?: string, data?: any) => void;
     registerToolbar: (listener: (items: any[]) => void) => void;
 }
@@ -87,9 +99,11 @@ interface VeyraTiptapYjsEditorProps {
     onActivitySnippet?: (snippet: string) => void;
     onActivitySnippetHtml?: (snippetHtml: string) => void;
     onContentRendered?: () => void;
-    onImageClicked?: (url: string, rect?: { x: number; y: number; width: number; height: number; top?: number; bottom?: number; left?: number; right?: number }) => void;
+    onImageClicked?: (url: string, rect?: { x: number; y: number; width: number; height: number; top?: number; bottom?: number; left?: number; right?: number }, attrs?: { width?: number | null; caption?: string | null; textAlign?: string | null }) => void;
     onImageDismissed?: () => void;
-    onTextSelected?: (data: { hasText: boolean; rect?: { x: number; y: number; width: number; height: number }; text?: string }) => void;
+    onYoutubeClicked?: (videoId: string, rect?: { x: number; y: number; width: number; height: number; top?: number; bottom?: number; left?: number; right?: number }, attrs?: { width?: number | null; textAlign?: string | null; embed?: boolean }) => void;
+    onYoutubeDismissed?: () => void;
+    onTextSelected?: (data: { hasText: boolean; rect?: { x: number; y: number; width: number; height: number }; text?: string; from?: number; to?: number; cursorOnly?: boolean }) => void;
     showSkeleton?: boolean;
 }
 
@@ -119,6 +133,8 @@ export const VeyraTiptapYjsEditor = forwardRef<VeyraTiptapEditorRef, VeyraTiptap
             onContentRendered,
             onImageClicked,
             onImageDismissed,
+            onYoutubeClicked,
+            onYoutubeDismissed,
             onTextSelected,
         },
         ref
@@ -229,6 +245,17 @@ export const VeyraTiptapYjsEditor = forwardRef<VeyraTiptapEditorRef, VeyraTiptap
                 executeInWebView(`window.veyraApplyUpdate && window.veyraApplyUpdate(${JSON.stringify(base64Update)}, ${JSON.stringify(origin)})`);
             },
             applyRemoteAwareness: (base64Awareness: string, senderClientId?: string) => {
+                const hasWebView = Boolean(webViewRef.current);
+                console.log('🌉 [RN Bridge -> WebView] applyRemoteAwareness', {
+                    hasWebView,
+                    senderClientId,
+                    base64Length: base64Awareness?.length || 0,
+                });
+                diagLog('awareness_bridge_call', {
+                    hasWebView,
+                    senderClientId,
+                    bytes: base64Awareness?.length || 0,
+                });
                 const escapedSender = senderClientId ? JSON.stringify(senderClientId) : 'null';
                 executeInWebView(`window.veyraApplyAwareness && window.veyraApplyAwareness(${JSON.stringify(base64Awareness)}, ${escapedSender})`);
             },
@@ -319,6 +346,36 @@ export const VeyraTiptapYjsEditor = forwardRef<VeyraTiptapEditorRef, VeyraTiptap
             setImageSize: (percentage: number) => {
                 executeInWebView(`window.veyraSetImageSize && window.veyraSetImageSize(${Number(percentage)})`);
             },
+            deleteImage: () => {
+                executeInWebView(`window.veyraDeleteImage && window.veyraDeleteImage()`);
+            },
+            setImageAlign: (align: 'left' | 'center' | 'right') => {
+                executeInWebView(`window.veyraSetImageAlign && window.veyraSetImageAlign(${JSON.stringify(align)})`);
+            },
+            setImageCaption: (caption: string) => {
+                executeInWebView(`window.veyraSetImageCaption && window.veyraSetImageCaption(${JSON.stringify(caption)})`);
+            },
+            toggleCaption: () => {
+                executeInWebView(`window.veyraToggleCaption && window.veyraToggleCaption()`);
+            },
+            setYoutubeSize: (percentage: number) => {
+                executeInWebView(`window.veyraSetYoutubeSize && window.veyraSetYoutubeSize(${Number(percentage)})`);
+            },
+            setYoutubeAlign: (align: 'left' | 'center' | 'right') => {
+                executeInWebView(`window.veyraSetYoutubeAlign && window.veyraSetYoutubeAlign(${JSON.stringify(align)})`);
+            },
+            playYoutube: () => {
+                executeInWebView(`window.veyraPlayYoutube && window.veyraPlayYoutube()`);
+            },
+            deleteYoutube: () => {
+                executeInWebView(`window.veyraDeleteYoutube && window.veyraDeleteYoutube()`);
+            },
+            toggleYoutubeEmbed: () => {
+                executeInWebView(`window.veyraToggleYoutubeEmbed && window.veyraToggleYoutubeEmbed()`);
+            },
+            injectJS: (code: string) => {
+                executeInWebView(code);
+            },
             sendAction,
             registerToolbar: (listener: (items: any[]) => void) => {
                 toolbarListenersRef.current.push(listener);
@@ -387,7 +444,7 @@ export const VeyraTiptapYjsEditor = forwardRef<VeyraTiptapEditorRef, VeyraTiptap
 
                     try {
                         webViewRef.current?.postMessage(JSON.stringify({ type: 'GET_HTML' }));
-                    } catch (_) {}
+                    } catch (_) { }
 
                     executeInWebView(`
                         try {
@@ -433,6 +490,16 @@ export const VeyraTiptapYjsEditor = forwardRef<VeyraTiptapEditorRef, VeyraTiptap
             },
             copy: (text?: string) => {
                 executeInWebView(`window.veyraCopy && window.veyraCopy(${JSON.stringify(text || '')})`);
+            },
+            restoreSelection: () => {
+                executeInWebView('window.veyraRestoreSelection && window.veyraRestoreSelection()');
+            },
+            pasteText: (text: string) => {
+                if (!webViewRef.current) return;
+                const escaped = JSON.stringify(text);
+                webViewRef.current.injectJavaScript(
+                    `window.veyraPaste && window.veyraPaste(${escaped}); true;`
+                );
             },
         }));
 
@@ -506,11 +573,24 @@ export const VeyraTiptapYjsEditor = forwardRef<VeyraTiptapEditorRef, VeyraTiptap
                             break;
                         case 'IMAGE_CLICKED':
                             if (data.url) {
-                                onImageClicked?.(data.url, data.rect);
+                                onImageClicked?.(data.url, data.rect, data.attrs);
                             }
+                            break;
+                        case 'IMAGE_BLOCKED_BASE64':
+                            Alert.alert(
+                                'Imagen no permitida directamente',
+                                'Para mantener la velocidad y optimización de tus notas, usa el botón de adjuntar imagen de la barra inferior en lugar de pegarla en crudo.',
+                                [{ text: 'Entendido' }]
+                            );
                             break;
                         case 'IMAGE_DISMISSED':
                             onImageDismissed?.();
+                            break;
+                        case 'YOUTUBE_CLICKED':
+                            onYoutubeClicked?.(data.videoId, data.rect, data.attrs);
+                            break;
+                        case 'YOUTUBE_DISMISSED':
+                            onYoutubeDismissed?.();
                             break;
                         case 'TOOLBAR_STATE_CHANGED': {
                             const fullState: EditorToolbarState = {
@@ -554,7 +634,7 @@ export const VeyraTiptapYjsEditor = forwardRef<VeyraTiptapEditorRef, VeyraTiptap
                             if (fullState.textColor) items.push({ type: 'foreColor', value: fullState.textColor });
                             if (fullState.highlightColor) items.push({ type: 'hiliteColor', value: fullState.highlightColor });
                             toolbarListenersRef.current.forEach(cb => {
-                                try { cb(items); } catch (_) {}
+                                try { cb(items); } catch (_) { }
                             });
                             break;
                         }
@@ -633,22 +713,25 @@ export const VeyraTiptapYjsEditor = forwardRef<VeyraTiptapEditorRef, VeyraTiptap
                 try {
                     if (window.veyraSetTheme) {
                         window.veyraSetTheme('${themeClass}');
-                    } else {
-                        const isAm = '${themeClass}' === 'amoled';
-                        const isDk = '${themeClass}' === 'dark' || isAm;
-                        document.documentElement.className = isAm ? 'dark amoled' : (isDk ? 'dark' : 'light');
-                        document.body.className = isAm ? 'dark amoled' : (isDk ? 'dark' : 'light');
-                        document.documentElement.style.setProperty('--bg-color', isAm ? '#000000' : (isDk ? '#121212' : '#FFFFFF'));
                     }
+                    const isAm = ${isAmoled ? 'true' : 'false'};
+                    const isDk = ${isDark ? 'true' : 'false'} || isAm;
+                    document.documentElement.className = isAm ? 'dark amoled' : (isDk ? 'dark' : 'light');
+                    document.body.className = isAm ? 'dark amoled' : (isDk ? 'dark' : 'light');
+                    const targetBg = isAm ? '#000000' : (isDk ? '#121212' : '#FFFFFF');
+                    document.documentElement.style.setProperty('--bg-color', targetBg, 'important');
+                    document.body.style.setProperty('--bg-color', targetBg, 'important');
+                    document.documentElement.style.backgroundColor = targetBg;
+                    document.body.style.backgroundColor = targetBg;
                 } catch (e) {}
             `);
         }, [isDark, isAmoled, executeInWebView]);
 
         return (
-            <View style={styles.container}>
+            <View style={[styles.container, isAmoled && { backgroundColor: '#000000' }]}>
                 <WebView
                     ref={webViewRef}
-                    source={{ html }}
+                    source={{ html, baseUrl: 'https://veyra.app' }}
                     originWhitelist={['*']}
                     allowFileAccess={true}
                     allowUniversalAccessFromFileURLs={true}
@@ -656,6 +739,11 @@ export const VeyraTiptapYjsEditor = forwardRef<VeyraTiptapEditorRef, VeyraTiptap
                     mixedContentMode="always"
                     javaScriptEnabled={true}
                     domStorageEnabled={true}
+                    allowsFullscreenVideo={true}
+                    mediaPlaybackRequiresUserAction={false}
+                    /* onShouldStartLoadWithRequest no se define para permitir que la navegación
+                       y reproducción inline dentro de subframes (ej. iframe de YouTube) ocurra
+                       sin bloqueos o interrupciones indebidas. */
                     textZoom={100}
                     overScrollMode="never"
                     nestedScrollEnabled={true}
@@ -669,19 +757,22 @@ export const VeyraTiptapYjsEditor = forwardRef<VeyraTiptapEditorRef, VeyraTiptap
                             try {
                                 if (window.veyraSetTheme) {
                                     window.veyraSetTheme('${themeClass}');
-                                } else {
-                                    const isAm = '${themeClass}' === 'amoled';
-                                    const isDk = '${themeClass}' === 'dark' || isAm;
-                                    document.documentElement.className = isAm ? 'dark amoled' : (isDk ? 'dark' : 'light');
-                                    document.body.className = isAm ? 'dark amoled' : (isDk ? 'dark' : 'light');
-                                    document.documentElement.style.setProperty('--bg-color', isAm ? '#000000' : (isDk ? '#121212' : '#FFFFFF'));
                                 }
+                                const isAm = ${isAmoled ? 'true' : 'false'};
+                                const isDk = ${isDark ? 'true' : 'false'} || isAm;
+                                document.documentElement.className = isAm ? 'dark amoled' : (isDk ? 'dark' : 'light');
+                                document.body.className = isAm ? 'dark amoled' : (isDk ? 'dark' : 'light');
+                                const targetBg = isAm ? '#000000' : (isDk ? '#121212' : '#FFFFFF');
+                                document.documentElement.style.setProperty('--bg-color', targetBg, 'important');
+                                document.body.style.setProperty('--bg-color', targetBg, 'important');
+                                document.documentElement.style.backgroundColor = targetBg;
+                                document.body.style.backgroundColor = targetBg;
                             } catch (e) {}
                         `);
                     }}
                     onMessage={handleMessage}
-                    style={{ backgroundColor: 'transparent', width: '100%', height: '100%' }}
-                    containerStyle={styles.webViewContainer}
+                    style={{ backgroundColor: isAmoled ? '#000000' : 'transparent', width: '100%', height: '100%' }}
+                    containerStyle={[styles.webViewContainer, isAmoled && { backgroundColor: '#000000' }]}
                     androidLayerType={Platform.OS === 'android' ? 'hardware' : undefined}
                     scrollEnabled={true}
                     setBuiltInZoomControls={true}

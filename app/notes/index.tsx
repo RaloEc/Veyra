@@ -100,6 +100,8 @@ import { FolderModal } from '../../src/components/notes/FolderModal';
 import { MoveToFolderModal } from '../../src/components/notes/MoveToFolderModal';
 import { FolderCardGrid } from '../../src/components/notes/FolderCardGrid';
 import { FolderBreadcrumb } from '../../src/components/notes/FolderBreadcrumb';
+import { useEventsStore } from '../../src/store/useEventsStore';
+import { EventNotebooksTree } from '../../src/components/notes/EventNotebooksTree';
 import { useCardTransitionStore, CardRect } from '../../src/store/cardTransitionStore';
 import { TopBar } from '../../src/components/TopBar';
 import { BottomTabBar } from '../../src/components/layout/BottomTabBar';
@@ -720,6 +722,8 @@ function NotesScreenComponent({ hideBars = false }: { hideBars?: boolean } = {})
     const popFolder = useFoldersStore(state => state.popFolder);
     const resetFolderStack = useFoldersStore(state => state.resetFolderStack);
     const setFolderStack = useFoldersStore(state => state.setFolderStack);
+    const events = useEventsStore(state => state.events);
+    const loadAllEvents = useEventsStore(state => state.loadAllEvents);
 
     const [modalParentFolder, setModalParentFolder] = useState<Folder | null>(null);
 
@@ -1301,6 +1305,7 @@ function NotesScreenComponent({ hideBars = false }: { hideBars?: boolean } = {})
 
             const { isNotesDirty, notes: currentNotes, loadNotes: refreshNotes } = useNotesStore.getState();
             const { isFoldersDirty, folders: currentFolders, loadFolders: refreshFolders } = useFoldersStore.getState();
+            const { isEventsDirty, events: currentEvents, loadAllEvents: refreshEvents } = useEventsStore.getState();
 
             // Caché inteligente: solo consultar SQLite si hay cambios pendientes o en la primera carga
             if (isNotesDirty || currentNotes.length === 0) {
@@ -1308,6 +1313,9 @@ function NotesScreenComponent({ hideBars = false }: { hideBars?: boolean } = {})
             }
             if (isFoldersDirty || currentFolders.length === 0) {
                 refreshFolders();
+            }
+            if (isEventsDirty || currentEvents.length === 0) {
+                refreshEvents();
             }
 
             // Sincronización parcial en segundo plano de previews de notas colaborativas Yjs
@@ -1450,7 +1458,9 @@ function NotesScreenComponent({ hideBars = false }: { hideBars?: boolean } = {})
             // Filtro inteligente de contenido activo
             if (activeFilter === 'pinned' && note.is_pinned !== 1) return false;
             if (activeFilter === 'shared' && !noteIsShared(note, session?.user?.id)) return false;
-            if (activeFilter === 'unassigned' && note.folder_id) return false;
+            if (activeFilter === 'unassigned' && (note.folder_id || note.event_id)) return false;
+            // Limpieza de la Raíz: Las notas que tengan event_id asignado no deben mostrarse duplicadas en la lista raíz de notas sueltas
+            if (!searchQuery.trim() && activeFilter === 'all' && note.event_id) return false;
             if (activeFilter === 'tasks' && !noteHasTasks(note)) return false;
             if (activeFilter === 'attachments' && !noteHasAttachments(note)) return false;
 
@@ -1499,7 +1509,7 @@ function NotesScreenComponent({ hideBars = false }: { hideBars?: boolean } = {})
             if (!matchesSearch) return false;
 
             if (currentTargetFolderId === 'pinned') return note.is_pinned === 1;
-            if (currentTargetFolderId === 'unassigned') return !note.folder_id;
+            if (currentTargetFolderId === 'unassigned') return !note.folder_id && !note.event_id;
 
             if (allowedFolderIds) {
                 return Boolean(note.folder_id && allowedFolderIds.has(note.folder_id));
@@ -1934,26 +1944,53 @@ function NotesScreenComponent({ hideBars = false }: { hideBars?: boolean } = {})
         if (searchQuery.trim().length > 0 || activeFilter !== 'all') return null;
 
         return (
-            <View style={styles.folderGridWrapper}>
-                <FolderCardGrid
-                    folders={rootFolders}
-                    noteCounts={noteCountsMap}
-                    subfolderCounts={subfolderCountsMap}
-                    selectedFolderIds={selectedFolderIds}
-                    isSelectionMode={isFolderSelectionMode}
-                    onToggleSelectFolder={handleToggleSelectFolder}
-                    onLongPressFolder={handleLongPressFolder}
-                    onSelectFolder={(id, rect) => {
-                        handleOpenFolder(id, rect);
+            <View>
+                <View style={styles.folderGridWrapper}>
+                    <FolderCardGrid
+                        folders={rootFolders}
+                        noteCounts={noteCountsMap}
+                        subfolderCounts={subfolderCountsMap}
+                        selectedFolderIds={selectedFolderIds}
+                        isSelectionMode={isFolderSelectionMode}
+                        onToggleSelectFolder={handleToggleSelectFolder}
+                        onLongPressFolder={handleLongPressFolder}
+                        onSelectFolder={(id, rect) => {
+                            handleOpenFolder(id, rect);
+                        }}
+                        onEditFolder={(folder) => {
+                            useFoldersStore.getState().openFolderMorph(null, folder);
+                        }}
+                        onCreateFolder={() => {
+                            useFoldersStore.getState().openFolderMorph(null, null);
+                        }}
+                        onTogglePin={async (id) => {
+                            await togglePinFolder(id);
+                        }}
+                    />
+                </View>
+
+                {/* Eventos como Cuadernos Inteligentes (Nivel 1, 2, 3) */}
+                <EventNotebooksTree
+                    events={events}
+                    notes={notes}
+                    onCreateNoteForEvent={(eventId) => {
+                        const targetEvent = events.find(e => e.id === eventId);
+                        router.push({
+                            pathname: '/notes/create',
+                            params: {
+                                eventId,
+                                folderId: targetEvent?.folder_id || undefined,
+                            },
+                        });
                     }}
-                    onEditFolder={(folder) => {
-                        useFoldersStore.getState().openFolderMorph(null, folder);
+                    onOpenEventDetails={(eventId) => {
+                        router.push({
+                            pathname: '/events/[id]',
+                            params: { id: eventId },
+                        });
                     }}
-                    onCreateFolder={() => {
-                        useFoldersStore.getState().openFolderMorph(null, null);
-                    }}
-                    onTogglePin={async (id) => {
-                        await togglePinFolder(id);
+                    onSelectNote={(note) => {
+                        handlePress(note.id);
                     }}
                 />
             </View>
@@ -2715,6 +2752,37 @@ function NotesScreenComponent({ hideBars = false }: { hideBars?: boolean } = {})
                                         />
                                     </View>
                                 )}
+
+                                {/* Cuadernos de Eventos vinculados a esta carpeta */}
+                                <EventNotebooksTree
+                                    events={events}
+                                    notes={notes}
+                                    filterFolderId={openedFolderId}
+                                    headerTitle={
+                                        language === 'es'
+                                            ? 'EVENTOS VINCULADOS'
+                                            : 'LINKED EVENTS'
+                                    }
+                                    onCreateNoteForEvent={(eventId) => {
+                                        const targetEvent = events.find(e => e.id === eventId);
+                                        router.push({
+                                            pathname: '/notes/create',
+                                            params: {
+                                                eventId,
+                                                folderId: targetEvent?.folder_id || openedFolderId || undefined,
+                                            },
+                                        });
+                                    }}
+                                    onOpenEventDetails={(eventId) => {
+                                        router.push({
+                                            pathname: '/events/[id]',
+                                            params: { id: eventId },
+                                        });
+                                    }}
+                                    onSelectNote={(note) => {
+                                        handlePress(note.id);
+                                    }}
+                                />
 
                                 {folderSections.length === 0 ? (
                                     <View style={styles.folderEmptyContainer}>

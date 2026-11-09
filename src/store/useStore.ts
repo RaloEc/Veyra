@@ -104,7 +104,7 @@ interface AppState {
     streak: number;
     loadStreak: () => Promise<void>;
     accentTheme: AccentTheme;
-    setAccentTheme: (theme: AccentTheme) => void;
+    setAccentTheme: (theme: AccentTheme, isFromRemote?: boolean) => void;
     homeViewMode: 'list' | 'calendar';
     setHomeViewMode: (mode: 'list' | 'calendar') => void;
     tabTransitionDirection: 'forward' | 'backward' | 'none';
@@ -791,9 +791,16 @@ export const useStore = create<AppState>()(
             language: defaultLanguage,
             setLanguage: (lang: string) => set({ language: lang }),
             accentTheme: 'blue' as AccentTheme,
-            setAccentTheme: (accentTheme: AccentTheme) => {
+            setAccentTheme: (accentTheme: AccentTheme, isFromRemote?: boolean) => {
                 set({ accentTheme });
                 updateWidgetTheme(get().theme || 'system', accentTheme, get().amoledEnabled).catch(() => { });
+                if (isFromRemote) return;
+
+                // Emitir broadcast instantáneo en vivo (WebSockets) hacia la Web
+                import('../services/realtimeService').then(({ RealtimeService }) => {
+                    RealtimeService.broadcastTheme(accentTheme);
+                }).catch(() => {});
+
                 const session = get().session;
                 if (session?.user?.id) {
                     supabase.auth.updateUser({

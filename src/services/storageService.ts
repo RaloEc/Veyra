@@ -5,9 +5,9 @@ import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 
 const BUCKET = 'attachments';
 const LOCAL_CACHE_DIR = `${FileSystem.documentDirectory}cloud_cache/`;
-// Imágenes: máximo 800px de ancho, 60% compresión JPEG  →  ~50-150KB por imagen
-const IMAGE_MAX_WIDTH = 800;
-const IMAGE_QUALITY = 0.6;
+// Imágenes: máximo 1600px de ancho, 80% compresión WebP
+const IMAGE_MAX_WIDTH = 1600;
+const IMAGE_QUALITY = 0.8;
 
 /**
  * StorageService — Gestiona la subida/descarga de archivos a Supabase Storage.
@@ -72,14 +72,15 @@ export const StorageService = {
 
     /**
      * Comprime una imagen antes de subirla para minimizar storage y egress.
-     * Convierte a JPEG, redimensiona a 800px max width, compresión 60%.
+     * Convierte a WebP, redimensiona a 1600px max width, compresión 80%.
+     * Los GIFs no deben pasarse por aquí para preservar su animación.
      */
     async compressImage(uri: string): Promise<string> {
         try {
             const result = await manipulateAsync(
                 uri,
                 [{ resize: { width: IMAGE_MAX_WIDTH } }],
-                { compress: IMAGE_QUALITY, format: SaveFormat.JPEG }
+                { compress: IMAGE_QUALITY, format: SaveFormat.WEBP }
             );
             return result.uri;
         } catch (error) {
@@ -90,48 +91,41 @@ export const StorageService = {
 
     /**
      * Sube un archivo local a Supabase Storage.
-     * Retorna la ruta remota (no la URL) para poder generar signed URLs.
-     *
-     * Si el archivo ya existe en el servidor (misma ruta), no se vuelve a subir.
+     * Ruta para nuevas subidas: ${userId}/notes/${Date.now()}_${randomId}.${ext}
+     * Retorna la ruta remota para obtener URLs públicas directas o firmadas.
      */
-    async uploadFile(userId: string, localUri: string, fileName: string): Promise<string | null> {
+    async uploadFile(userId: string, localUri: string, fileName?: string): Promise<string | null> {
         try {
-            const remotePath = await this.getRemotePath(userId, localUri, fileName);
+            const effectiveName = fileName || (typeof localUri === 'string' ? localUri.split('/').pop() : '') || 'file';
+            const isImg = this.isImage(effectiveName);
+            const isGif = effectiveName.toLowerCase().endsWith('.gif') || (typeof localUri === 'string' && localUri.toLowerCase().endsWith('.gif'));
 
-            // Verificar si ya existe en el servidor (deduplicación) con timeout
-            const existingListPromise = supabase.storage
-                .from(BUCKET)
-                .list(userId, {
-                    search: remotePath.split('/').pop()
-                });
-
-            const { data: existing } = await Promise.race([
-                existingListPromise,
-                new Promise<{ data: null; error: any }>((_, reject) =>
-                    setTimeout(() => reject(new Error('Storage list timeout')), 5000)
-                )
-            ]).catch(() => ({ data: null, error: null }));
-
-            if (existing && existing.length > 0) {
-                console.log(`[StorageService] File already exists: ${remotePath}`);
-                return remotePath;
-            }
-
-            // Obtener el URI del archivo a subir
             let uploadUri = localUri;
+            let ext = 'file';
+            let mimeType = 'application/octet-stream';
 
-            // Si es imagen, comprimir antes de subir
-            if (this.isImage(fileName)) {
-                uploadUri = await this.compressImage(localUri);
+            if (isImg) {
+                if (isGif) {
+                    ext = 'gif';
+                    mimeType = 'image/gif';
+                } else {
+                    uploadUri = await this.compressImage(localUri);
+                    ext = 'webp';
+                    mimeType = 'image/webp';
+                }
+            } else {
+                const dotIdx = effectiveName.lastIndexOf('.');
+                if (dotIdx !== -1) ext = effectiveName.toLowerCase().substring(dotIdx + 1);
+                mimeType = this.getMimeType(effectiveName);
             }
+
+            const randomId = Math.random().toString(36).substring(2, 8);
+            const remotePath = `${userId}/notes/${Date.now()}_${randomId}.${ext}`;
 
             // Leer el archivo como base64
             const base64 = await FileSystem.readAsStringAsync(uploadUri, {
                 encoding: FileSystem.EncodingType.Base64,
             });
-
-            // Determinar el MIME type
-            const mimeType = this.getMimeType(fileName);
 
             // Convertir base64 a ArrayBuffer para Supabase
             const binaryString = atob(base64);
@@ -144,7 +138,7 @@ export const StorageService = {
                 .from(BUCKET)
                 .upload(remotePath, bytes.buffer, {
                     contentType: mimeType,
-                    upsert: true, // Overwrite si existe
+                    upsert: false,
                     cacheControl: '31536000', // Cache 1 año (reduce egress)
                 });
 
@@ -291,13 +285,26 @@ export const StorageService = {
     },
 
     /**
-     * Elimina un archivo del servidor.
+     * Elimina un archivo del servidor (acepta remotePath o URL pública).
      */
-    async deleteFile(remotePath: string): Promise<boolean> {
+    async deleteFile(remoteUrlOrPath: string): Promise<boolean> {
+        if (!remoteUrlOrPath || typeof remoteUrlOrPath !== 'string') return false;
         try {
+            let cleanPath = remoteUrlOrPath.trim();
+            const match = cleanPath.match(/\/storage\/v1\/object\/(?:public|sign)\/attachments\/(.+?)(?:\?.*)?$/i);
+            if (match && match[1]) {
+                cleanPath = decodeURIComponent(match[1]);
+            } else if (cleanPath.startsWith('attachments/')) {
+                cleanPath = cleanPath.replace(/^attachments\//, '');
+            } else if (cleanPath.includes('/attachments/')) {
+                const sub = cleanPath.split('/attachments/')[1];
+                cleanPath = decodeURIComponent(sub.split('?')[0]);
+            }
+            cleanPath = cleanPath.replace(/^\/+/, '');
+
             const { error } = await supabase.storage
                 .from(BUCKET)
-                .remove([remotePath]);
+                .remove([cleanPath]);
 
             if (error) {
                 console.error('[StorageService] Delete failed:', error);
@@ -305,7 +312,7 @@ export const StorageService = {
             }
 
             // Eliminar del caché local también
-            const safeName = remotePath.replace(/\//g, '_');
+            const safeName = cleanPath.replace(/\//g, '_');
             const localPath = `${LOCAL_CACHE_DIR}${safeName}`;
             const cached = await FileSystem.getInfoAsync(localPath);
             if (cached.exists) {
@@ -460,3 +467,7 @@ export const StorageService = {
         }
     },
 };
+
+export async function deleteFile(remoteUrlOrPath: string): Promise<void> {
+    return StorageService.deleteFile(remoteUrlOrPath);
+}

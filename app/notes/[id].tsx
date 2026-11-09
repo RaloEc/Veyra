@@ -40,10 +40,17 @@ import {
     Undo2,
     Redo2,
     Eye,
-    Bold,
-    Italic,
-    Copy,
+    AlignLeft,
+    AlignCenter,
+    AlignRight,
+    MessageSquare,
+    Replace,
+    Download,
+    Play,
+    Link as LinkIcon,
+    Video,
 } from '@tamagui/lucide-icons';
+import * as ImagePicker from 'expo-image-picker';
 import { useTranslation } from 'react-i18next';
 import { format } from 'date-fns';
 import { es, enUS } from 'date-fns/locale';
@@ -76,6 +83,8 @@ import { VeyraIconButton, VeyraButton, VeyraSurface } from '../../src/components
 import { useAdaptiveKeyboard } from '../../src/hooks/useAdaptiveKeyboard';
 import { PagesOverviewModal } from '../../src/components/notes/PagesOverviewModal';
 import { FolderIconRenderer } from '../../src/components/notes/FolderIconRenderer';
+import { NoteUnifiedBreadcrumb } from '../../src/components/notes/NoteUnifiedBreadcrumb';
+import { navigateToFolderInNotes } from '../../src/utils/folderNavigationUtils';
 import { MoveToFolderModal } from '../../src/components/notes/MoveToFolderModal';
 import { FolderModal } from '../../src/components/notes/FolderModal';
 import { NoteOptionsMenu } from '../../src/components/notes/NoteOptionsMenu';
@@ -102,6 +111,7 @@ import { StorageService } from '../../src/services/storageService';
 import { Note } from '../../src/types/db';
 import NetInfo from '@react-native-community/netinfo';
 import * as FileSystem from 'expo-file-system/legacy';
+import * as Sharing from 'expo-sharing';
 import * as Crypto from 'expo-crypto';
 import { registerActiveEditor } from '../../src/services/uploadQueueService';
 
@@ -191,12 +201,12 @@ export default function NoteDetailAndEditScreen() {
         w: number;
         h: number;
         url: string;
+        attrs?: { width?: number | null; caption?: string | null; textAlign?: string | null };
     } | null>(null);
     const imageTooltipAnim = useRef(new Animated.Value(0)).current;
 
-    const handleImageClicked = useCallback((url: string, rect?: { x: number; y: number; width: number; height: number; top?: number; bottom?: number }) => {
+    const handleImageClicked = useCallback((url: string, rect?: { x: number; y: number; width: number; height: number; top?: number; bottom?: number }, attrs?: { width?: number | null; caption?: string | null; textAlign?: string | null }) => {
         setSelectedImageUrl(url);
-        setSelectionCoords(null);
         if (rect) {
             setImageCoords({
                 x: rect.x,
@@ -204,6 +214,7 @@ export default function NoteDetailAndEditScreen() {
                 w: rect.width,
                 h: rect.height,
                 url,
+                attrs,
             });
         } else {
             setImageCoords({
@@ -212,6 +223,7 @@ export default function NoteDetailAndEditScreen() {
                 w: 120,
                 h: 120,
                 url,
+                attrs,
             });
         }
     }, [windowWidth]);
@@ -239,46 +251,59 @@ export default function NoteDetailAndEditScreen() {
         }
     }, [isEditMode]);
 
-    // ─── Menú Flotante de Selección de Texto (Yjs) ───
-    const [selectionCoords, setSelectionCoords] = useState<{
+    // ─── Tooltip Flotante de YouTube (Yjs) ───
+    const [youtubeCoords, setYoutubeCoords] = useState<{
         x: number;
         y: number;
         w: number;
         h: number;
-        text?: string;
+        videoId: string;
+        attrs?: { width?: number | null; textAlign?: string | null; embed?: boolean };
     } | null>(null);
-    const tooltipAnim = useRef(new Animated.Value(0)).current;
+    const youtubeTooltipAnim = useRef(new Animated.Value(0)).current;
 
-    const handleTextSelected = useCallback((data: { hasText: boolean; rect?: { x: number; y: number; width: number; height: number }; text?: string }) => {
-        if (data.hasText && data.rect) {
-            setSelectionCoords({
-                x: data.rect.x,
-                y: data.rect.y,
-                w: data.rect.width,
-                h: data.rect.height,
-                text: data.text,
+    const handleYoutubeClicked = useCallback((videoId: string, rect?: { x: number; y: number; width: number; height: number; top?: number; bottom?: number }, attrs?: { width?: number | null; textAlign?: string | null; embed?: boolean }) => {
+        if (rect) {
+            setYoutubeCoords({
+                x: rect.x,
+                y: rect.y,
+                w: rect.width,
+                h: rect.height,
+                videoId,
+                attrs,
             });
         } else {
-            setSelectionCoords(null);
+            setYoutubeCoords({
+                x: windowWidth / 2,
+                y: 160,
+                w: 120,
+                h: 80,
+                videoId,
+                attrs,
+            });
         }
+    }, [windowWidth]);
+
+    const handleYoutubeDismissed = useCallback(() => {
+        setYoutubeCoords(null);
     }, []);
 
     useEffect(() => {
-        if (selectionCoords) {
-            Animated.spring(tooltipAnim, {
+        if (youtubeCoords) {
+            Animated.spring(youtubeTooltipAnim, {
                 toValue: 1,
                 useNativeDriver: true,
                 friction: 7,
                 tension: 60,
             }).start();
         } else {
-            tooltipAnim.setValue(0);
+            youtubeTooltipAnim.setValue(0);
         }
-    }, [selectionCoords, tooltipAnim]);
+    }, [youtubeCoords, youtubeTooltipAnim]);
 
     useEffect(() => {
         if (!isEditMode) {
-            setSelectionCoords(null);
+            setYoutubeCoords(null);
         }
     }, [isEditMode]);
 
@@ -608,11 +633,11 @@ export default function NoteDetailAndEditScreen() {
             storeUserName ||
             metaName;
 
-        if (candidate && typeof candidate === 'string' && candidate.trim() !== '') {
-            return candidate.trim();
-        }
+        const base = candidate && typeof candidate === 'string' && candidate.trim() !== ''
+            ? candidate.trim()
+            : (authEmail ? authEmail.split('@')[0] : 'Usuario');
 
-        return authEmail ? authEmail.split('@')[0] : 'Usuario';
+        return `${base} • Móvil`;
     }, [userPermission, storeUserName, metaName, authEmail]);
 
     const effectiveUserColor = React.useMemo(() => {
@@ -697,10 +722,15 @@ export default function NoteDetailAndEditScreen() {
                     const bytes = base64ToBytes(base64Update);
                     diagLog('apply_update', { origin: originRemoto, bytes: bytes?.byteLength ?? bytes?.length });
                     console.log('[YJS-DIAG] aplicando update remoto', { origin: originRemoto, bytes: bytes?.byteLength ?? bytes?.length });
-                } catch (_) {}
+                } catch (_) { }
                 yjsEditorRef.current?.applyRemoteUpdate(base64Update, originRemoto);
             },
             onRemoteAwareness: (base64Awareness, senderClientId) => {
+                console.log('[RN-BRIDGE] onRemoteAwareness recibido en [id].tsx, pasando a yjsEditorRef', {
+                    hasEditorRef: Boolean(yjsEditorRef.current),
+                    base64Length: base64Awareness?.length || 0,
+                    senderClientId
+                });
                 yjsEditorRef.current?.applyRemoteAwareness(base64Awareness, senderClientId);
             },
             onSyncStep1Received: (remoteSv, correlationId, isReturnHandshake) => {
@@ -733,8 +763,8 @@ export default function NoteDetailAndEditScreen() {
             yjsEditorRef.current?.destroyAwareness();
             const ch = provider.getChannel();
             if (ch) {
-                try { ch.unsubscribe(); } catch (_) {}
-                try { supabase.removeChannel(ch); } catch (_) {}
+                try { ch.unsubscribe(); } catch (_) { }
+                try { supabase.removeChannel(ch); } catch (_) { }
             }
             provider.destroy();
             if (yjsProviderRef.current === provider) {
@@ -972,7 +1002,7 @@ export default function NoteDetailAndEditScreen() {
                         })();
                         true;
                     `);
-                } catch (e) {}
+                } catch (e) { }
             });
             if (isEditMode) {
                 handleExitEditMode();
@@ -1019,7 +1049,7 @@ export default function NoteDetailAndEditScreen() {
             bodyAnim.setValue(1);
 
             // Refrescar notas del almacenamiento local únicamente al ganar foco la pantalla
-            useNotesStore.getState().loadNotes().catch(() => {});
+            useNotesStore.getState().loadNotes().catch(() => { });
         }, [])
     );
 
@@ -1028,6 +1058,10 @@ export default function NoteDetailAndEditScreen() {
             const onHardwareBack = () => {
                 if (imageCoords) {
                     setImageCoords(null);
+                    return true;
+                }
+                if (youtubeCoords) {
+                    setYoutubeCoords(null);
                     return true;
                 }
                 if (isImageViewerVisible) {
@@ -1059,7 +1093,7 @@ export default function NoteDetailAndEditScreen() {
             };
             const subscription = BackHandler.addEventListener('hardwareBackPress', onHardwareBack);
             return () => subscription.remove();
-        }, [isEditMode, isOptionsMenuVisible, isFontModalVisible, isPagesModalVisible, isCropperVisible, alertVisible, imageCoords, isImageViewerVisible])
+        }, [isEditMode, isOptionsMenuVisible, isFontModalVisible, isPagesModalVisible, isCropperVisible, alertVisible, imageCoords, youtubeCoords, isImageViewerVisible])
     );
 
     const editModeAnim = useRef(new Animated.Value(isCreating ? 1 : 0)).current;
@@ -1111,7 +1145,7 @@ export default function NoteDetailAndEditScreen() {
                         })();
                         true;
                     `);
-                } catch (e) {}
+                } catch (e) { }
             });
         }
         await saveSilently();
@@ -1179,7 +1213,7 @@ export default function NoteDetailAndEditScreen() {
                 })();
                 true;
             `);
-        } catch {}
+        } catch { }
         editor.sendAction(actions.fontName, 'result', fontName);
     }, [isYjsMode, currentPageIndex, editorRefs]);
 
@@ -1482,14 +1516,14 @@ export default function NoteDetailAndEditScreen() {
 
                 {/* Editor Tiptap / Yjs empaquetado (Navegación mediante píldora flotante) */}
                 <View style={{ flex: 1, position: 'relative' }}>
-                        {/* Editor real debajo con swap instantáneo */}
-                        <Animated.View
-                            style={[
-                                StyleSheet.absoluteFill,
-                                { opacity: showCached ? editorOpacityAnim : 1, zIndex: showCached ? -1 : 1 },
-                            ]}
-                            pointerEvents={showCached ? 'none' : 'auto'}
-                        >
+                    {/* Editor real debajo con swap instantáneo */}
+                    <Animated.View
+                        style={[
+                            StyleSheet.absoluteFill,
+                            { opacity: showCached ? editorOpacityAnim : 1, zIndex: showCached ? -1 : 1 },
+                        ]}
+                        pointerEvents={showCached ? 'none' : 'auto'}
+                    >
                         <VeyraTiptapYjsEditor
                             ref={yjsEditorRef}
                             isDark={isDark}
@@ -1515,12 +1549,19 @@ export default function NoteDetailAndEditScreen() {
                             onContentRendered={() => setContentRendered(true)}
                             onImageClicked={handleImageClicked}
                             onImageDismissed={handleImageDismissed}
-                            onTextSelected={handleTextSelected}
+                            onYoutubeClicked={handleYoutubeClicked}
+                            onYoutubeDismissed={handleYoutubeDismissed}
                         />
                     </Animated.View>
 
                     {/* Tooltip flotante de opciones de imagen (elegante como el de selección de texto) */}
-                    {imageCoords && !showCached && (
+                    {imageCoords && !showCached && (() => {
+                        const isGif = Boolean(imageCoords.url?.toLowerCase().endsWith('.gif'));
+                        const canEdit = Boolean(isEditMode && effectiveCanEdit);
+                        const menuWidth = canEdit ? Math.min(windowWidth - 24, 340) : 112;
+                        const currentImgWidth = imageCoords.attrs?.width || null;
+                        const currentImgAlign = imageCoords.attrs?.textAlign || 'center';
+                        return (
                         <Animated.View
                             style={[
                                 styles.floatingSelectionMenu,
@@ -1528,7 +1569,9 @@ export default function NoteDetailAndEditScreen() {
                                     backgroundColor: isDark ? (isAmoled ? 'rgba(18, 18, 18, 0.96)' : 'rgba(28, 28, 30, 0.96)') : 'rgba(255, 255, 255, 0.96)',
                                     borderColor: isDark ? 'rgba(255, 255, 255, 0.15)' : 'rgba(0, 0, 0, 0.1)',
                                     top: imageCoords.y > 54 ? imageCoords.y - 48 : imageCoords.y + imageCoords.h + 8,
-                                    left: Math.max(12, Math.min(windowWidth - 250, imageCoords.x - 110)),
+                                    left: Math.max(12, Math.min(windowWidth - menuWidth - 12, imageCoords.x - (menuWidth / 2))),
+                                    maxWidth: canEdit ? windowWidth - 24 : menuWidth,
+                                    paddingHorizontal: 0,
                                     opacity: imageTooltipAnim,
                                     transform: [
                                         {
@@ -1541,134 +1584,454 @@ export default function NoteDetailAndEditScreen() {
                                 },
                             ]}
                         >
-                            {isEditMode && effectiveCanEdit && (
-                                <>
+                            {canEdit ? (
+                                <ScrollView
+                                    horizontal
+                                    showsHorizontalScrollIndicator={false}
+                                    style={{ flexGrow: 0 }}
+                                    contentContainerStyle={{
+                                        paddingHorizontal: 12,
+                                        gap: 8,
+                                        flexDirection: 'row',
+                                        alignItems: 'center',
+                                    }}
+                                >
                                     <TouchableOpacity
-                                        style={styles.imageTooltipPillBtn}
+                                        style={[
+                                            styles.imageTooltipPillBtn,
+                                            currentImgWidth === 25 && { backgroundColor: accent.primary }
+                                        ]}
                                         onPress={() => {
                                             yjsEditorRef.current?.setImageSize(25);
-                                            setImageCoords(null);
+                                            setImageCoords(prev => prev ? { ...prev, attrs: { ...prev.attrs, width: 25 } } : null);
                                         }}
                                         activeOpacity={0.7}
                                     >
-                                        <Text style={[styles.imageTooltipBtnText, { color: isDark ? '#E4E4E7' : '#27272A' }]}>
+                                        <Text style={[styles.imageTooltipBtnText, { color: currentImgWidth === 25 ? '#FFFFFF' : (isDark ? '#E4E4E7' : '#27272A') }]}>
                                             25%
                                         </Text>
                                     </TouchableOpacity>
                                     <TouchableOpacity
-                                        style={styles.imageTooltipPillBtn}
+                                        style={[
+                                            styles.imageTooltipPillBtn,
+                                            currentImgWidth === 50 && { backgroundColor: accent.primary }
+                                        ]}
                                         onPress={() => {
                                             yjsEditorRef.current?.setImageSize(50);
-                                            setImageCoords(null);
+                                            setImageCoords(prev => prev ? { ...prev, attrs: { ...prev.attrs, width: 50 } } : null);
                                         }}
                                         activeOpacity={0.7}
                                     >
-                                        <Text style={[styles.imageTooltipBtnText, { color: isDark ? '#E4E4E7' : '#27272A' }]}>
+                                        <Text style={[styles.imageTooltipBtnText, { color: currentImgWidth === 50 ? '#FFFFFF' : (isDark ? '#E4E4E7' : '#27272A') }]}>
                                             50%
                                         </Text>
                                     </TouchableOpacity>
                                     <TouchableOpacity
-                                        style={styles.imageTooltipPillBtn}
+                                        style={[
+                                            styles.imageTooltipPillBtn,
+                                            currentImgWidth === 75 && { backgroundColor: accent.primary }
+                                        ]}
                                         onPress={() => {
-                                            yjsEditorRef.current?.setImageSize(100);
-                                            setImageCoords(null);
+                                            yjsEditorRef.current?.setImageSize(75);
+                                            setImageCoords(prev => prev ? { ...prev, attrs: { ...prev.attrs, width: 75 } } : null);
                                         }}
                                         activeOpacity={0.7}
                                     >
-                                        <Text style={[styles.imageTooltipBtnText, { color: isDark ? '#E4E4E7' : '#27272A' }]}>
+                                        <Text style={[styles.imageTooltipBtnText, { color: currentImgWidth === 75 ? '#FFFFFF' : (isDark ? '#E4E4E7' : '#27272A') }]}>
+                                            75%
+                                        </Text>
+                                    </TouchableOpacity>
+                                    <TouchableOpacity
+                                        style={[
+                                            styles.imageTooltipPillBtn,
+                                            currentImgWidth === 100 && { backgroundColor: accent.primary }
+                                        ]}
+                                        onPress={() => {
+                                            yjsEditorRef.current?.setImageSize(100);
+                                            setImageCoords(prev => prev ? { ...prev, attrs: { ...prev.attrs, width: 100 } } : null);
+                                        }}
+                                        activeOpacity={0.7}
+                                    >
+                                        <Text style={[styles.imageTooltipBtnText, { color: currentImgWidth === 100 ? '#FFFFFF' : (isDark ? '#E4E4E7' : '#27272A') }]}>
                                             100%
                                         </Text>
                                     </TouchableOpacity>
                                     <View style={[styles.floatingMenuDivider, { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.15)' : 'rgba(0, 0, 0, 0.1)' }]} />
-                                </>
-                            )}
-                            <TouchableOpacity
-                                style={styles.floatingMenuBtn}
-                                onPress={() => {
-                                    setSelectedImageUrl(imageCoords.url);
-                                    setImageCoords(null);
-                                    setTimeout(() => {
-                                        setIsImageViewerVisible(true);
-                                    }, 80);
-                                }}
-                                activeOpacity={0.7}
-                            >
-                                <Eye size={16} color={accent.primary} />
-                            </TouchableOpacity>
-                            <View style={[styles.floatingMenuDivider, { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.15)' : 'rgba(0, 0, 0, 0.1)' }]} />
-                            <TouchableOpacity
-                                style={styles.floatingMenuBtn}
-                                onPress={() => setImageCoords(null)}
-                                activeOpacity={0.7}
-                            >
-                                <X size={16} color={isDark ? '#A1A1AA' : '#71717A'} />
-                            </TouchableOpacity>
-                        </Animated.View>
-                    )}
 
-                    {/* Menú flotante de selección de texto personalizado */}
-                    {selectionCoords && !showCached && (
-                        <Animated.View
-                            style={[
-                                styles.floatingSelectionMenu,
-                                {
-                                    backgroundColor: isDark ? (isAmoled ? 'rgba(18, 18, 18, 0.96)' : 'rgba(28, 28, 30, 0.96)') : 'rgba(255, 255, 255, 0.96)',
-                                    borderColor: isDark ? 'rgba(255, 255, 255, 0.15)' : 'rgba(0, 0, 0, 0.1)',
-                                    top: selectionCoords.y > 54 ? selectionCoords.y - 48 : selectionCoords.y + selectionCoords.h + 8,
-                                    left: Math.max(12, Math.min(windowWidth - 192, selectionCoords.x - 90)),
-                                    opacity: tooltipAnim,
-                                    transform: [
-                                        {
-                                            scale: tooltipAnim.interpolate({
-                                                inputRange: [0, 1],
-                                                outputRange: [0.85, 1],
-                                            }),
-                                        },
-                                    ],
-                                },
-                            ]}
-                        >
-                            <TouchableOpacity
-                                style={[
-                                    styles.floatingMenuBtn,
-                                    yjsToolbarState.isBold && { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.15)' : 'rgba(0, 0, 0, 0.08)' },
-                                ]}
-                                onPress={() => yjsEditorRef.current?.toggleBold()}
-                                activeOpacity={0.7}
-                            >
-                                <Bold size={16} color={yjsToolbarState.isBold ? accent.primary : (isDark ? '#F4F4F5' : '#18181B')} />
-                            </TouchableOpacity>
-                            <TouchableOpacity
-                                style={[
-                                    styles.floatingMenuBtn,
-                                    yjsToolbarState.isItalic && { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.15)' : 'rgba(0, 0, 0, 0.08)' },
-                                ]}
-                                onPress={() => yjsEditorRef.current?.toggleItalic()}
-                                activeOpacity={0.7}
-                            >
-                                <Italic size={16} color={yjsToolbarState.isItalic ? accent.primary : (isDark ? '#F4F4F5' : '#18181B')} />
-                            </TouchableOpacity>
-                            <View style={[styles.floatingMenuDivider, { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.15)' : 'rgba(0, 0, 0, 0.1)' }]} />
-                            <TouchableOpacity
-                                style={styles.floatingMenuBtn}
-                                onPress={() => {
-                                    yjsEditorRef.current?.copy(selectionCoords?.text);
-                                    setSelectionCoords(null);
-                                }}
-                                activeOpacity={0.7}
-                            >
-                                <Copy size={16} color={isDark ? '#F4F4F5' : '#18181B'} />
-                            </TouchableOpacity>
-                            <View style={[styles.floatingMenuDivider, { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.15)' : 'rgba(0, 0, 0, 0.1)' }]} />
-                            <TouchableOpacity
-                                style={styles.floatingMenuBtn}
-                                onPress={() => setSelectionCoords(null)}
-                                activeOpacity={0.7}
-                            >
-                                <X size={16} color={isDark ? '#A1A1AA' : '#71717A'} />
-                            </TouchableOpacity>
+                                    <TouchableOpacity
+                                        style={[
+                                            styles.floatingMenuBtn,
+                                            currentImgAlign === 'left' && { backgroundColor: isDark ? 'rgba(255,255,255,0.14)' : 'rgba(0,0,0,0.08)' }
+                                        ]}
+                                        onPress={() => {
+                                            yjsEditorRef.current?.setImageAlign('left');
+                                            setImageCoords(prev => prev ? { ...prev, attrs: { ...prev.attrs, textAlign: 'left' } } : null);
+                                        }}
+                                        activeOpacity={0.7}
+                                    >
+                                        <AlignLeft size={16} color={currentImgAlign === 'left' ? accent.primary : (isDark ? '#E4E4E7' : '#27272A')} />
+                                    </TouchableOpacity>
+                                    <TouchableOpacity
+                                        style={[
+                                            styles.floatingMenuBtn,
+                                            currentImgAlign === 'center' && { backgroundColor: isDark ? 'rgba(255,255,255,0.14)' : 'rgba(0,0,0,0.08)' }
+                                        ]}
+                                        onPress={() => {
+                                            yjsEditorRef.current?.setImageAlign('center');
+                                            setImageCoords(prev => prev ? { ...prev, attrs: { ...prev.attrs, textAlign: 'center' } } : null);
+                                        }}
+                                        activeOpacity={0.7}
+                                    >
+                                        <AlignCenter size={16} color={currentImgAlign === 'center' ? accent.primary : (isDark ? '#E4E4E7' : '#27272A')} />
+                                    </TouchableOpacity>
+                                    <TouchableOpacity
+                                        style={[
+                                            styles.floatingMenuBtn,
+                                            currentImgAlign === 'right' && { backgroundColor: isDark ? 'rgba(255,255,255,0.14)' : 'rgba(0,0,0,0.08)' }
+                                        ]}
+                                        onPress={() => {
+                                            yjsEditorRef.current?.setImageAlign('right');
+                                            setImageCoords(prev => prev ? { ...prev, attrs: { ...prev.attrs, textAlign: 'right' } } : null);
+                                        }}
+                                        activeOpacity={0.7}
+                                    >
+                                        <AlignRight size={16} color={currentImgAlign === 'right' ? accent.primary : (isDark ? '#E4E4E7' : '#27272A')} />
+                                    </TouchableOpacity>
+                                    <View style={[styles.floatingMenuDivider, { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.15)' : 'rgba(0, 0, 0, 0.1)' }]} />
+
+                                    {/* Botón Caption (Pie de foto) */}
+                                    <TouchableOpacity
+                                        style={styles.floatingMenuBtn}
+                                        onPress={() => {
+                                            yjsEditorRef.current?.toggleCaption ? yjsEditorRef.current.toggleCaption() : yjsEditorRef.current?.injectJS?.('window.veyraToggleCaption && window.veyraToggleCaption()');
+                                            setImageCoords(null);
+                                        }}
+                                        activeOpacity={0.7}
+                                    >
+                                        <MessageSquare size={16} color={isDark ? '#E4E4E7' : '#27272A'} />
+                                    </TouchableOpacity>
+                                    <View style={[styles.floatingMenuDivider, { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.15)' : 'rgba(0, 0, 0, 0.1)' }]} />
+
+                                    {/* Botón Replace (Reemplazar imagen) */}
+                                    <TouchableOpacity
+                                        style={styles.floatingMenuBtn}
+                                        onPress={async () => {
+                                            try {
+                                                const result = await ImagePicker.launchImageLibraryAsync({
+                                                    mediaTypes: ['images'],
+                                                    quality: 1,
+                                                });
+                                                if (result.canceled || !result.assets || !result.assets[0]) return;
+                                                const asset = result.assets[0];
+                                                const currentImageUrl = imageCoords.url;
+                                                setImageCoords(null);
+
+                                                const userId = currentUserId || useStore.getState().session?.user?.id || 'anonymous';
+                                                const ext = asset.uri.split('.').pop() || 'webp';
+                                                const fileName = `replaced_${Date.now()}.${ext}`;
+                                                const remotePath = await StorageService.uploadFile(userId, asset.uri, fileName);
+                                                if (remotePath) {
+                                                    const { data: publicUrlData } = supabase.storage
+                                                        .from('attachments')
+                                                        .getPublicUrl(remotePath);
+                                                    const newUrl = publicUrlData?.publicUrl;
+                                                    if (newUrl) {
+                                                        yjsEditorRef.current?.replaceImageSrc(currentImageUrl, newUrl);
+                                                        if (currentImageUrl && currentImageUrl.includes('attachments')) {
+                                                            StorageService.deleteFile(currentImageUrl).catch(e => console.warn('[Mobile] Error eliminando imagen antigua tras replace:', e));
+                                                        }
+                                                    }
+                                                }
+                                            } catch (err) {
+                                                console.warn('[Mobile] Error en reemplazo de imagen:', err);
+                                            }
+                                        }}
+                                        activeOpacity={0.7}
+                                    >
+                                        <Replace size={16} color={isDark ? '#E4E4E7' : '#27272A'} />
+                                    </TouchableOpacity>
+                                    <View style={[styles.floatingMenuDivider, { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.15)' : 'rgba(0, 0, 0, 0.1)' }]} />
+
+                                    {/* Botón Download (Descargar y compartir imagen) */}
+                                    <TouchableOpacity
+                                        style={styles.floatingMenuBtn}
+                                        onPress={async () => {
+                                            try {
+                                                const currentImageUrl = imageCoords.url;
+                                                setImageCoords(null);
+                                                const dir = FileSystem.cacheDirectory || FileSystem.documentDirectory || '';
+                                                const fileUri = dir + 'image_' + Date.now() + '.webp';
+                                                await FileSystem.downloadAsync(currentImageUrl, fileUri);
+                                                await Sharing.shareAsync(fileUri, { mimeType: 'image/webp' });
+                                            } catch (err) {
+                                                console.warn('[Mobile] Error descargando imagen:', err);
+                                            }
+                                        }}
+                                        activeOpacity={0.7}
+                                    >
+                                        <Download size={16} color={isDark ? '#E4E4E7' : '#27272A'} />
+                                    </TouchableOpacity>
+                                    <View style={[styles.floatingMenuDivider, { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.15)' : 'rgba(0, 0, 0, 0.1)' }]} />
+
+                                    <TouchableOpacity
+                                        style={styles.floatingMenuBtn}
+                                        onPress={() => {
+                                            const oldUrl = imageCoords.url;
+                                            yjsEditorRef.current?.deleteImage();
+                                            setImageCoords(null);
+                                            if (oldUrl && oldUrl.includes('attachments')) {
+                                                StorageService.deleteFile(oldUrl).catch(e => console.warn('[Mobile] Error eliminando imagen de storage:', e));
+                                            }
+                                        }}
+                                        activeOpacity={0.7}
+                                    >
+                                        <Trash2 size={16} color="#EF4444" />
+                                    </TouchableOpacity>
+                                    <View style={[styles.floatingMenuDivider, { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.15)' : 'rgba(0, 0, 0, 0.1)' }]} />
+
+                                    <TouchableOpacity
+                                        style={styles.floatingMenuBtn}
+                                        onPress={() => {
+                                            setSelectedImageUrl(imageCoords.url);
+                                            setImageCoords(null);
+                                            setTimeout(() => {
+                                                setIsImageViewerVisible(true);
+                                            }, 80);
+                                        }}
+                                        activeOpacity={0.7}
+                                    >
+                                        <Eye size={16} color={accent.primary} />
+                                    </TouchableOpacity>
+                                    <View style={[styles.floatingMenuDivider, { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.15)' : 'rgba(0, 0, 0, 0.1)' }]} />
+                                    <TouchableOpacity
+                                        style={styles.floatingMenuBtn}
+                                        onPress={() => setImageCoords(null)}
+                                        activeOpacity={0.7}
+                                    >
+                                        <X size={16} color={isDark ? '#A1A1AA' : '#71717A'} />
+                                    </TouchableOpacity>
+                                </ScrollView>
+                            ) : (
+                                <View
+                                    style={{
+                                        paddingHorizontal: 8,
+                                        gap: 6,
+                                        flexDirection: 'row',
+                                        alignItems: 'center',
+                                    }}
+                                >
+                                    <TouchableOpacity
+                                        style={styles.floatingMenuBtn}
+                                        onPress={() => {
+                                            setSelectedImageUrl(imageCoords.url);
+                                            setImageCoords(null);
+                                            setTimeout(() => {
+                                                setIsImageViewerVisible(true);
+                                            }, 80);
+                                        }}
+                                        activeOpacity={0.7}
+                                    >
+                                        <Eye size={16} color={accent.primary} />
+                                    </TouchableOpacity>
+                                    <View style={[styles.floatingMenuDivider, { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.15)' : 'rgba(0, 0, 0, 0.1)' }]} />
+                                    <TouchableOpacity
+                                        style={styles.floatingMenuBtn}
+                                        onPress={() => setImageCoords(null)}
+                                        activeOpacity={0.7}
+                                    >
+                                        <X size={16} color={isDark ? '#A1A1AA' : '#71717A'} />
+                                    </TouchableOpacity>
+                                </View>
+                            )}
                         </Animated.View>
-                    )}
+                        );
+                    })()}
+
+                    {/* Tooltip flotante de opciones de video de YouTube (Modo Edición) */}
+                    {youtubeCoords && !showCached && isEditMode && effectiveCanEdit && (() => {
+                        const menuWidth = Math.min(windowWidth - 24, 380);
+                        const isEmbed = youtubeCoords.attrs?.embed !== false;
+                        const currentYtWidth = youtubeCoords.attrs?.width || null;
+                        const currentYtAlign = youtubeCoords.attrs?.textAlign || 'center';
+                        return (
+                            <Animated.View
+                                style={[
+                                    styles.floatingSelectionMenu,
+                                    {
+                                        backgroundColor: isDark ? (isAmoled ? 'rgba(18, 18, 18, 0.96)' : 'rgba(28, 28, 30, 0.96)') : 'rgba(255, 255, 255, 0.96)',
+                                        borderColor: isDark ? 'rgba(255, 255, 255, 0.15)' : 'rgba(0, 0, 0, 0.1)',
+                                        top: youtubeCoords.y > 54 ? youtubeCoords.y - 48 : youtubeCoords.y + youtubeCoords.h + 8,
+                                        left: Math.max(12, Math.min(windowWidth - menuWidth - 12, youtubeCoords.x - (menuWidth / 2))),
+                                        maxWidth: windowWidth - 24,
+                                        paddingHorizontal: 0,
+                                        opacity: youtubeTooltipAnim,
+                                        transform: [
+                                            {
+                                                scale: youtubeTooltipAnim.interpolate({
+                                                    inputRange: [0, 1],
+                                                    outputRange: [0.85, 1],
+                                                }),
+                                            },
+                                        ],
+                                    },
+                                ]}
+                            >
+                                <ScrollView
+                                    horizontal
+                                    showsHorizontalScrollIndicator={false}
+                                    style={{ flexGrow: 0 }}
+                                    contentContainerStyle={{
+                                        paddingHorizontal: 12,
+                                        gap: 8,
+                                        flexDirection: 'row',
+                                        alignItems: 'center',
+                                    }}
+                                >
+                                    {/* Presets de tamaño */}
+                                    <TouchableOpacity
+                                        style={[
+                                            styles.imageTooltipPillBtn,
+                                            currentYtWidth === 50 && { backgroundColor: accent.primary }
+                                        ]}
+                                        onPress={() => {
+                                            yjsEditorRef.current?.setYoutubeSize(50);
+                                            setYoutubeCoords(prev => prev ? { ...prev, attrs: { ...prev.attrs, width: 50 } } : null);
+                                        }}
+                                        activeOpacity={0.7}
+                                    >
+                                        <Text style={[styles.imageTooltipBtnText, { color: currentYtWidth === 50 ? '#FFFFFF' : (isDark ? '#E4E4E7' : '#27272A') }]}>
+                                            50%
+                                        </Text>
+                                    </TouchableOpacity>
+                                    <TouchableOpacity
+                                        style={[
+                                            styles.imageTooltipPillBtn,
+                                            currentYtWidth === 75 && { backgroundColor: accent.primary }
+                                        ]}
+                                        onPress={() => {
+                                            yjsEditorRef.current?.setYoutubeSize(75);
+                                            setYoutubeCoords(prev => prev ? { ...prev, attrs: { ...prev.attrs, width: 75 } } : null);
+                                        }}
+                                        activeOpacity={0.7}
+                                    >
+                                        <Text style={[styles.imageTooltipBtnText, { color: currentYtWidth === 75 ? '#FFFFFF' : (isDark ? '#E4E4E7' : '#27272A') }]}>
+                                            75%
+                                        </Text>
+                                    </TouchableOpacity>
+                                    <TouchableOpacity
+                                        style={[
+                                            styles.imageTooltipPillBtn,
+                                            currentYtWidth === 100 && { backgroundColor: accent.primary }
+                                        ]}
+                                        onPress={() => {
+                                            yjsEditorRef.current?.setYoutubeSize(100);
+                                            setYoutubeCoords(prev => prev ? { ...prev, attrs: { ...prev.attrs, width: 100 } } : null);
+                                        }}
+                                        activeOpacity={0.7}
+                                    >
+                                        <Text style={[styles.imageTooltipBtnText, { color: currentYtWidth === 100 ? '#FFFFFF' : (isDark ? '#E4E4E7' : '#27272A') }]}>
+                                            100%
+                                        </Text>
+                                    </TouchableOpacity>
+                                    <View style={[styles.floatingMenuDivider, { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.15)' : 'rgba(0, 0, 0, 0.1)' }]} />
+
+                                    {/* Alineación */}
+                                    <TouchableOpacity
+                                        style={[
+                                            styles.floatingMenuBtn,
+                                            currentYtAlign === 'left' && { backgroundColor: isDark ? 'rgba(255,255,255,0.14)' : 'rgba(0,0,0,0.08)' }
+                                        ]}
+                                        onPress={() => {
+                                            yjsEditorRef.current?.setYoutubeAlign('left');
+                                            setYoutubeCoords(prev => prev ? { ...prev, attrs: { ...prev.attrs, textAlign: 'left' } } : null);
+                                        }}
+                                        activeOpacity={0.7}
+                                    >
+                                        <AlignLeft size={16} color={currentYtAlign === 'left' ? accent.primary : (isDark ? '#E4E4E7' : '#27272A')} />
+                                    </TouchableOpacity>
+                                    <TouchableOpacity
+                                        style={[
+                                            styles.floatingMenuBtn,
+                                            currentYtAlign === 'center' && { backgroundColor: isDark ? 'rgba(255,255,255,0.14)' : 'rgba(0,0,0,0.08)' }
+                                        ]}
+                                        onPress={() => {
+                                            yjsEditorRef.current?.setYoutubeAlign('center');
+                                            setYoutubeCoords(prev => prev ? { ...prev, attrs: { ...prev.attrs, textAlign: 'center' } } : null);
+                                        }}
+                                        activeOpacity={0.7}
+                                    >
+                                        <AlignCenter size={16} color={currentYtAlign === 'center' ? accent.primary : (isDark ? '#E4E4E7' : '#27272A')} />
+                                    </TouchableOpacity>
+                                    <TouchableOpacity
+                                        style={[
+                                            styles.floatingMenuBtn,
+                                            currentYtAlign === 'right' && { backgroundColor: isDark ? 'rgba(255,255,255,0.14)' : 'rgba(0,0,0,0.08)' }
+                                        ]}
+                                        onPress={() => {
+                                            yjsEditorRef.current?.setYoutubeAlign('right');
+                                            setYoutubeCoords(prev => prev ? { ...prev, attrs: { ...prev.attrs, textAlign: 'right' } } : null);
+                                        }}
+                                        activeOpacity={0.7}
+                                    >
+                                        <AlignRight size={16} color={currentYtAlign === 'right' ? accent.primary : (isDark ? '#E4E4E7' : '#27272A')} />
+                                    </TouchableOpacity>
+                                    <View style={[styles.floatingMenuDivider, { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.15)' : 'rgba(0, 0, 0, 0.1)' }]} />
+
+                                    {/* Botón Reproducir */}
+                                    <TouchableOpacity
+                                        style={styles.floatingMenuBtn}
+                                        onPress={() => {
+                                            yjsEditorRef.current?.playYoutube();
+                                            setYoutubeCoords(null);
+                                        }}
+                                        activeOpacity={0.7}
+                                    >
+                                        <Play size={16} color={accent.primary} />
+                                    </TouchableOpacity>
+                                    <View style={[styles.floatingMenuDivider, { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.15)' : 'rgba(0, 0, 0, 0.1)' }]} />
+
+                                    {/* Botón Convertir Enlace / Modo Embed */}
+                                    <TouchableOpacity
+                                        style={styles.floatingMenuBtn}
+                                        onPress={() => {
+                                            yjsEditorRef.current?.toggleYoutubeEmbed();
+                                            setYoutubeCoords(null);
+                                        }}
+                                        activeOpacity={0.7}
+                                    >
+                                        {isEmbed ? (
+                                            <LinkIcon size={16} color={isDark ? '#E4E4E7' : '#27272A'} />
+                                        ) : (
+                                            <Video size={16} color={isDark ? '#E4E4E7' : '#27272A'} />
+                                        )}
+                                    </TouchableOpacity>
+                                    <View style={[styles.floatingMenuDivider, { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.15)' : 'rgba(0, 0, 0, 0.1)' }]} />
+
+                                    {/* Botón Eliminar */}
+                                    <TouchableOpacity
+                                        style={styles.floatingMenuBtn}
+                                        onPress={() => {
+                                            yjsEditorRef.current?.deleteYoutube();
+                                            setYoutubeCoords(null);
+                                        }}
+                                        activeOpacity={0.7}
+                                    >
+                                        <Trash2 size={16} color="#EF4444" />
+                                    </TouchableOpacity>
+                                    <View style={[styles.floatingMenuDivider, { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.15)' : 'rgba(0, 0, 0, 0.1)' }]} />
+
+                                    {/* Botón Cerrar Menú */}
+                                    <TouchableOpacity
+                                        style={styles.floatingMenuBtn}
+                                        onPress={() => setYoutubeCoords(null)}
+                                        activeOpacity={0.7}
+                                    >
+                                        <X size={16} color={isDark ? '#A1A1AA' : '#71717A'} />
+                                    </TouchableOpacity>
+                                </ScrollView>
+                            </Animated.View>
+                        );
+                    })()}
 
                     {/* Vista cacheada superpuesta durante la carga (Skeleton) */}
                     {showCached && (
@@ -1686,7 +2049,7 @@ export default function NoteDetailAndEditScreen() {
                             />
                         </Animated.View>
                     )}
-                    </View>
+                </View>
             </View>
         );
     };
@@ -1816,6 +2179,7 @@ export default function NoteDetailAndEditScreen() {
                                         setDescription={html => updatePageContent(index, html)}
                                         readOnly={!isEditMode || !canEdit}
                                         isDark={isDark}
+                                        isAmoled={isAmoled}
                                         fontFamily={fontFamily}
                                         editorRef={{
                                             get current() {
@@ -2037,6 +2401,7 @@ export default function NoteDetailAndEditScreen() {
                                             setDescription={html => updatePageContent(index, html)}
                                             readOnly={!isEditMode || !canEdit}
                                             isDark={isDark}
+                                            isAmoled={isAmoled}
                                             fontFamily={fontFamily}
                                             editorRef={{
                                                 get current() {
@@ -2051,9 +2416,9 @@ export default function NoteDetailAndEditScreen() {
                                                 setIsNotesFocused(true);
                                             }}
                                             onBlur={() => {
-                                             setIsNotesFocused(false);
-                                             broadcastCursorRemove(index);
-                                         }}
+                                                setIsNotesFocused(false);
+                                                broadcastCursorRemove(index);
+                                            }}
                                             flat={true}
                                             onUndo={undo}
                                             onRedo={redo}
@@ -2117,532 +2482,489 @@ export default function NoteDetailAndEditScreen() {
         <Reanimated.View style={[{ flex: 1, backgroundColor: colors.bg }, screenAnimatedStyle]}>
             <SafeAreaView style={[styles.screen, { backgroundColor: colors.bg }]} edges={['top', 'right', 'left']}>
                 <View style={styles.container}>
-                {/* Header Superior */}
-                <Animated.View
-                    style={[
-                        styles.header,
-                        {
-                            borderBottomColor: colors.borderSubtle,
-                            opacity: headerAnim,
-                        },
-                    ]}
-                >
-                    <VeyraIconButton
-                        variant="ghost"
-                        size="sm"
-                        icon={<ChevronLeft size={24} color={colors.textPrimary} />}
-                        onPress={handleBack}
-                    />
-
-                    <View style={styles.headerActions}>
-                        {/* Colaboradores de la nota */}
-                        {!isCreating && id && (
-                            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                                <CollaboratorsAvatars
-                                    targetType="note"
-                                    targetId={id}
-                                    onPress={() => setIsShareModalVisible(true)}
-                                    activePeers={isYjsMode ? editingPeers : undefined}
-                                    currentUserId={currentUserId || authUserId || undefined}
-                                />
-                            </View>
-                        )}
-
-                        {/* Selector de Carpeta */}
-                        <TouchableOpacity
-                            style={[
-                                styles.headerFolderBtn,
-                                {
-                                    backgroundColor: currentFolder
-                                        ? `${currentFolder.color || '#8B5CF6'}${isDark ? '25' : '15'}`
-                                        : (isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)'),
-                                    borderColor: currentFolder
-                                        ? `${currentFolder.color || '#8B5CF6'}40`
-                                        : colors.borderSubtle,
-                                },
-                            ]}
-                            onPress={() => setIsMoveModalVisible(true)}
-                            activeOpacity={0.7}
-                        >
-                            <FolderIconRenderer
-                                name={currentFolder ? currentFolder.icon : 'folder'}
-                                size={14}
-                                color={currentFolder ? (currentFolder.color || '#8B5CF6') : colors.textSecondary}
-                                strokeWidth={2}
-                            />
-                            {currentFolder && (
-                                <Text
-                                    style={[styles.headerFolderText, { color: currentFolder.color || '#8B5CF6' }]}
-                                    numberOfLines={1}
-                                >
-                                    {currentFolder.name}
-                                </Text>
-                            )}
-                        </TouchableOpacity>
-
-                        {/* Evento Vinculado */}
-                        {linkedEvent && (
-                            <TouchableOpacity
-                                activeOpacity={0.75}
-                                onPress={() => router.push({ pathname: '/events/[id]', params: { id: linkedEvent.id } })}
-                                style={[
-                                    styles.headerFolderBtn,
-                                    {
-                                        backgroundColor: `${linkedEvent.color || '#3B82F6'}${isDark ? '25' : '15'}`,
-                                        borderColor: `${linkedEvent.color || '#3B82F6'}40`,
-                                    },
-                                ]}
-                            >
-                                <Calendar
-                                    size={13}
-                                    color={linkedEvent.color || '#3B82F6'}
-                                    strokeWidth={2.2}
-                                />
-                                <Text
-                                    style={[styles.headerFolderText, { color: linkedEvent.color || '#3B82F6', maxWidth: 100 }]}
-                                    numberOfLines={1}
-                                >
-                                    {linkedEvent.title}
-                                </Text>
-                            </TouchableOpacity>
-                        )}
-
-                        {isEditMode && (
-                            <>
-                                <VeyraIconButton
-                                    variant="ghost"
-                                    size="sm"
-                                    disabled={isYjsMode ? !yjsToolbarState.canUndo : !canUndo}
-                                    style={{ opacity: (isYjsMode ? yjsToolbarState.canUndo : canUndo) ? 1 : 0.35 }}
-                                    icon={<Undo2 size={18} color={((isYjsMode ? yjsToolbarState.canUndo : canUndo) ? colors.textPrimary : colors.textMuted) as any} />}
-                                    onPress={isYjsMode ? () => yjsEditorRef.current?.undo() : undo}
-                                />
-                                <VeyraIconButton
-                                    variant="ghost"
-                                    size="sm"
-                                    disabled={isYjsMode ? !yjsToolbarState.canRedo : !canRedo}
-                                    style={{ opacity: (isYjsMode ? yjsToolbarState.canRedo : canRedo) ? 1 : 0.35 }}
-                                    icon={<Redo2 size={18} color={((isYjsMode ? yjsToolbarState.canRedo : canRedo) ? colors.textPrimary : colors.textMuted) as any} />}
-                                    onPress={isYjsMode ? () => yjsEditorRef.current?.redo() : redo}
-                                />
-                            </>
-                        )}
-
-                        {!canEdit ? (
-                            <View
-                                style={{
-                                    flexDirection: 'row',
-                                    alignItems: 'center',
-                                    gap: 5,
-                                    paddingHorizontal: 10,
-                                    paddingVertical: 6,
-                                    borderRadius: 14,
-                                    backgroundColor: isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.05)',
-                                    borderWidth: 1,
-                                    borderColor: isDark ? 'rgba(255, 255, 255, 0.12)' : 'rgba(0, 0, 0, 0.08)',
-                                }}
-                            >
-                                <Eye size={13} color={colors.textSecondary} />
-                                <Text style={{ fontSize: 12, fontWeight: '600', color: colors.textSecondary }}>
-                                    {t('collaboration.viewer_badge', { defaultValue: 'Solo lectura' })}
-                                </Text>
-                            </View>
-                        ) : !isEditMode ? (
-                            <VeyraButton
-                                variant="secondary"
-                                size="sm"
-                                label={t('common.edit', { defaultValue: 'Editar' })}
-                                iconLeft={<Edit3 size={15} color={accent.primary} />}
-                                onPress={handleEnterEditMode}
-                            />
-                        ) : (
-                            <VeyraButton
-                                variant="primary"
-                                size="sm"
-                                label={t('common.done', { defaultValue: 'Listo' })}
-                                iconLeft={<Check size={15} color={isDark ? '#111827' : '#FFFFFF'} strokeWidth={2.5} />}
-                                onPress={handleExitEditMode}
-                            />
-                        )}
-
-                        {/* Botón de Más Opciones (One UI 3 Puntos) */}
+                    {/* Header Superior */}
+                    <Animated.View
+                        style={[
+                            styles.header,
+                            {
+                                borderBottomColor: colors.borderSubtle,
+                                opacity: headerAnim,
+                            },
+                        ]}
+                    >
                         <VeyraIconButton
                             variant="ghost"
                             size="sm"
-                            icon={<MoreVertical size={18} color={colors.textPrimary} />}
-                            onPress={() => setIsOptionsMenuVisible(true)}
+                            icon={<ChevronLeft size={24} color={colors.textPrimary} />}
+                            onPress={handleBack}
                         />
-                    </View>
-                </Animated.View>
 
-
-
-                {/* Contenido Unificado — Selección mutuamente excluyente de editores */}
-                <View style={{ flex: 1 }}>
-                    {isYjsMode ? renderYjsEditor() : (scrollLayout === 'vertical' || pages.length <= 1 ? renderVertical() : renderHorizontal())}
-
-                    {/* Floating Page Switcher Pill — Para notas multipágina o modo edición */}
-                    {(pages.length > 1 || (isEditMode && effectiveCanEdit)) && (
-                        <View style={[styles.floatingPageBar, { bottom: floatingPillBottom }]}>
-                            {pages.length > 1 && (
-                                <TouchableOpacity
-                                    activeOpacity={0.7}
-                                    onPress={() => setCurrentPageIndex(p => Math.max(0, p - 1))}
-                                    disabled={currentPageIndex === 0}
-                                    style={[
-                                        styles.pageNavBtn,
-                                        {
-                                            backgroundColor: isDark ? (isAmoled ? 'rgba(18, 18, 18, 0.94)' : 'rgba(28, 31, 38, 0.94)') : 'rgba(255, 255, 255, 0.94)',
-                                            borderColor: colors.borderSubtle,
-                                            opacity: currentPageIndex === 0 ? 0.35 : 1,
-                                        },
-                                    ]}
-                                >
-                                    <ChevronLeft size={16} color={colors.textPrimary} />
-                                </TouchableOpacity>
+                        <View style={styles.headerActions}>
+                            {/* Colaboradores de la nota */}
+                            {!isCreating && id && (
+                                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                                    <CollaboratorsAvatars
+                                        targetType="note"
+                                        targetId={id}
+                                        onPress={() => setIsShareModalVisible(true)}
+                                        activePeers={isYjsMode ? editingPeers : undefined}
+                                        currentUserId={currentUserId || authUserId || undefined}
+                                    />
+                                </View>
                             )}
 
-                            <TouchableOpacity
-                                activeOpacity={0.8}
-                                onPress={() => setIsPagesModalVisible(true)}
-                                style={[
-                                    styles.pageIndicatorPill,
-                                    {
-                                        backgroundColor: isDark ? (isAmoled ? 'rgba(18, 18, 18, 0.94)' : 'rgba(28, 31, 38, 0.94)') : 'rgba(255, 255, 255, 0.94)',
-                                        borderColor: colors.borderSubtle,
-                                    },
-                                ]}
-                            >
-                                <Layers size={13} color={accent.primary as any} />
-                                <Text style={[styles.pageIndicatorText, { color: colors.textPrimary }]}>
-                                    {t('notes.page_indicator', {
-                                        current: currentPageIndex + 1,
-                                        total: pages.length,
-                                        defaultValue: `Pág. ${currentPageIndex + 1} / ${pages.length}`,
-                                    })}
-                                </Text>
-                            </TouchableOpacity>
+                            {/* Breadcrumb Unificado en la Cabecera de la Nota */}
+                            <NoteUnifiedBreadcrumb
+                                folder={currentFolder}
+                                event={linkedEvent}
+                                allFolders={folders}
+                                onFolderPress={(f) => navigateToFolderInNotes(f, folders)}
+                                onParentFolderPress={(pf) => navigateToFolderInNotes(pf, folders)}
+                                onEventPress={(ev) => router.push({ pathname: '/events/[id]', params: { id: ev.id } })}
+                                onCategoryPress={() => {
+                                    useStore.getState().setMainActiveTab('notes');
+                                    router.push('/notes');
+                                }}
+                                onSelectFolderPress={() => setIsMoveModalVisible(true)}
+                                onFolderLongPress={() => setIsMoveModalVisible(true)}
+                            />
 
-                            {pages.length > 1 && (
-                                <TouchableOpacity
-                                    activeOpacity={0.7}
-                                    onPress={() => setCurrentPageIndex(p => Math.min(pages.length - 1, p + 1))}
-                                    disabled={currentPageIndex === pages.length - 1}
-                                    style={[
-                                        styles.pageNavBtn,
-                                        {
-                                            backgroundColor: isDark ? (isAmoled ? 'rgba(18, 18, 18, 0.94)' : 'rgba(28, 31, 38, 0.94)') : 'rgba(255, 255, 255, 0.94)',
-                                            borderColor: colors.borderSubtle,
-                                            opacity: currentPageIndex === pages.length - 1 ? 0.35 : 1,
-                                        },
-                                    ]}
-                                >
-                                    <ChevronRight size={16} color={colors.textPrimary} />
-                                </TouchableOpacity>
+                            {isEditMode && (
+                                <>
+                                    <VeyraIconButton
+                                        variant="ghost"
+                                        size="sm"
+                                        disabled={isYjsMode ? !yjsToolbarState.canUndo : !canUndo}
+                                        style={{ opacity: (isYjsMode ? yjsToolbarState.canUndo : canUndo) ? 1 : 0.35 }}
+                                        icon={<Undo2 size={18} color={((isYjsMode ? yjsToolbarState.canUndo : canUndo) ? colors.textPrimary : colors.textMuted) as any} />}
+                                        onPress={isYjsMode ? () => yjsEditorRef.current?.undo() : undo}
+                                    />
+                                    <VeyraIconButton
+                                        variant="ghost"
+                                        size="sm"
+                                        disabled={isYjsMode ? !yjsToolbarState.canRedo : !canRedo}
+                                        style={{ opacity: (isYjsMode ? yjsToolbarState.canRedo : canRedo) ? 1 : 0.35 }}
+                                        icon={<Redo2 size={18} color={((isYjsMode ? yjsToolbarState.canRedo : canRedo) ? colors.textPrimary : colors.textMuted) as any} />}
+                                        onPress={isYjsMode ? () => yjsEditorRef.current?.redo() : redo}
+                                    />
+                                </>
                             )}
 
-                            {isEditMode && effectiveCanEdit && (
-                                <Animated.View
+                            {!canEdit ? (
+                                <View
                                     style={{
-                                        opacity: editModeAnim,
-                                        transform: [
-                                            {
-                                                scale: editModeAnim.interpolate({
-                                                    inputRange: [0, 1],
-                                                    outputRange: [0.5, 1],
-                                                }),
-                                            },
-                                        ],
+                                        flexDirection: 'row',
+                                        alignItems: 'center',
+                                        gap: 5,
+                                        paddingHorizontal: 10,
+                                        paddingVertical: 6,
+                                        borderRadius: 14,
+                                        backgroundColor: isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.05)',
+                                        borderWidth: 1,
+                                        borderColor: isDark ? 'rgba(255, 255, 255, 0.12)' : 'rgba(0, 0, 0, 0.08)',
                                     }}
                                 >
+                                    <Eye size={13} color={colors.textSecondary} />
+                                    <Text style={{ fontSize: 12, fontWeight: '600', color: colors.textSecondary }}>
+                                        {t('collaboration.viewer_badge', { defaultValue: 'Solo lectura' })}
+                                    </Text>
+                                </View>
+                            ) : !isEditMode ? (
+                                <VeyraButton
+                                    variant="secondary"
+                                    size="sm"
+                                    label={t('common.edit', { defaultValue: 'Editar' })}
+                                    iconLeft={<Edit3 size={15} color={accent.primary} />}
+                                    onPress={handleEnterEditMode}
+                                />
+                            ) : (
+                                <VeyraButton
+                                    variant="primary"
+                                    size="sm"
+                                    label={t('common.done', { defaultValue: 'Listo' })}
+                                    iconLeft={<Check size={15} color={isDark ? '#111827' : '#FFFFFF'} strokeWidth={2.5} />}
+                                    onPress={handleExitEditMode}
+                                />
+                            )}
+
+                            {/* Botón de Más Opciones (One UI 3 Puntos) */}
+                            <VeyraIconButton
+                                variant="ghost"
+                                size="sm"
+                                icon={<MoreVertical size={18} color={colors.textPrimary} />}
+                                onPress={() => setIsOptionsMenuVisible(true)}
+                            />
+                        </View>
+                    </Animated.View>
+
+
+
+                    {/* Contenido Unificado — Selección mutuamente excluyente de editores */}
+                    <View style={{ flex: 1 }}>
+                        {isYjsMode ? renderYjsEditor() : (scrollLayout === 'vertical' || pages.length <= 1 ? renderVertical() : renderHorizontal())}
+
+                        {/* Floating Page Switcher Pill — Para notas multipágina o modo edición */}
+                        {(pages.length > 1 || (isEditMode && effectiveCanEdit)) && (
+                            <View style={[styles.floatingPageBar, { bottom: floatingPillBottom }]}>
+                                {pages.length > 1 && (
                                     <TouchableOpacity
-                                        activeOpacity={0.8}
-                                        onPress={handleAddPage}
+                                        activeOpacity={0.7}
+                                        onPress={() => setCurrentPageIndex(p => Math.max(0, p - 1))}
+                                        disabled={currentPageIndex === 0}
                                         style={[
-                                            styles.pageAddPill,
+                                            styles.pageNavBtn,
                                             {
-                                                backgroundColor: accent.primary,
+                                                backgroundColor: isDark ? (isAmoled ? 'rgba(18, 18, 18, 0.94)' : 'rgba(28, 31, 38, 0.94)') : 'rgba(255, 255, 255, 0.94)',
+                                                borderColor: colors.borderSubtle,
+                                                opacity: currentPageIndex === 0 ? 0.35 : 1,
                                             },
                                         ]}
                                     >
-                                        <Plus size={15} color={colors.textInverse} strokeWidth={3} />
+                                        <ChevronLeft size={16} color={colors.textPrimary} />
                                     </TouchableOpacity>
-                                </Animated.View>
-                            )}
-                        </View>
-                    )}
+                                )}
 
-                    {/* Toolbar anclada encima del teclado en modo edición */}
-                    {isEditMode && effectiveCanEdit && (
-                        <Animated.View
-                            style={{
-                                marginBottom: lift,
-                                zIndex: 500,
-                                opacity: editModeAnim,
-                                transform: [
-                                    {
-                                        translateY: editModeAnim.interpolate({
-                                            inputRange: [0, 1],
-                                            outputRange: [24, 0],
-                                        }),
-                                    },
-                                ],
-                            }}
-                        >
-                            <RichTextToolbar
-                                editorRef={isYjsMode ? yjsEditorRef : activeEditorRef}
-                                isNotesFocused={isNotesFocused}
-                                isDark={isDark}
-                                isAmoled={isAmoled}
-                                onPressCamera={() => handleInsertImage(true)}
-                                onPressGallery={() => handleInsertImage(false)}
-                                onPressDocument={pickDocument}
-                                onUndo={isYjsMode ? () => yjsEditorRef.current?.undo() : undo}
-                                onRedo={isYjsMode ? () => yjsEditorRef.current?.redo() : redo}
-                                canUndo={isYjsMode ? yjsToolbarState.canUndo : canUndo}
-                                canRedo={isYjsMode ? yjsToolbarState.canRedo : canRedo}
-                                onOpenNoteFontPicker={() => setIsFontModalVisible(true)}
-                                currentFontFamily={isYjsMode ? (yjsToolbarState.fontFamily || fontFamily) : fontFamily}
-                                onSelectFont={(fontId) => {
-                                    setFontFamily(fontId);
-                                    if (isYjsMode) {
-                                        const opt = getFontOption(fontId);
-                                        yjsEditorRef.current?.setFont(opt.fontName);
-                                    }
+                                <TouchableOpacity
+                                    activeOpacity={0.8}
+                                    onPress={() => setIsPagesModalVisible(true)}
+                                    style={[
+                                        styles.pageIndicatorPill,
+                                        {
+                                            backgroundColor: isDark ? (isAmoled ? 'rgba(18, 18, 18, 0.94)' : 'rgba(28, 31, 38, 0.94)') : 'rgba(255, 255, 255, 0.94)',
+                                            borderColor: colors.borderSubtle,
+                                        },
+                                    ]}
+                                >
+                                    <Layers size={13} color={accent.primary as any} />
+                                    <Text style={[styles.pageIndicatorText, { color: colors.textPrimary }]}>
+                                        {t('notes.page_indicator', {
+                                            current: currentPageIndex + 1,
+                                            total: pages.length,
+                                            defaultValue: `Pág. ${currentPageIndex + 1} / ${pages.length}`,
+                                        })}
+                                    </Text>
+                                </TouchableOpacity>
+
+                                {pages.length > 1 && (
+                                    <TouchableOpacity
+                                        activeOpacity={0.7}
+                                        onPress={() => setCurrentPageIndex(p => Math.min(pages.length - 1, p + 1))}
+                                        disabled={currentPageIndex === pages.length - 1}
+                                        style={[
+                                            styles.pageNavBtn,
+                                            {
+                                                backgroundColor: isDark ? (isAmoled ? 'rgba(18, 18, 18, 0.94)' : 'rgba(28, 31, 38, 0.94)') : 'rgba(255, 255, 255, 0.94)',
+                                                borderColor: colors.borderSubtle,
+                                                opacity: currentPageIndex === pages.length - 1 ? 0.35 : 1,
+                                            },
+                                        ]}
+                                    >
+                                        <ChevronRight size={16} color={colors.textPrimary} />
+                                    </TouchableOpacity>
+                                )}
+
+                                {isEditMode && effectiveCanEdit && (
+                                    <Animated.View
+                                        style={{
+                                            opacity: editModeAnim,
+                                            transform: [
+                                                {
+                                                    scale: editModeAnim.interpolate({
+                                                        inputRange: [0, 1],
+                                                        outputRange: [0.5, 1],
+                                                    }),
+                                                },
+                                            ],
+                                        }}
+                                    >
+                                        <TouchableOpacity
+                                            activeOpacity={0.8}
+                                            onPress={handleAddPage}
+                                            style={[
+                                                styles.pageAddPill,
+                                                {
+                                                    backgroundColor: accent.primary,
+                                                },
+                                            ]}
+                                        >
+                                            <Plus size={15} color={colors.textInverse} strokeWidth={3} />
+                                        </TouchableOpacity>
+                                    </Animated.View>
+                                )}
+                            </View>
+                        )}
+
+                        {/* Toolbar anclada encima del teclado en modo edición */}
+                        {isEditMode && effectiveCanEdit && (
+                            <Animated.View
+                                style={{
+                                    marginBottom: lift,
+                                    zIndex: 500,
+                                    opacity: editModeAnim,
+                                    transform: [
+                                        {
+                                            translateY: editModeAnim.interpolate({
+                                                inputRange: [0, 1],
+                                                outputRange: [24, 0],
+                                            }),
+                                        },
+                                    ],
                                 }}
-                                onApplyFontToSelection={handleApplyFontToSelection}
-                            />
-                        </Animated.View>
-                    )}
+                            >
+                                <RichTextToolbar
+                                    editorRef={isYjsMode ? yjsEditorRef : activeEditorRef}
+                                    isNotesFocused={isNotesFocused}
+                                    isDark={isDark}
+                                    isAmoled={isAmoled}
+                                    onPressCamera={() => handleInsertImage(true)}
+                                    onPressGallery={() => handleInsertImage(false)}
+                                    onPressDocument={pickDocument}
+                                    onUndo={isYjsMode ? () => yjsEditorRef.current?.undo() : undo}
+                                    onRedo={isYjsMode ? () => yjsEditorRef.current?.redo() : redo}
+                                    canUndo={isYjsMode ? yjsToolbarState.canUndo : canUndo}
+                                    canRedo={isYjsMode ? yjsToolbarState.canRedo : canRedo}
+                                    onOpenNoteFontPicker={() => setIsFontModalVisible(true)}
+                                    currentFontFamily={isYjsMode ? (yjsToolbarState.fontFamily || fontFamily) : fontFamily}
+                                    onSelectFont={(fontId) => {
+                                        setFontFamily(fontId);
+                                        if (isYjsMode) {
+                                            const opt = getFontOption(fontId);
+                                            yjsEditorRef.current?.setFont(opt.fontName);
+                                        }
+                                    }}
+                                    onApplyFontToSelection={handleApplyFontToSelection}
+                                />
+                            </Animated.View>
+                        )}
 
-                    <ImageCropperModal
-                        isVisible={isCropperVisible}
-                        imageUri={cropperUri}
-                        isDark={isDark}
-                        onClose={() => {
-                            setIsCropperVisible(false);
-                            setCropperUri(null);
-                            setIsEditingExistingImage(false);
-                        }}
-                        onEditingComplete={async (result) => {
-                            setIsCropperVisible(false);
-                            setCropperUri(null);
-                            if (result?.uri) {
-                                if (isYjsMode) {
-                                    let finalUrl: string | null = null;
-                                    const netState = await NetInfo.fetch();
-                                    const isOnline = Boolean(netState.isConnected && netState.isInternetReachable !== false);
+                        <ImageCropperModal
+                            isVisible={isCropperVisible}
+                            imageUri={cropperUri}
+                            isDark={isDark}
+                            onClose={() => {
+                                setIsCropperVisible(false);
+                                setCropperUri(null);
+                                setIsEditingExistingImage(false);
+                            }}
+                            onEditingComplete={async (result) => {
+                                setIsCropperVisible(false);
+                                setCropperUri(null);
+                                if (result?.uri) {
+                                    if (isYjsMode) {
+                                        let finalUrl: string | null = null;
+                                        const netState = await NetInfo.fetch();
+                                        const isOnline = Boolean(netState.isConnected && netState.isInternetReachable !== false);
 
-                                    if (isOnline) {
-                                        try {
-                                            const userId = currentUserId || useStore.getState().session?.user?.id || 'anonymous';
-                                            const fileName = `img_${Date.now()}.jpg`;
-                                            const remotePath = await StorageService.uploadFile(userId, result.uri, fileName);
-                                            if (remotePath) {
-                                                const { data: publicUrlData } = supabase.storage
-                                                    .from('attachments')
-                                                    .getPublicUrl(remotePath);
-                                                if (publicUrlData?.publicUrl) {
-                                                    finalUrl = publicUrlData.publicUrl;
+                                        if (isOnline) {
+                                            try {
+                                                const userId = currentUserId || useStore.getState().session?.user?.id || 'anonymous';
+                                                const fileName = `img_${Date.now()}.jpg`;
+                                                const remotePath = await StorageService.uploadFile(userId, result.uri, fileName);
+                                                if (remotePath) {
+                                                    const { data: publicUrlData } = supabase.storage
+                                                        .from('attachments')
+                                                        .getPublicUrl(remotePath);
+                                                    if (publicUrlData?.publicUrl) {
+                                                        finalUrl = publicUrlData.publicUrl;
+                                                    }
                                                 }
+                                            } catch (err) {
+                                                console.warn('[Yjs Image Upload] Error subiendo imagen directa a Supabase:', err);
                                             }
-                                        } catch (err) {
-                                            console.warn('[Yjs Image Upload] Error subiendo imagen directa a Supabase:', err);
                                         }
-                                    }
 
-                                    if (finalUrl) {
-                                        yjsEditorRef.current?.insertImage(finalUrl);
-                                    } else {
-                                        // Modo Offline o fallo de red: persistir localmente y encolar
-                                        try {
-                                            const dir = `${FileSystem.documentDirectory}images/`;
-                                            const dirInfo = await FileSystem.getInfoAsync(dir);
-                                            if (!dirInfo.exists) {
-                                                await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
+                                        if (finalUrl) {
+                                            yjsEditorRef.current?.insertImage(finalUrl);
+                                        } else {
+                                            // Modo Offline o fallo de red: persistir localmente y encolar
+                                            try {
+                                                const dir = `${FileSystem.documentDirectory}images/`;
+                                                const dirInfo = await FileSystem.getInfoAsync(dir);
+                                                if (!dirInfo.exists) {
+                                                    await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
+                                                }
+                                                const imgId = Crypto.randomUUID();
+                                                const persistentUri = `${dir}${imgId}.jpg`;
+                                                await FileSystem.copyAsync({
+                                                    from: result.uri,
+                                                    to: persistentUri,
+                                                });
+
+                                                await withDB(async (db) => {
+                                                    await db.runAsync(
+                                                        'INSERT INTO pending_image_uploads (id, note_id, local_uri, created_at_ms) VALUES (?, ?, ?, ?);',
+                                                        [imgId, id, persistentUri, Date.now()]
+                                                    );
+                                                });
+
+                                                yjsEditorRef.current?.insertImage(persistentUri);
+                                            } catch (err) {
+                                                console.error('[Yjs Image Offline] Error guardando imagen localmente:', err);
+                                                Alert.alert('Error', 'No se pudo guardar la imagen localmente.');
                                             }
-                                            const imgId = Crypto.randomUUID();
-                                            const persistentUri = `${dir}${imgId}.jpg`;
-                                            await FileSystem.copyAsync({
-                                                from: result.uri,
-                                                to: persistentUri,
-                                            });
-
-                                            await withDB(async (db) => {
-                                                await db.runAsync(
-                                                    'INSERT INTO pending_image_uploads (id, note_id, local_uri, created_at_ms) VALUES (?, ?, ?, ?);',
-                                                    [imgId, id, persistentUri, Date.now()]
-                                                );
-                                            });
-
-                                            yjsEditorRef.current?.insertImage(persistentUri);
-                                        } catch (err) {
-                                            console.error('[Yjs Image Offline] Error guardando imagen localmente:', err);
-                                            Alert.alert('Error', 'No se pudo guardar la imagen localmente.');
                                         }
-                                    }
-                                } else {
-                                    const base64 = await processCroppedImage(result.uri);
-                                    const finalUri = base64 || result.uri;
-                                    if (isEditingExistingImage) {
-                                        const injectJs = `if (typeof window.__veyraReplaceEditingImage === 'function') { window.__veyraReplaceEditingImage(${JSON.stringify(finalUri)}); } true;`;
-                                        activeEditorRef.current?.injectJavascript?.(injectJs);
-                                        activeEditorRef.current?.injectJavaScript?.(injectJs);
-                                        activeEditorRef.current?.webviewBridge?.injectJavaScript?.(injectJs);
                                     } else {
-                                        activeEditorRef.current?.insertImage(finalUri, 'width: 75%; border-radius: 10px; display: block; margin: 12px auto;');
-                                        setTimeout(() => {
-                                            activeEditorRef.current?.insertHTML('<br/>');
-                                            activeEditorRef.current?.focusContentEditor();
-                                        }, 300);
+                                        const base64 = await processCroppedImage(result.uri);
+                                        const finalUri = base64 || result.uri;
+                                        if (isEditingExistingImage) {
+                                            const injectJs = `if (typeof window.__veyraReplaceEditingImage === 'function') { window.__veyraReplaceEditingImage(${JSON.stringify(finalUri)}); } true;`;
+                                            activeEditorRef.current?.injectJavascript?.(injectJs);
+                                            activeEditorRef.current?.injectJavaScript?.(injectJs);
+                                            activeEditorRef.current?.webviewBridge?.injectJavaScript?.(injectJs);
+                                        } else {
+                                            activeEditorRef.current?.insertImage(finalUri, 'width: 75%; border-radius: 10px; display: block; margin: 12px auto;');
+                                            setTimeout(() => {
+                                                activeEditorRef.current?.insertHTML('<br/>');
+                                                activeEditorRef.current?.focusContentEditor();
+                                            }, 300);
+                                        }
                                     }
                                 }
+                                setIsEditingExistingImage(false);
+                            }}
+                        />
+
+                        <PremiumAlert
+                            isVisible={alertVisible}
+                            onClose={() => setAlertVisible(false)}
+                            title={alertConfig.title}
+                            description={alertConfig.description}
+                            isDark={isDark}
+                        />
+
+                        {/* Modal para mover/asignar carpeta a la nota */}
+                        <MoveToFolderModal
+                            visible={isMoveModalVisible}
+                            onClose={() => setIsMoveModalVisible(false)}
+                            folders={folders}
+                            currentFolderId={folderId}
+                            noteCount={1}
+                            onSelectFolder={async (newFolderId) => {
+                                setFolderId(newFolderId);
+                            }}
+                            onCreateNewFolder={(parentId) => {
+                                setCreateFolderParentId(parentId || null);
+                                setIsCreateFolderModalVisible(true);
+                            }}
+                        />
+
+                        {/* Modal para crear nueva carpeta directamente desde la nota */}
+                        <FolderModal
+                            visible={isCreateFolderModalVisible}
+                            onClose={() => {
+                                setIsCreateFolderModalVisible(false);
+                                setCreateFolderParentId(null);
+                            }}
+                            parentFolder={createFolderParentId ? folders.find(f => f.id === createFolderParentId) : null}
+                            onSave={async (name, icon, color, isPinned, parentId) => {
+                                const newF = await createFolder(name, icon, color, isPinned, parentId);
+                                if (newF) {
+                                    setFolderId(newF.id);
+                                }
+                            }}
+                        />
+                    </View>
+
+                    {/* Modal de Gestión y Navegación de Hojas */}
+                    <PagesOverviewModal
+                        visible={isPagesModalVisible}
+                        onClose={() => setIsPagesModalVisible(false)}
+                        pages={pages}
+                        currentPageIndex={currentPageIndex}
+                        onSelectPage={handleSelectPage}
+                        onAddPage={effectiveCanEdit ? handleAddPage : () => { }}
+                        onDeletePage={effectiveCanEdit ? handleDeletePage : () => { }}
+                        onDuplicatePage={effectiveCanEdit ? duplicatePage : undefined}
+                        onInsertPageAfter={effectiveCanEdit ? insertPageAfter : undefined}
+                        onRenamePage={isYjsMode ? undefined : (effectiveCanEdit ? renamePage : undefined)}
+                        onMovePage={effectiveCanEdit ? movePage : undefined}
+                        onReorderPages={effectiveCanEdit ? handleReorderPages : undefined}
+                        layout={scrollLayout}
+                        onChangeLayout={setScrollLayout}
+                    />
+
+                    {/* Menú Contextual de Opciones (One UI 3 Puntos) */}
+                    <NoteOptionsMenu
+                        visible={isOptionsMenuVisible}
+                        onClose={() => setIsOptionsMenuVisible(false)}
+                        onExportPdf={handleExportPdf}
+                        isExportingPdf={isExportingPdf}
+                        onOpenPagesManager={() => setIsPagesModalVisible(true)}
+                        onOpenFontPicker={() => setIsFontModalVisible(true)}
+                        pageCount={pages.length}
+                        isPinned={isPinned}
+                        onTogglePin={() => setIsPinned(!isPinned)}
+                        onMoveFolder={() => setIsMoveModalVisible(true)}
+                        folderName={currentFolder?.name}
+                        onDelete={isEditing ? handleDelete : undefined}
+                        onShare={!isCreating && id ? () => {
+                            setIsOptionsMenuVisible(false);
+                            setIsShareModalVisible(true);
+                        } : undefined}
+                        onViewHistory={!isCreating && id && isYjsMode ? () => {
+                            setIsOptionsMenuVisible(false);
+                            flushYjsActivity();
+                            router.push(`/notes/${id}/history`);
+                        } : undefined}
+                        isEditMode={isEditMode}
+                        onToggleEditMode={canEdit ? () => {
+                            if (isEditMode) {
+                                handleExitEditMode();
+                            } else {
+                                handleEnterEditMode();
                             }
-                            setIsEditingExistingImage(false);
-                        }}
+                        } : undefined}
+                        onActivatePilotYjs={
+                            (!isCreating && id && currentNote?.sync_mode !== 'yjs' && isOwner)
+                                ? handlePromptActivatePilot
+                                : undefined
+                        }
                     />
 
-                    <PremiumAlert
-                        isVisible={alertVisible}
-                        onClose={() => setAlertVisible(false)}
-                        title={alertConfig.title}
-                        description={alertConfig.description}
-                        isDark={isDark}
+                    {/* Modal de Tipografía General de la Nota */}
+                    <NoteFontModal
+                        visible={isFontModalVisible}
+                        onClose={() => setIsFontModalVisible(false)}
+                        selectedFont={fontFamily}
+                        onSelectFont={setFontFamily}
+                        onApplyFontToSelection={handleApplyFontToSelection}
                     />
 
-                    {/* Modal para mover/asignar carpeta a la nota */}
-                    <MoveToFolderModal
-                        visible={isMoveModalVisible}
-                        onClose={() => setIsMoveModalVisible(false)}
-                        folders={folders}
-                        currentFolderId={folderId}
-                        noteCount={1}
-                        onSelectFolder={async (newFolderId) => {
-                            setFolderId(newFolderId);
-                        }}
-                        onCreateNewFolder={(parentId) => {
-                            setCreateFolderParentId(parentId || null);
-                            setIsCreateFolderModalVisible(true);
-                        }}
+                    {/* Modal de Colaboración y Recursos Compartidos */}
+                    {!isCreating && id && (
+                        <ShareModal
+                            visible={isShareModalVisible}
+                            onClose={() => setIsShareModalVisible(false)}
+                            targetType="note"
+                            targetId={id}
+                            targetTitle={title || t('notes.untitled', { defaultValue: 'Nota sin título' })}
+                            isOwner={isOwner}
+                        />
+                    )}
+
+                    <ImageViewing
+                        images={imageAttachments.map(img => ({ uri: img.uri }))}
+                        imageIndex={galleryIndex}
+                        visible={galleryVisible}
+                        onRequestClose={() => setGalleryVisible(false)}
+                        swipeToCloseEnabled={true}
+                        doubleTapToZoomEnabled={true}
                     />
 
-                    {/* Modal para crear nueva carpeta directamente desde la nota */}
-                    <FolderModal
-                        visible={isCreateFolderModalVisible}
-                        onClose={() => {
-                            setIsCreateFolderModalVisible(false);
-                            setCreateFolderParentId(null);
-                        }}
-                        parentFolder={createFolderParentId ? folders.find(f => f.id === createFolderParentId) : null}
-                        onSave={async (name, icon, color, isPinned, parentId) => {
-                            const newF = await createFolder(name, icon, color, isPinned, parentId);
-                            if (newF) {
-                                setFolderId(newF.id);
-                            }
-                        }}
+
+
+                    {/* Visor a Pantalla Completa para imagen clickeada en editor */}
+                    <ImageViewing
+                        images={selectedImageUrl ? [{ uri: selectedImageUrl }] : []}
+                        imageIndex={0}
+                        visible={isImageViewerVisible}
+                        onRequestClose={() => setIsImageViewerVisible(false)}
+                        swipeToCloseEnabled={true}
+                        doubleTapToZoomEnabled={true}
                     />
                 </View>
-
-                {/* Modal de Gestión y Navegación de Hojas */}
-                <PagesOverviewModal
-                    visible={isPagesModalVisible}
-                    onClose={() => setIsPagesModalVisible(false)}
-                    pages={pages}
-                    currentPageIndex={currentPageIndex}
-                    onSelectPage={handleSelectPage}
-                    onAddPage={effectiveCanEdit ? handleAddPage : () => {}}
-                    onDeletePage={effectiveCanEdit ? handleDeletePage : () => {}}
-                    onDuplicatePage={effectiveCanEdit ? duplicatePage : undefined}
-                    onInsertPageAfter={effectiveCanEdit ? insertPageAfter : undefined}
-                    onRenamePage={isYjsMode ? undefined : (effectiveCanEdit ? renamePage : undefined)}
-                    onMovePage={effectiveCanEdit ? movePage : undefined}
-                    onReorderPages={effectiveCanEdit ? handleReorderPages : undefined}
-                    layout={scrollLayout}
-                    onChangeLayout={setScrollLayout}
-                />
-
-                {/* Menú Contextual de Opciones (One UI 3 Puntos) */}
-                <NoteOptionsMenu
-                    visible={isOptionsMenuVisible}
-                    onClose={() => setIsOptionsMenuVisible(false)}
-                    onExportPdf={handleExportPdf}
-                    isExportingPdf={isExportingPdf}
-                    onOpenPagesManager={() => setIsPagesModalVisible(true)}
-                    onOpenFontPicker={() => setIsFontModalVisible(true)}
-                    pageCount={pages.length}
-                    isPinned={isPinned}
-                    onTogglePin={() => setIsPinned(!isPinned)}
-                    onMoveFolder={() => setIsMoveModalVisible(true)}
-                    folderName={currentFolder?.name}
-                    onDelete={isEditing ? handleDelete : undefined}
-                    onShare={!isCreating && id ? () => {
-                        setIsOptionsMenuVisible(false);
-                        setIsShareModalVisible(true);
-                    } : undefined}
-                    onViewHistory={!isCreating && id && isYjsMode ? () => {
-                        setIsOptionsMenuVisible(false);
-                        flushYjsActivity();
-                        router.push(`/notes/${id}/history`);
-                    } : undefined}
-                    isEditMode={isEditMode}
-                    onToggleEditMode={canEdit ? () => {
-                        if (isEditMode) {
-                            handleExitEditMode();
-                        } else {
-                            handleEnterEditMode();
-                        }
-                    } : undefined}
-                    onActivatePilotYjs={
-                        (!isCreating && id && currentNote?.sync_mode !== 'yjs' && isOwner)
-                            ? handlePromptActivatePilot
-                            : undefined
-                    }
-                />
-
-                {/* Modal de Tipografía General de la Nota */}
-                <NoteFontModal
-                    visible={isFontModalVisible}
-                    onClose={() => setIsFontModalVisible(false)}
-                    selectedFont={fontFamily}
-                    onSelectFont={setFontFamily}
-                    onApplyFontToSelection={handleApplyFontToSelection}
-                />
-
-                {/* Modal de Colaboración y Recursos Compartidos */}
-                {!isCreating && id && (
-                    <ShareModal
-                        visible={isShareModalVisible}
-                        onClose={() => setIsShareModalVisible(false)}
-                        targetType="note"
-                        targetId={id}
-                        targetTitle={title || t('notes.untitled', { defaultValue: 'Nota sin título' })}
-                        isOwner={isOwner}
-                    />
-                )}
-
-                <ImageViewing
-                    images={imageAttachments.map(img => ({ uri: img.uri }))}
-                    imageIndex={galleryIndex}
-                    visible={galleryVisible}
-                    onRequestClose={() => setGalleryVisible(false)}
-                    swipeToCloseEnabled={true}
-                    doubleTapToZoomEnabled={true}
-                />
-
-
-
-                {/* Visor a Pantalla Completa para imagen clickeada en editor */}
-                <ImageViewing
-                    images={selectedImageUrl ? [{ uri: selectedImageUrl }] : []}
-                    imageIndex={0}
-                    visible={isImageViewerVisible}
-                    onRequestClose={() => setIsImageViewerVisible(false)}
-                    swipeToCloseEnabled={true}
-                    doubleTapToZoomEnabled={true}
-                />
-            </View>
-        </SafeAreaView>
-    </Reanimated.View>
+            </SafeAreaView>
+        </Reanimated.View>
     );
 }
 
@@ -2865,13 +3187,16 @@ const styles = StyleSheet.create({
     },
     floatingSelectionMenu: {
         position: 'absolute',
+        top: 8,
+        alignSelf: 'center',
         flexDirection: 'row',
         alignItems: 'center',
-        paddingHorizontal: 4,
+        justifyContent: 'center',
+        paddingHorizontal: 6,
         paddingVertical: 4,
-        borderRadius: 22,
+        borderRadius: 26,
         borderWidth: StyleSheet.hairlineWidth,
-        zIndex: 50,
+        zIndex: 120,
         ...Platform.select({
             ios: {
                 shadowColor: '#000',
@@ -2880,21 +3205,21 @@ const styles = StyleSheet.create({
                 shadowRadius: 8,
             },
             android: {
-                elevation: 10,
+                elevation: 12,
             },
         }),
     },
     floatingMenuBtn: {
-        width: 36,
-        height: 36,
-        borderRadius: 18,
+        width: 44,
+        height: 44,
+        borderRadius: 22,
         alignItems: 'center',
         justifyContent: 'center',
-        marginHorizontal: 2,
+        marginHorizontal: 1,
     },
     floatingMenuDivider: {
         width: 1,
-        height: 18,
-        marginHorizontal: 2,
+        height: 22,
+        marginHorizontal: 3,
     },
 });

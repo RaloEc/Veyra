@@ -14,6 +14,7 @@ interface RichTextEditorSectionProps {
     onBlur?: () => void;
     flat?: boolean;
     isDark?: boolean;
+    isAmoled?: boolean;
     readOnly?: boolean;
     fontFamily?: string;
     onCropImage?: (imageUri: string) => void;
@@ -44,6 +45,8 @@ export function RichTextEditorSection({
     onFocus,
     onBlur,
     flat,
+    isDark,
+    isAmoled,
     readOnly = false,
     fontFamily = 'sans',
     onCropImage,
@@ -56,7 +59,9 @@ export function RichTextEditorSection({
     onCursorRemove,
 }: RichTextEditorSectionProps) {
     const { t } = useTranslation();
-    const { colors, typography, radii, isDark, accent } = useVeyraTheme();
+    const { colors, typography, radii, isDark: themeDark, isAmoled: themeAmoled, accent } = useVeyraTheme();
+    const effectiveDark = isDark !== undefined ? isDark : themeDark;
+    const effectiveAmoled = isAmoled !== undefined ? isAmoled : themeAmoled;
     const screenHeight = Dimensions.get('screen').height;
     const calculatedMinHeight = flat ? Math.max(560, screenHeight - 140) : 68;
     const accentColor = accent.primary || '#8B5CF6';
@@ -72,7 +77,8 @@ export function RichTextEditorSection({
         const script = `
             (function() {
                 const ACCENT_COLOR = '${accentColor}';
-                const IS_DARK = ${isDark ? 'true' : 'false'};
+                const IS_DARK = ${effectiveDark ? 'true' : 'false'};
+                const IS_AMOLED = ${effectiveAmoled ? 'true' : 'false'};
                 const IS_READONLY = ${readOnly ? 'true' : 'false'};
                 const SCRIPT_VERSION = 'v42.0';
                 const SCREEN_HEIGHT = window.innerHeight || ${Math.round(screenHeight)};
@@ -1354,7 +1360,7 @@ export function RichTextEditorSection({
         } catch (e) {
             console.warn('Error injecting script:', e);
         }
-    }, [accentColor, isDark, readOnly]);
+    }, [accentColor, effectiveDark, effectiveAmoled, readOnly]);
 
     const handleMessage = useCallback((message: any) => {
         try {
@@ -2851,7 +2857,7 @@ export function RichTextEditorSection({
                         injectCollabHandlerScript();
                     }}
                     editorStyle={{
-                        backgroundColor: flat ? 'transparent' : colors.surface,
+                        backgroundColor: effectiveAmoled ? '#000000' : (flat ? 'transparent' : colors.surface),
                         color: colors.textPrimary,
                         placeholderColor: colors.textMuted,
                         contentCSSText: `
@@ -2881,10 +2887,12 @@ export function RichTextEditorSection({
                                 box-sizing: border-box !important;
                                 word-break: break-word !important;
                                 overflow-wrap: break-word !important;
+                                background-color: ${effectiveAmoled ? '#000000 !important' : (flat ? 'transparent' : (effectiveDark ? '#121212 !important' : '#FFFFFF !important'))};
                             }
                             html, body {
                                 min-height: 100% !important;
                                 height: 100% !important;
+                                background-color: ${effectiveAmoled ? '#000000 !important' : (flat ? 'transparent' : (effectiveDark ? '#121212 !important' : '#FFFFFF !important'))};
                                 cursor: ${readOnly ? 'default' : 'text'} !important;
                                 display: flex;
                                 flex-direction: column;

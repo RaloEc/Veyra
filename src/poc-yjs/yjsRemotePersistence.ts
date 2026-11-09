@@ -168,6 +168,16 @@ export class YjsRemotePersistence {
                 return { success: false, error: 'updateBase64 no puede ser vacío' };
             }
 
+            // BLINDAJE DE MEMORIA Y ALMACENAMIENTO: Máximo 2 MB por actualización
+            const MAX_UPDATE_BYTES = 2 * 1024 * 1024;
+            if (updateBase64.length > MAX_UPDATE_BYTES) {
+                console.warn(`[PoC Yjs RPC] Delta excede el límite de seguridad de 2 MB (tamaño: ${(updateBase64.length / 1024 / 1024).toFixed(2)} MB)`);
+                return {
+                    success: false,
+                    error: 'El contenido a guardar excede el límite de seguridad permitido (máx. 2 MB por nota).'
+                };
+            }
+
             const updateHash = await computeUpdateHash(updateBase64);
 
             console.log(`[PoC Yjs RPC] Invocando append_note_yjs_update (nota=${noteId.trim()}, hash=${updateHash.substring(0, 8)}...)`);

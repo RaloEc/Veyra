@@ -34,6 +34,12 @@ export function derivePreviewText(doc: Y.Doc | null | undefined): string {
             // Elemento estructurado (Y.XmlElement)
             if (node instanceof Y.XmlElement) {
                 const name = (node.nodeName || '').toLowerCase();
+
+                if (name === 'youtube') {
+                    // El nodo de video no aporta texto sustancial al snippet; se ignora limpiamente
+                    return;
+                }
+
                 // Nodos que delimitan párrafos/bloques de contenido en Tiptap / ProseMirror
                 const isBlock = 
                     name === 'paragraph' || 

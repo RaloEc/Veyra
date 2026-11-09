@@ -139,6 +139,17 @@ class RealtimeServiceManager {
                     }
                 }
             )
+            // ─── 5. AJUSTES EN VIVO (THEME_CHANGED) ────────────────────
+            .on(
+                'broadcast',
+                { event: 'THEME_CHANGED' },
+                ({ payload }) => {
+                    if (payload?.accentTheme) {
+                        console.log(`[RealtimeService] 🎨 Tema de acento recibido por Realtime: ${payload.accentTheme}`);
+                        useStore.getState().setAccentTheme(payload.accentTheme, true);
+                    }
+                }
+            )
             .subscribe((status) => {
                 console.log(`[RealtimeService] Estado del canal colaborativo: ${status}`);
                 if (status === 'SUBSCRIBED') {
@@ -156,6 +167,20 @@ class RealtimeServiceManager {
                     }, delay);
                 }
             });
+    }
+
+    /**
+     * Emite un cambio de color de acento inmediatamente por el WebSocket abierto.
+     */
+    broadcastTheme(accentTheme: string) {
+        if (!this.channel) return;
+        this.channel.send({
+            type: 'broadcast',
+            event: 'THEME_CHANGED',
+            payload: { accentTheme },
+        }).catch((err) => {
+            console.warn('[RealtimeService] Error enviando broadcast de tema:', err);
+        });
     }
 
     /**

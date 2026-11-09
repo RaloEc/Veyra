@@ -48,6 +48,9 @@ export function getTiptapHtml(options: { isDark?: boolean; isAmoled?: boolean; a
             --text-secondary: \${isDark ? '#A1A1AA' : '#71717A'};
             --selection: \${isDark ? 'rgba(139, 92, 246, 0.4)' : 'rgba(139, 92, 246, 0.3)'};
             --accent-color: \${accentColor};
+            --accent-primary: var(--accent-color, \${accentColor});
+            --text-main: var(--text-color);
+            --text-muted: var(--text-secondary);
         }
         html.light, body.light {
             --bg-color: #FFFFFF;
@@ -72,7 +75,8 @@ export function getTiptapHtml(options: { isDark?: boolean; isAmoled?: boolean; a
             --selection: rgba(139, 92, 246, 0.4);
         }
         html.amoled, body.amoled {
-            --bg-color: #000000;
+            --bg-color: #000000 !important;
+            background-color: #000000 !important;
             --text-color: #F4F4F5;
             --text-bold: #FFFFFF;
             --text-italic: #F4F4F5;
@@ -84,10 +88,31 @@ export function getTiptapHtml(options: { isDark?: boolean; isAmoled?: boolean; a
         }
         * {
             box-sizing: border-box;
-            -webkit-tap-highlight-color: transparent;
+            -webkit-tap-highlight-color: transparent !important;
             -webkit-touch-callout: none !important;
             -webkit-user-select: text; /* Permitir seleccionar texto */
             user-select: text;
+            outline: none !important;
+        }
+        *:focus,
+        *:focus-visible,
+        *:active {
+            outline: none !important;
+            box-shadow: none !important;
+        }
+        html, body, #editor-container, #editor {
+            outline: none !important;
+            border: none !important;
+            box-shadow: none !important;
+        }
+        .ProseMirror,
+        .ProseMirror:focus,
+        .ProseMirror:focus-visible,
+        .ProseMirror-focused,
+        .ProseMirror-selectednode {
+            outline: none !important;
+            border: none !important;
+            box-shadow: none !important;
         }
         html {
             font-size: 16px !important;
@@ -290,7 +315,7 @@ export function getTiptapHtml(options: { isDark?: boolean; isAmoled?: boolean; a
             display: block;
             min-height: 50px;
             background-color: rgba(0, 0, 0, 0.1);
-            transition: width 0.2s ease, margin 0.2s ease;
+            transition: none !important;
             cursor: pointer;
         }
 
@@ -338,6 +363,192 @@ export function getTiptapHtml(options: { isDark?: boolean; isAmoled?: boolean; a
         .ProseMirror [style*="text-align:left"] img {
             margin-left: 0 !important;
             margin-right: auto !important;
+        }
+
+        /* ─── Inline Image Node Canonical Classes (Web & Mobile Shared Specification) ─── */
+        .veyra-image-node {
+            display: block !important;
+            width: 100% !important;
+            margin: 12px 0;
+            position: relative;
+            clear: both;
+            box-sizing: border-box;
+        }
+
+        .veyra-image-wrapper {
+            position: relative;
+            max-width: 100%;
+            min-width: 0;
+            display: block;
+            box-sizing: border-box;
+            border-radius: 8px;
+            margin-right: auto;
+        }
+        .veyra-figcaption-container {
+            position: relative;
+            display: block;
+            box-sizing: border-box;
+            max-width: 100%;
+            margin-right: auto;
+        }
+        .veyra-image-wrapper.is-loading {
+            min-height: 140px;
+            background: linear-gradient(90deg, rgba(128,128,128,0.08) 25%, rgba(128,128,128,0.18) 50%, rgba(128,128,128,0.08) 75%);
+            background-size: 200% 100%;
+            animation: veyraShimmer 1.4s infinite ease-in-out;
+        }
+        @keyframes veyraShimmer {
+            0% { background-position: 200% 0; }
+            100% { background-position: -200% 0; }
+        }
+
+        .veyra-image-wrapper img {
+            width: 100% !important;
+            height: auto !important;
+            display: block !important;
+            max-width: 100% !important;
+            object-fit: contain !important;
+            border-radius: 8px;
+            margin: 0 !important;
+            pointer-events: auto;
+        }
+
+        /* Transición suave y limpia al cambiar presets de tamaño y alinear (Modo NO arrastrando) */
+        .veyra-image-node:not(.is-resizing) .veyra-image-wrapper,
+        .veyra-image-node:not(.is-resizing) .veyra-figcaption-container {
+            transition: width 220ms cubic-bezier(0.16, 1, 0.3, 1),
+                        margin-left 220ms cubic-bezier(0.16, 1, 0.3, 1) !important;
+            will-change: width, margin-left;
+        }
+
+        /* En arrastre en vivo: cero transición para 60fps instantáneos */
+        .veyra-image-node.is-resizing,
+        .veyra-image-node.is-resizing *,
+        .veyra-image-node.is-resizing .veyra-image-wrapper,
+        .veyra-image-node.is-resizing img {
+            transition: none !important;
+            touch-action: none !important;
+            user-select: none;
+        }
+        .veyra-image-node.is-resizing .veyra-figcaption-container {
+            display: none !important;
+        }
+        .veyra-image-node.is-selected .veyra-image-wrapper,
+        .veyra-image-node[data-selected="true"] .veyra-image-wrapper {
+            outline: 1px solid var(--accent-primary, #8B5CF6);
+            outline-offset: 1px;
+            border-radius: 8px;
+        }
+        .resize-handle {
+            display: none;
+            position: absolute;
+            width: 12px;
+            height: 12px;
+            background: #ffffff;
+            border: 2px solid var(--accent-primary, #8B5CF6);
+            border-radius: 50%;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+            z-index: 20;
+            pointer-events: auto;
+            touch-action: none;
+            transition: transform 0.1s ease;
+            transform-origin: center center;
+        }
+        .resize-handle::after {
+            content: '';
+            position: absolute;
+            top: -10px;
+            left: -10px;
+            right: -10px;
+            bottom: -10px;
+        }
+        .veyra-resize-pill {
+            display: none;
+            position: absolute;
+            top: 8px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0, 0, 0, 0.8);
+            color: #ffffff;
+            font-size: 11px;
+            font-weight: 600;
+            padding: 2px 8px;
+            border-radius: 9999px;
+            pointer-events: none;
+            z-index: 30;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+            white-space: nowrap;
+        }
+        .veyra-image-node.is-resizing .veyra-resize-pill {
+            display: block;
+        }
+        .veyra-image-node[data-selected="true"] .resize-handle,
+        .veyra-image-node.is-selected .resize-handle {
+            display: block;
+        }
+        /* Ocultar handles de redimensión, píldora y contornos en modo lectura */
+        .is-readonly .resize-handle,
+        .ProseMirror[contenteditable="false"] .resize-handle,
+        #editor[contenteditable="false"] .resize-handle,
+        .veyra-image-node.is-readonly .resize-handle,
+        .veyra-image-node[data-editable="false"] .resize-handle {
+            display: none !important;
+        }
+        .is-readonly .veyra-resize-pill,
+        .ProseMirror[contenteditable="false"] .veyra-resize-pill,
+        #editor[contenteditable="false"] .veyra-resize-pill,
+        .veyra-image-node.is-readonly .veyra-resize-pill,
+        .veyra-image-node[data-editable="false"] .veyra-resize-pill {
+            display: none !important;
+        }
+        .is-readonly .veyra-image-node .veyra-image-wrapper,
+        .is-readonly .veyra-image-node.is-selected .veyra-image-wrapper,
+        .is-readonly .veyra-image-node[data-selected="true"] .veyra-image-wrapper,
+        .ProseMirror[contenteditable="false"] .veyra-image-node .veyra-image-wrapper,
+        .ProseMirror[contenteditable="false"] .veyra-image-node.is-selected .veyra-image-wrapper,
+        .ProseMirror[contenteditable="false"] .veyra-image-node[data-selected="true"] .veyra-image-wrapper,
+        #editor[contenteditable="false"] .veyra-image-node .veyra-image-wrapper,
+        .veyra-image-node.is-readonly .veyra-image-wrapper,
+        .veyra-image-node[data-editable="false"] .veyra-image-wrapper {
+            outline: none !important;
+        }
+        .resize-handle:active {
+            transform: scale(1.15);
+        }
+        .resize-nw { top: -6px; left: -6px; cursor: nwse-resize; }
+        .resize-ne { top: -6px; right: -6px; cursor: nesw-resize; }
+        .resize-sw { bottom: -6px; left: -6px; cursor: nesw-resize; }
+        .resize-se { bottom: -6px; right: -6px; cursor: nwse-resize; }
+        .veyra-figcaption-container {
+            display: block;
+            box-sizing: border-box;
+            max-width: 100%;
+        }
+        .veyra-figcaption-input {
+            display: block;
+            width: 100%;
+            margin-top: 6px;
+            padding: 4px 8px;
+            font-size: 0.85em;
+            text-align: center;
+            background: transparent;
+            border: none;
+            border-bottom: 1px solid var(--accent-primary, #8B5CF6);
+            color: var(--text-main, inherit);
+            outline: none;
+            font-family: inherit;
+        }
+        .veyra-figcaption-input::placeholder {
+            color: var(--text-muted, #a6a6a6);
+            opacity: 0.6;
+        }
+        .veyra-figcaption-text {
+            display: block;
+            margin-top: 6px;
+            font-size: 0.85em;
+            text-align: center;
+            color: var(--text-muted, #a6a6a6);
+            cursor: text;
         }
 
         /* ─── Herramienta de Checklist / TaskList (Estilo Premium Veyra) ─── */
@@ -426,65 +637,201 @@ export function getTiptapHtml(options: { isDark?: boolean; isAmoled?: boolean; a
             pointer-events: none;
         }
 
-        /* Estilos de Cursores Remotos Colaborativos */
-        .collaboration-cursor__caret,
-        .ProseMirror-yjs-cursor {
-            border-left: 2px solid;
-            border-right: 0 !important;
-            border-top: 0 !important;
-            border-bottom: 0 !important;
+        /* Línea vertical del cursor colaborativo */
+        .collaboration-cursor__caret {
+            position: relative;
             margin-left: -1px;
             margin-right: -1px;
-            pointer-events: none;
-            position: relative;
+            border-left: 2px solid;
+            border-right: none;
             word-break: normal;
-            display: inline;
-            line-height: normal;
+            pointer-events: none;
         }
-        .collaboration-cursor__label,
-        .ProseMirror-yjs-cursor > div {
-            border-radius: 4px;
-            color: #FFFFFF !important;
-            font-size: 11px !important;
-            font-style: normal;
-            font-weight: 600;
-            left: -2px;
-            line-height: 1.2;
-            padding: 2px 6px;
+
+        /* Etiqueta flotante con el nombre del usuario remoto */
+        .collaboration-cursor__label {
             position: absolute;
             top: -1.4em;
+            left: -1px;
+            font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            font-size: 11px;
+            font-weight: 600;
+            line-height: 1;
             user-select: none;
+            color: #FFFFFF !important;
+            padding: 2px 6px;
+            border-radius: 4px;
             white-space: nowrap;
             pointer-events: none;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.3);
-            z-index: 100;
-            display: inline-block;
-            animation: fadeIn 0.15s ease-out;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+            z-index: 9999;
+            transition: opacity 0.2s ease-in-out;
         }
-        .ProseMirror-yjs-selection,
-        .collaboration-cursor__selection {
-            opacity: 0.7;
+
+        /* Selección de texto hecha por el otro dispositivo */
+        .ProseMirror-yjs-selection {
+            opacity: 0.25;
             pointer-events: none;
         }
-        @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(3px); }
-            to { opacity: 1; transform: translateY(0); }
+
+        /* ═══════════════════════════════════════════════════════════════
+           YouTube Embedded Video Node (Tiptap Custom Node + Resize)
+           ═══════════════════════════════════════════════════════════════ */
+        .veyra-youtube-node,
+        .ProseMirror [data-youtube-video],
+        .prose [data-youtube-video] {
+            display: block !important;
+            width: 100% !important;
+            margin: 14px 0;
+            position: relative;
+            clear: both;
+            box-sizing: border-box;
         }
 
-        /* Ocultar cursores colaborativos en modo visualización */
-        .veyra-no-cursors .collaboration-cursor__caret,
-        .veyra-no-cursors .collaboration-cursor__label,
-        .veyra-no-cursors .ProseMirror-yjs-cursor {
+        .veyra-youtube-wrapper {
+            position: relative;
+            max-width: 100%;
+            min-width: 0;
+            display: block;
+            box-sizing: border-box;
+            border-radius: 8px;
+            aspect-ratio: 16 / 9;
+            background: #000;
+            overflow: hidden;
+            margin-right: auto;
+        }
+
+        /* Transición suave para presets y alineación en YouTube */
+        .veyra-youtube-node:not(.is-resizing) .veyra-youtube-wrapper {
+            transition: width 220ms cubic-bezier(0.16, 1, 0.3, 1),
+                        margin-left 220ms cubic-bezier(0.16, 1, 0.3, 1) !important;
+            will-change: width, margin-left;
+        }
+
+        .veyra-youtube-node.is-resizing,
+        .veyra-youtube-node.is-resizing * {
+            transition: none !important;
+        }
+
+        .veyra-youtube-node[data-embed="false"] .veyra-youtube-wrapper {
+            aspect-ratio: auto;
+            background: transparent;
+            border-radius: 0;
+            overflow: visible;
+        }
+
+        /* Iframe (Estado C) */
+        [data-youtube-video] iframe,
+        .veyra-youtube-wrapper iframe {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            border: 0;
+            border-radius: 8px;
+        }
+        [data-youtube-video][data-embed="false"] iframe { display: none; }
+
+        /* Thumbnail (Estado B) */
+        [data-youtube-video] .yt-thumbnail,
+        .veyra-youtube-wrapper .yt-thumbnail {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            border-radius: 8px;
+            cursor: pointer;
+        }
+
+        /* Overlay con botones (hover / selección) */
+        [data-youtube-video] .yt-overlay { opacity: 0; transition: opacity 120ms; }
+        [data-youtube-video]:hover .yt-overlay,
+        [data-youtube-video].ProseMirror-selectednode .yt-overlay { opacity: 1; }
+
+        /* Play button central (Estado B) */
+        [data-youtube-video] .yt-play,
+        .veyra-youtube-wrapper .yt-play {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            pointer-events: none;
+        }
+        [data-youtube-video] .yt-play svg,
+        .veyra-youtube-wrapper .yt-play svg {
+            width: 68px; height: 48px;
+            filter: drop-shadow(0 2px 6px rgba(0,0,0,.5));
+        }
+
+        /* Selección y Handles de Resize para YouTube */
+        .veyra-youtube-node.is-selected .veyra-youtube-wrapper,
+        .veyra-youtube-node[data-selected="true"] .veyra-youtube-wrapper {
+            outline: 1px solid var(--accent-primary, #8B5CF6);
+            outline-offset: 1px;
+            border-radius: 8px;
+        }
+        .veyra-youtube-node.is-resizing {
+            touch-action: none !important;
+            user-select: none;
+        }
+        .veyra-youtube-node[data-selected="true"] .resize-handle,
+        .veyra-youtube-node.is-selected .resize-handle {
+            display: block;
+        }
+        .veyra-youtube-node.is-resizing .veyra-resize-pill {
+            display: block;
+        }
+
+        /* Modo Lectura: Ocultar handles, píldoras y contornos de YouTube */
+        .is-readonly .veyra-youtube-node .resize-handle,
+        .ProseMirror[contenteditable="false"] .veyra-youtube-node .resize-handle,
+        .veyra-youtube-node.is-readonly .resize-handle,
+        .veyra-youtube-node[data-editable="false"] .resize-handle {
             display: none !important;
-            visibility: hidden !important;
+        }
+        .is-readonly .veyra-youtube-node .veyra-resize-pill,
+        .ProseMirror[contenteditable="false"] .veyra-youtube-node .veyra-resize-pill,
+        .veyra-youtube-node.is-readonly .veyra-resize-pill,
+        .veyra-youtube-node[data-editable="false"] .veyra-resize-pill {
+            display: none !important;
+        }
+        .is-readonly .veyra-youtube-node .veyra-youtube-wrapper,
+        .is-readonly .veyra-youtube-node.is-selected .veyra-youtube-wrapper,
+        .is-readonly .veyra-youtube-node[data-selected="true"] .veyra-youtube-wrapper,
+        .ProseMirror[contenteditable="false"] .veyra-youtube-node .veyra-youtube-wrapper,
+        .ProseMirror[contenteditable="false"] .veyra-youtube-node.is-selected .veyra-youtube-wrapper,
+        .ProseMirror[contenteditable="false"] .veyra-youtube-node[data-selected="true"] .veyra-youtube-wrapper,
+        .veyra-youtube-node.is-readonly .veyra-youtube-wrapper,
+        .veyra-youtube-node[data-editable="false"] .veyra-youtube-wrapper {
+            outline: none !important;
         }
 
-        .veyra-no-cursors .ProseMirror-yjs-selection,
-        .veyra-no-cursors .collaboration-cursor__selection {
-            background-color: transparent !important;
-            background: transparent !important;
-            border-color: transparent !important;
-            /* NO usar display: none, NO usar visibility: hidden */
+        /* Placeholder offline (Estado offline) */
+        [data-youtube-video] .yt-offline {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            background: var(--bg-surface, var(--bg-color, #1a1a1a));
+            color: var(--text-main, var(--text-color, #fcfcfc));
+            text-align: center;
+            padding: 16px;
+        }
+        [data-youtube-video] .yt-offline-icon { font-size: 32px; opacity: 0.6; }
+        [data-youtube-video] .yt-offline-text { font-size: 14px; font-weight: 600; }
+        [data-youtube-video] .yt-offline-sub { font-size: 12px; opacity: 0.7; }
+        [data-youtube-video] .yt-offline a { font-size: 11px; opacity: 0.6; word-break: break-all; }
+
+        /* Enlace en embed=false */
+        [data-youtube-video][data-embed="false"] a {
+            color: var(--text-main, var(--text-color, #fcfcfc));
+            text-decoration: underline;
+            text-underline-offset: 2px;
         }
     </style>
 </head>
