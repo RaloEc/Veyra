@@ -34,6 +34,10 @@ import {
     Type,
     Check,
     RotateCcw,
+    AArrowUp,
+    AArrowDown,
+    Table as TableIcon,
+    Trash2,
 } from '@tamagui/lucide-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useVeyraTheme } from '../../theme/useVeyraTheme';
@@ -60,7 +64,19 @@ interface RichTextToolbarProps {
     onApplyFontToSelection?: (fontName: string) => void;
 }
 
-type SubMenuType = 'main' | 'insert' | 'headings' | 'lists' | 'align' | 'color' | 'fonts';
+type SubMenuType = 'main' | 'insert' | 'headings' | 'lists' | 'align' | 'color' | 'fonts' | 'fontSize' | 'table';
+
+// Tamaños de fuente disponibles en móvil
+const MOBILE_FONT_SIZES = [
+    { label: '12', value: '12px' },
+    { label: '14', value: '14px' },
+    { label: '16', value: '16px' },
+    { label: '18', value: '18px' },
+    { label: '20', value: '20px' },
+    { label: '24', value: '24px' },
+    { label: '28', value: '28px' },
+    { label: '32', value: '32px' },
+];
 
 // Colores de texto disponibles
 const TEXT_COLORS = [
@@ -164,6 +180,10 @@ export function RichTextToolbar({
     const [selectedStyles, setSelectedStyles] = useState<string[]>([]);
     const [activeTextColor, setActiveTextColor] = useState<string | null>(null);
     const [activeHighlightColor, setActiveHighlightColor] = useState<string | null>(null);
+    const [activeFontSize, setActiveFontSize] = useState<string | null>(null);
+    const [isTableActive, setIsTableActive] = useState<boolean>(false);
+    const [canMergeCells, setCanMergeCells] = useState<boolean>(false);
+    const [canSplitCell, setCanSplitCell] = useState<boolean>(false);
     const lastActionTimestamp = useRef<number>(0);
     const theme = useVeyraTheme();
     const colors = theme.colors;
@@ -206,15 +226,26 @@ export function RichTextToolbar({
                     const styles: string[] = [];
                     let foundTextColor: string | null = null;
                     let foundHighlightColor: string | null = null;
+                    let foundFontSize: string | null = null;
+                    let foundTable = false;
+                    let foundMerge = false;
+                    let foundSplit = false;
 
                     for (const item of items) {
                         if (typeof item === 'string') {
+                            if (item === 'table') foundTable = true;
                             styles.push(item);
                         } else if (item && typeof item === 'object') {
-                            if (item.type === 'foreColor' && item.value) {
+                            if (item.type === 'tableState') {
+                                foundTable = Boolean(item.isTable);
+                                foundMerge = Boolean(item.canMergeCells);
+                                foundSplit = Boolean(item.canSplitCell);
+                            } else if (item.type === 'foreColor' && item.value) {
                                 foundTextColor = item.value;
                             } else if (item.type === 'hiliteColor' && item.value) {
                                 foundHighlightColor = item.value;
+                            } else if (item.type === 'fontSize' && item.value) {
+                                foundFontSize = item.value;
                             } else if (item.type) {
                                 styles.push(item.type);
                             }
@@ -222,6 +253,9 @@ export function RichTextToolbar({
                     }
 
                     setSelectedStyles(styles);
+                    setIsTableActive(foundTable);
+                    setCanMergeCells(foundMerge);
+                    setCanSplitCell(foundSplit);
 
                     if (foundTextColor && isCustomTextColor(foundTextColor, isDark)) {
                         setActiveTextColor(foundTextColor);
@@ -234,6 +268,8 @@ export function RichTextToolbar({
                     } else {
                         setActiveHighlightColor(null);
                     }
+
+                    setActiveFontSize(foundFontSize);
                 });
                 clearInterval(interval);
             }
@@ -286,7 +322,9 @@ export function RichTextToolbar({
         isAlignCenterActive ||
         isAlignRightActive ||
         isAlignFullActive ||
-        isColorGroupActive;
+        isColorGroupActive ||
+        Boolean(activeFontSize) ||
+        isTableActive;
 
     // Ejecuta una acción de pell-rich-editor con actualización optimista inmediata en 0ms
     const handleAction = (action: string, data?: any) => {
@@ -363,11 +401,66 @@ export function RichTextToolbar({
         editorRef.current.sendAction(actions.foreColor, 'result', 'default');
         // 5. Restablecer alineación
         editorRef.current.sendAction(actions.alignLeft, 'result');
+        // 6. Restablecer tamaño de texto
+        if (editorRef.current.setFontSize) {
+            editorRef.current.setFontSize('default');
+        } else {
+            editorRef.current.sendAction?.('setFontSize', 'result', 'default');
+        }
 
         // Reseteo optimista inmediato de la UI
         setSelectedStyles([]);
         setActiveTextColor(null);
         setActiveHighlightColor(null);
+        setActiveFontSize(null);
+    };
+
+    // Aumentar tamaño de texto seleccionado
+    const handleIncreaseFontSize = () => {
+        if (!editorRef.current) return;
+        lastActionTimestamp.current = Date.now();
+        if (editorRef.current.increaseFontSize) {
+            editorRef.current.increaseFontSize();
+        } else {
+            editorRef.current.sendAction?.('increaseFontSize');
+        }
+    };
+
+    // Disminuir tamaño de texto seleccionado
+    const handleDecreaseFontSize = () => {
+        if (!editorRef.current) return;
+        lastActionTimestamp.current = Date.now();
+        if (editorRef.current.decreaseFontSize) {
+            editorRef.current.decreaseFontSize();
+        } else {
+            editorRef.current.sendAction?.('decreaseFontSize');
+        }
+    };
+
+    // Establecer tamaño de fuente específico
+    const handleSetFontSize = (size: string) => {
+        if (!editorRef.current) return;
+        lastActionTimestamp.current = Date.now();
+        if (editorRef.current.setFontSize) {
+            editorRef.current.setFontSize(size);
+        } else if (editorRef.current.sendAction) {
+            editorRef.current.sendAction('setFontSize', 'result', size);
+        }
+        // Fallback de inyección directa en caso de WebView legado
+        try {
+            const js = `(function() {
+                var sel = window.getSelection();
+                if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return;
+                var range = sel.getRangeAt(0);
+                var span = document.createElement('span');
+                span.style.fontSize = '${size === 'default' ? 'inherit' : size}';
+                span.appendChild(range.extractContents());
+                range.insertNode(span);
+            })(); true;`;
+            editorRef.current?.injectJavascript?.(js);
+            editorRef.current?.injectJavaScript?.(js);
+        } catch (_) {}
+        setActiveFontSize(size === 'default' ? null : size);
     };
 
     // Generador de estilos para botones activos con el color de acento del usuario
@@ -443,6 +536,31 @@ export function RichTextToolbar({
                         )}
                         <TouchableOpacity style={styles.toolBtn} activeOpacity={0.6} delayPressIn={0} hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }} onPress={() => handleAction(actions.setHR)}>
                             <Minus size={18} color={colors.textPrimary as any} />
+                        </TouchableOpacity>
+
+                        {/* Insertar Tabla */}
+                        <TouchableOpacity
+                            style={[styles.toolBtn, isTableActive && { backgroundColor: accent.primary + '22', borderColor: accent.primary + '66', borderWidth: 1.5 }]}
+                            activeOpacity={0.6}
+                            delayPressIn={0}
+                            hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}
+                            onPress={() => {
+                                handleAction('insertTable', { rows: 3, cols: 3 });
+                                setActiveSubMenu('table');
+                            }}
+                        >
+                            <TableIcon size={18} color={(isTableActive ? accent.primary : colors.textPrimary) as any} />
+                        </TouchableOpacity>
+
+                        {/* Menú de Comandos / */}
+                        <TouchableOpacity
+                            style={[styles.toolBtnText, { paddingHorizontal: 9, minWidth: 32 }]}
+                            activeOpacity={0.6}
+                            delayPressIn={0}
+                            hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}
+                            onPress={() => handleAction('openSlashMenu')}
+                        >
+                            <Text style={{ fontWeight: '700', fontSize: 14, color: accent.primary }}>/</Text>
                         </TouchableOpacity>
                     </ScrollView>
                 </View>
@@ -526,6 +644,30 @@ export function RichTextToolbar({
                             onPress={() => handleAction(actions.blockquote)}
                         >
                             <Quote size={17} color={colors.textPrimary as any} />
+                        </TouchableOpacity>
+
+                        <View style={[styles.separator, { backgroundColor: colors.borderSubtle }]} />
+
+                        {/* Aumentar tamaño de texto seleccionado */}
+                        <TouchableOpacity
+                            style={styles.toolBtn}
+                            activeOpacity={0.6}
+                            delayPressIn={0}
+                            hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}
+                            onPress={handleIncreaseFontSize}
+                        >
+                            <AArrowUp size={17} color={colors.textPrimary as any} />
+                        </TouchableOpacity>
+
+                        {/* Disminuir tamaño de texto seleccionado */}
+                        <TouchableOpacity
+                            style={styles.toolBtn}
+                            activeOpacity={0.6}
+                            delayPressIn={0}
+                            hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}
+                            onPress={handleDecreaseFontSize}
+                        >
+                            <AArrowDown size={17} color={colors.textPrimary as any} />
                         </TouchableOpacity>
 
                         <View style={[styles.separator, { backgroundColor: colors.borderSubtle }]} />
@@ -901,6 +1043,236 @@ export function RichTextToolbar({
                 </View>
             )}
 
+            {/* SUBMENÚ: TAMAÑO DE TEXTO (Aumentar, Disminuir y Chips de tamaño) */}
+            {activeSubMenu === 'fontSize' && (
+                <View style={styles.submenuContainer}>
+                    {renderBackButton()}
+                    <ScrollView
+                        horizontal
+                        keyboardShouldPersistTaps="always"
+                        showsHorizontalScrollIndicator={false}
+                        contentContainerStyle={styles.submenuScroll}
+                    >
+                        {/* Botón Aumentar tamaño de texto seleccionado */}
+                        <TouchableOpacity
+                            style={[styles.toolBtn, { backgroundColor: accent.primary + '18' }]}
+                            activeOpacity={0.6}
+                            delayPressIn={0}
+                            hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}
+                            onPress={handleIncreaseFontSize}
+                        >
+                            <AArrowUp size={18} color={accent.primary as any} strokeWidth={2.4} />
+                        </TouchableOpacity>
+
+                        {/* Botón Disminuir tamaño de texto seleccionado */}
+                        <TouchableOpacity
+                            style={styles.toolBtn}
+                            activeOpacity={0.6}
+                            delayPressIn={0}
+                            hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}
+                            onPress={handleDecreaseFontSize}
+                        >
+                            <AArrowDown size={17} color={colors.textPrimary as any} />
+                        </TouchableOpacity>
+
+                        <View style={[styles.separator, { backgroundColor: colors.borderSubtle, marginHorizontal: 4 }]} />
+
+                        {/* Chip para restablecer a tamaño normal */}
+                        <TouchableOpacity
+                            activeOpacity={0.65}
+                            delayPressIn={0}
+                            hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}
+                            onPress={() => handleSetFontSize('default')}
+                            style={[
+                                styles.fontChip,
+                                {
+                                    backgroundColor: !activeFontSize
+                                        ? (accent.primary + '20')
+                                        : (isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)'),
+                                    borderColor: !activeFontSize ? accent.primary : colors.borderSubtle,
+                                },
+                            ]}
+                        >
+                            <RotateCcw size={12} color={accent.primary as any} style={{ marginRight: 4 }} />
+                            <Text style={[styles.fontChipText, { color: !activeFontSize ? accent.primary : colors.textPrimary, fontWeight: !activeFontSize ? '700' : '500' }]}>
+                                Normal
+                            </Text>
+                        </TouchableOpacity>
+
+                        {/* Chips con cada tamaño */}
+                        {MOBILE_FONT_SIZES.map(s => {
+                            const isSelected = activeFontSize === s.value;
+                            return (
+                                <TouchableOpacity
+                                    key={s.value}
+                                    activeOpacity={0.65}
+                                    delayPressIn={0}
+                                    hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}
+                                    onPress={() => handleSetFontSize(s.value)}
+                                    style={[
+                                        styles.fontChip,
+                                        {
+                                            backgroundColor: isSelected
+                                                ? (accent.primary + '20')
+                                                : (isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)'),
+                                            borderColor: isSelected ? accent.primary : colors.borderSubtle,
+                                            minWidth: 44,
+                                            justifyContent: 'center',
+                                        },
+                                    ]}
+                                >
+                                    <Text
+                                        style={[
+                                            styles.fontChipText,
+                                            {
+                                                color: isSelected ? accent.primary : colors.textPrimary,
+                                                fontWeight: isSelected ? '700' : '500',
+                                            },
+                                        ]}
+                                    >
+                                        {s.label}
+                                    </Text>
+                                    {isSelected && (
+                                        <Check size={11} color={accent.primary as any} strokeWidth={3} style={{ marginLeft: 3 }} />
+                                    )}
+                                </TouchableOpacity>
+                            );
+                        })}
+                    </ScrollView>
+                </View>
+            )}
+
+            {/* SUBMENÚ: TABLA */}
+            {activeSubMenu === 'table' && (
+                <View style={styles.submenuContainer}>
+                    {renderBackButton()}
+                    <ScrollView
+                        horizontal
+                        keyboardShouldPersistTaps="always"
+                        showsHorizontalScrollIndicator={false}
+                        contentContainerStyle={styles.submenuScroll}
+                    >
+                        {!isTableActive ? (
+                            <TouchableOpacity
+                                style={[
+                                    styles.toolBtnText,
+                                    {
+                                        paddingHorizontal: 10,
+                                        backgroundColor: accent.primary + '20',
+                                        borderColor: accent.primary,
+                                        borderWidth: 1,
+                                    },
+                                ]}
+                                activeOpacity={0.6}
+                                delayPressIn={0}
+                                hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}
+                                onPress={() => handleAction('insertTable', { rows: 3, cols: 3 })}
+                            >
+                                <TableIcon size={14} color={accent.primary as any} style={{ marginRight: 5 }} />
+                                <Text style={{ fontSize: 12, fontWeight: '700', color: accent.primary }}>
+                                    Insertar Tabla 3x3
+                                </Text>
+                            </TouchableOpacity>
+                        ) : (
+                            <>
+                                <TouchableOpacity
+                                    style={[styles.toolBtnText, { paddingHorizontal: 8 }]}
+                                    activeOpacity={0.6}
+                                    delayPressIn={0}
+                                    hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}
+                                    onPress={() => handleAction('addRowAfter')}
+                                >
+                                    <Text style={{ fontSize: 12, fontWeight: '600', color: colors.textPrimary }}>+ Fila</Text>
+                                </TouchableOpacity>
+
+                                <TouchableOpacity
+                                    style={[styles.toolBtnText, { paddingHorizontal: 8 }]}
+                                    activeOpacity={0.6}
+                                    delayPressIn={0}
+                                    hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}
+                                    onPress={() => handleAction('deleteRow')}
+                                >
+                                    <Text style={{ fontSize: 12, fontWeight: '500', color: colors.textSecondary }}>- Fila</Text>
+                                </TouchableOpacity>
+
+                                <TouchableOpacity
+                                    style={[styles.toolBtnText, { paddingHorizontal: 8 }]}
+                                    activeOpacity={0.6}
+                                    delayPressIn={0}
+                                    hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}
+                                    onPress={() => handleAction('addColumnAfter')}
+                                >
+                                    <Text style={{ fontSize: 12, fontWeight: '600', color: colors.textPrimary }}>+ Col</Text>
+                                </TouchableOpacity>
+
+                                <TouchableOpacity
+                                    style={[styles.toolBtnText, { paddingHorizontal: 8 }]}
+                                    activeOpacity={0.6}
+                                    delayPressIn={0}
+                                    hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}
+                                    onPress={() => handleAction('deleteColumn')}
+                                >
+                                    <Text style={{ fontSize: 12, fontWeight: '500', color: colors.textSecondary }}>- Col</Text>
+                                </TouchableOpacity>
+
+                                <TouchableOpacity
+                                    style={[
+                                        styles.toolBtnText,
+                                        { paddingHorizontal: 9 },
+                                        canMergeCells && {
+                                            backgroundColor: accent.primary + '22',
+                                            borderColor: accent.primary + '66',
+                                            borderWidth: 1.5,
+                                        },
+                                    ]}
+                                    activeOpacity={0.6}
+                                    delayPressIn={0}
+                                    hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}
+                                    onPress={() => handleAction('mergeCells')}
+                                >
+                                    <Text style={{ fontSize: 12, fontWeight: '600', color: canMergeCells ? accent.primary : colors.textPrimary }}>
+                                        Combinar
+                                    </Text>
+                                </TouchableOpacity>
+
+                                <TouchableOpacity
+                                    style={[
+                                        styles.toolBtnText,
+                                        { paddingHorizontal: 9 },
+                                        canSplitCell && {
+                                            backgroundColor: accent.primary + '22',
+                                            borderColor: accent.primary + '66',
+                                            borderWidth: 1.5,
+                                        },
+                                    ]}
+                                    activeOpacity={0.6}
+                                    delayPressIn={0}
+                                    hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}
+                                    onPress={() => handleAction('splitCell')}
+                                >
+                                    <Text style={{ fontSize: 12, fontWeight: '600', color: canSplitCell ? accent.primary : colors.textSecondary }}>
+                                        Dividir
+                                    </Text>
+                                </TouchableOpacity>
+
+                                <TouchableOpacity
+                                    style={[styles.toolBtn, { backgroundColor: 'rgba(239, 68, 68, 0.15)', minWidth: 34 }]}
+                                    activeOpacity={0.6}
+                                    delayPressIn={0}
+                                    hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}
+                                    onPress={() => {
+                                        handleAction('deleteTable');
+                                        setActiveSubMenu('main');
+                                    }}
+                                >
+                                    <Trash2 size={16} color="#ef4444" />
+                                </TouchableOpacity>
+                            </>
+                        )}
+                    </ScrollView>
+                </View>
+            )}
+
             {/* BARRA PRINCIPAL (NIVEL 1) */}
             {activeSubMenu === 'main' && (
                 <ScrollView
@@ -1083,6 +1455,27 @@ export function RichTextToolbar({
                         )}
                     </TouchableOpacity>
 
+                    {/* 10. Tamaño de texto (Abre submenú de tamaño) */}
+                    <TouchableOpacity
+                        style={[
+                            styles.toolBtn,
+                            Boolean(activeFontSize) && {
+                                backgroundColor: accent.primary + '22',
+                                borderColor: accent.primary + '66',
+                                borderWidth: 1.5,
+                            },
+                        ]}
+                        activeOpacity={0.6}
+                        delayPressIn={0}
+                        hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}
+                        onPress={() => setActiveSubMenu('fontSize')}
+                    >
+                        <AArrowUp size={17} color={getActiveIconColor(Boolean(activeFontSize))} />
+                        {Boolean(activeFontSize) && (
+                            <View style={[styles.activeDot, { backgroundColor: accent.primary }]} />
+                        )}
+                    </TouchableOpacity>
+
                     <View style={[styles.separator, { backgroundColor: colors.borderSubtle }]} />
 
                     {/* 10. Borrar formato / restablecer a por defecto (acceso directo) */}
@@ -1100,6 +1493,27 @@ export function RichTextToolbar({
                     >
                         <Eraser size={17} color={hasAnyFormattingActive ? (accent.primary as any) : (colors.textPrimary as any)} />
                         {hasAnyFormattingActive && (
+                            <View style={[styles.activeDot, { backgroundColor: accent.primary }]} />
+                        )}
+                    </TouchableOpacity>
+
+                    {/* 11. Tabla */}
+                    <TouchableOpacity
+                        style={[
+                            styles.toolBtn,
+                            isTableActive && {
+                                backgroundColor: accent.primary + '22',
+                                borderColor: accent.primary + '66',
+                                borderWidth: 1.5,
+                            },
+                        ]}
+                        activeOpacity={0.6}
+                        delayPressIn={0}
+                        hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}
+                        onPress={() => setActiveSubMenu('table')}
+                    >
+                        <TableIcon size={17} color={getActiveIconColor(isTableActive)} />
+                        {isTableActive && (
                             <View style={[styles.activeDot, { backgroundColor: accent.primary }]} />
                         )}
                     </TouchableOpacity>

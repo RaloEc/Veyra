@@ -3,6 +3,7 @@ import { View, StyleSheet, Platform, Alert } from 'react-native';
 import { WebView, WebViewMessageEvent } from 'react-native-webview';
 import { getTiptapHtml } from './editor-web/htmlTemplate';
 import { diagLog } from './diagLog';
+import { supabase } from '../lib/supabase';
 
 export interface VeyraTiptapEditorRef {
     applyRemoteUpdate: (base64Update: string, origin?: string) => void;
@@ -29,6 +30,22 @@ export interface VeyraTiptapEditorRef {
     setColor: (color: string) => void;
     setHighlight: (color: string) => void;
     setFont: (fontFamily: string) => void;
+    setFontSize: (fontSize: string) => void;
+    increaseFontSize: () => void;
+    decreaseFontSize: () => void;
+    insertTable?: (rows?: number, cols?: number) => void;
+    addRowAfter?: () => void;
+    addRowBefore?: () => void;
+    deleteRow?: () => void;
+    addColumnAfter?: () => void;
+    addColumnBefore?: () => void;
+    deleteColumn?: () => void;
+    mergeCells?: () => void;
+    splitCell?: () => void;
+    deleteTable?: () => void;
+    toggleHeaderRow?: () => void;
+    setCellColor?: (color: string) => void;
+    openSlashMenu?: () => void;
     unsetFormat: () => void;
     undo: () => void;
     redo: () => void;
@@ -75,6 +92,15 @@ export interface EditorToolbarState {
     textColor: string | null;
     highlightColor: string | null;
     fontFamily: string | null;
+    fontSize: string | null;
+    isTable?: boolean;
+    canMergeCells?: boolean;
+    canSplitCell?: boolean;
+    stats?: {
+        words: number;
+        characters: number;
+        readingTimeMinutes: number;
+    };
 }
 
 interface VeyraTiptapYjsEditorProps {
@@ -218,8 +244,56 @@ export const VeyraTiptapYjsEditor = forwardRef<VeyraTiptapEditorRef, VeyraTiptap
                 case 'hiliteColor':
                     executeInWebView(`window.veyraSetHighlight && window.veyraSetHighlight(${JSON.stringify(data)})`);
                     break;
+                case 'setFontSize':
+                    executeInWebView(`window.veyraSetFontSize && window.veyraSetFontSize(${JSON.stringify(data)})`);
+                    break;
+                case 'increaseFontSize':
+                    executeInWebView('window.veyraIncreaseFontSize && window.veyraIncreaseFontSize()');
+                    break;
+                case 'decreaseFontSize':
+                    executeInWebView('window.veyraDecreaseFontSize && window.veyraDecreaseFontSize()');
+                    break;
                 case 'removeFormat':
                     executeInWebView('window.veyraUnsetFormat && window.veyraUnsetFormat()');
+                    break;
+                case 'insertTable':
+                    executeInWebView(`window.veyraInsertTable && window.veyraInsertTable(${Number(data?.rows || 3)}, ${Number(data?.cols || 3)})`);
+                    break;
+                case 'addRowAfter':
+                    executeInWebView('window.veyraAddRowAfter && window.veyraAddRowAfter()');
+                    break;
+                case 'addRowBefore':
+                    executeInWebView('window.veyraAddRowBefore && window.veyraAddRowBefore()');
+                    break;
+                case 'deleteRow':
+                    executeInWebView('window.veyraDeleteRow && window.veyraDeleteRow()');
+                    break;
+                case 'addColumnAfter':
+                    executeInWebView('window.veyraAddColumnAfter && window.veyraAddColumnAfter()');
+                    break;
+                case 'addColumnBefore':
+                    executeInWebView('window.veyraAddColumnBefore && window.veyraAddColumnBefore()');
+                    break;
+                case 'deleteColumn':
+                    executeInWebView('window.veyraDeleteColumn && window.veyraDeleteColumn()');
+                    break;
+                case 'mergeCells':
+                    executeInWebView('window.veyraMergeCells && window.veyraMergeCells()');
+                    break;
+                case 'splitCell':
+                    executeInWebView('window.veyraSplitCell && window.veyraSplitCell()');
+                    break;
+                case 'deleteTable':
+                    executeInWebView('window.veyraDeleteTable && window.veyraDeleteTable()');
+                    break;
+                case 'toggleHeaderRow':
+                    executeInWebView('window.veyraToggleHeaderRow && window.veyraToggleHeaderRow()');
+                    break;
+                case 'setCellColor':
+                    executeInWebView(`window.veyraSetCellColor && window.veyraSetCellColor(${JSON.stringify(data)})`);
+                    break;
+                case 'openSlashMenu':
+                    executeInWebView('window.veyraOpenSlashMenu && window.veyraOpenSlashMenu()');
                     break;
                 case 'undo':
                     executeInWebView('window.veyraUndo && window.veyraUndo()');
@@ -327,6 +401,54 @@ export const VeyraTiptapYjsEditor = forwardRef<VeyraTiptapEditorRef, VeyraTiptap
             },
             setFont: (fontFamily: string) => {
                 executeInWebView(`window.veyraSetFont && window.veyraSetFont(${JSON.stringify(fontFamily)})`);
+            },
+            setFontSize: (fontSize: string) => {
+                executeInWebView(`window.veyraSetFontSize && window.veyraSetFontSize(${JSON.stringify(fontSize)})`);
+            },
+            increaseFontSize: () => {
+                executeInWebView('window.veyraIncreaseFontSize && window.veyraIncreaseFontSize()');
+            },
+            decreaseFontSize: () => {
+                executeInWebView('window.veyraDecreaseFontSize && window.veyraDecreaseFontSize()');
+            },
+            insertTable: (rows = 3, cols = 3) => {
+                executeInWebView(`window.veyraInsertTable && window.veyraInsertTable(${Number(rows || 3)}, ${Number(cols || 3)})`);
+            },
+            addRowAfter: () => {
+                executeInWebView('window.veyraAddRowAfter && window.veyraAddRowAfter()');
+            },
+            addRowBefore: () => {
+                executeInWebView('window.veyraAddRowBefore && window.veyraAddRowBefore()');
+            },
+            deleteRow: () => {
+                executeInWebView('window.veyraDeleteRow && window.veyraDeleteRow()');
+            },
+            addColumnAfter: () => {
+                executeInWebView('window.veyraAddColumnAfter && window.veyraAddColumnAfter()');
+            },
+            addColumnBefore: () => {
+                executeInWebView('window.veyraAddColumnBefore && window.veyraAddColumnBefore()');
+            },
+            deleteColumn: () => {
+                executeInWebView('window.veyraDeleteColumn && window.veyraDeleteColumn()');
+            },
+            mergeCells: () => {
+                executeInWebView('window.veyraMergeCells && window.veyraMergeCells()');
+            },
+            splitCell: () => {
+                executeInWebView('window.veyraSplitCell && window.veyraSplitCell()');
+            },
+            deleteTable: () => {
+                executeInWebView('window.veyraDeleteTable && window.veyraDeleteTable()');
+            },
+            toggleHeaderRow: () => {
+                executeInWebView('window.veyraToggleHeaderRow && window.veyraToggleHeaderRow()');
+            },
+            setCellColor: (color: string) => {
+                executeInWebView(`window.veyraSetCellColor && window.veyraSetCellColor(${JSON.stringify(color)})`);
+            },
+            openSlashMenu: () => {
+                executeInWebView('window.veyraOpenSlashMenu && window.veyraOpenSlashMenu()');
             },
             unsetFormat: () => {
                 executeInWebView(`window.veyraUnsetFormat && window.veyraUnsetFormat()`);
@@ -529,6 +651,85 @@ export const VeyraTiptapYjsEditor = forwardRef<VeyraTiptapEditorRef, VeyraTiptap
                             previewCallbacksRef.current = [];
                             cbs.forEach(cb => cb(data.preview || ''));
                             break;
+                        case 'AI_GENERATE_REQUEST': {
+                            const { requestId, prompt, context } = data;
+                            (async () => {
+                                try {
+                                    const { data: sessionData } = await supabase.auth.getSession();
+                                    const token =
+                                        sessionData?.session?.access_token ||
+                                        process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ||
+                                        'sb_publishable_5y3OReimX6RP2Tcpl8Ailw_V52PADlk';
+                                    const supabaseUrl =
+                                        process.env.EXPO_PUBLIC_SUPABASE_URL || 'https://rrwoompvuggcczggfgiq.supabase.co';
+                                    const supabaseAnonKey =
+                                        process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ||
+                                        'sb_publishable_5y3OReimX6RP2Tcpl8Ailw_V52PADlk';
+
+                                    const systemPrompt = `Eres el asistente de IA integrado en el editor de notas de Veyra.
+El usuario te dará una orden que comienza tras el comando /ia.
+Tu objetivo es responder SIEMPRE un JSON válido con la siguiente estructura:
+{
+  "type": "table" | "task_list" | "code" | "math" | "rich_text",
+  "html": "<fragmento HTML válido y limpio listo para insertar en TipTap>",
+  "summary": "Breve frase descriptiva"
+}
+Reglas:
+- Si type = "table", estructura: <table><thead><tr><th><p>Columna</p></th></tr></thead><tbody><tr><td><p>Dato</p></td></tr></tbody></table>. Toda celda th y td DEBE tener <p>.
+- Si type = "task_list", estructura: <ul data-type="taskList"><li data-type="taskItem" data-checked="false"><p>Tarea</p></li></ul>.
+- Si type = "code", estructura: <pre><code class="language-{lang}">{código}</code></pre>.
+- Si type = "rich_text", usa <h2>, <h3>, <p>, <strong>, <em>, <ul>, <ol>.
+- Si se proporciona contexto, úsalo como referencia.
+Responde únicamente con el JSON sin bloques de código markdown alrededor.`;
+
+                                    let fullPromptText = prompt;
+                                    if (context?.textBefore && context.textBefore.trim().length > 0) {
+                                        fullPromptText = `Contexto del documento:\n"""\n${context.textBefore.trim()}\n"""\n\nOrden del usuario:\n${prompt}`;
+                                    }
+
+                                    const response = await fetch(`${supabaseUrl}/functions/v1/ai`, {
+                                        method: 'POST',
+                                        headers: {
+                                            'Content-Type': 'application/json',
+                                            apikey: supabaseAnonKey,
+                                            Authorization: `Bearer ${token}`,
+                                        },
+                                        body: JSON.stringify({
+                                            action: 'generateStructured',
+                                            model: 'gemini-2.0-flash',
+                                            systemPrompt,
+                                            input: { text: fullPromptText },
+                                        }),
+                                    });
+
+                                    if (!response.ok) {
+                                        const errText = await response.text();
+                                        throw new Error(errText || 'Error en el servicio de IA');
+                                    }
+
+                                    const json = await response.json();
+                                    let parsed = json?.structured;
+                                    if (typeof parsed === 'string') {
+                                        try {
+                                            parsed = JSON.parse(
+                                                parsed.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim()
+                                            );
+                                        } catch {}
+                                    }
+
+                                    const html = parsed?.html || `<p>${parsed?.text || prompt}</p>`;
+                                    executeInWebView(
+                                        `window.veyraHandleAIResult && window.veyraHandleAIResult(${JSON.stringify(requestId)}, ${JSON.stringify({ success: true, html })})`
+                                    );
+                                } catch (err: any) {
+                                    console.error('[VeyraTiptapYjsEditor] AI generate error:', err);
+                                    executeInWebView(
+                                        `window.veyraHandleAIResult && window.veyraHandleAIResult(${JSON.stringify(requestId)}, ${JSON.stringify({ success: false, error: err?.message || 'Error al conectar con la IA' })})`
+                                    );
+                                }
+                            })();
+                            break;
+                        }
                         case 'EDITOR_READY':
                             executeInWebView(`window.veyraSetUser(${JSON.stringify(userName)}, ${JSON.stringify(userColor)}, ${Boolean(isEditing)}, ${JSON.stringify(userId || null)})`);
                             executeInWebView(`window.veyraSetCursorVisible && window.veyraSetCursorVisible(${Boolean(isEditing)})`);
@@ -610,10 +811,24 @@ export const VeyraTiptapYjsEditor = forwardRef<VeyraTiptapEditorRef, VeyraTiptap
                                 textColor: data.textColor || null,
                                 highlightColor: data.highlightColor || null,
                                 fontFamily: data.fontFamily || null,
+                                fontSize: data.fontSize || null,
+                                isTable: Boolean(data.isTable),
+                                canMergeCells: Boolean(data.canMergeCells),
+                                canSplitCell: Boolean(data.canSplitCell),
+                                stats: data.stats || undefined,
                             };
                             onToolbarStateChange?.(fullState);
 
                             const items: any[] = [];
+                            if (fullState.isTable) {
+                                items.push('table');
+                                items.push({
+                                    type: 'tableState',
+                                    isTable: true,
+                                    canMergeCells: fullState.canMergeCells,
+                                    canSplitCell: fullState.canSplitCell,
+                                });
+                            }
                             if (fullState.isBold) items.push('bold');
                             if (fullState.isItalic) items.push('italic');
                             if (fullState.isUnderline) items.push('underline');
@@ -633,6 +848,7 @@ export const VeyraTiptapYjsEditor = forwardRef<VeyraTiptapEditorRef, VeyraTiptap
                             else items.push('justifyLeft');
                             if (fullState.textColor) items.push({ type: 'foreColor', value: fullState.textColor });
                             if (fullState.highlightColor) items.push({ type: 'hiliteColor', value: fullState.highlightColor });
+                            if (fullState.fontSize) items.push({ type: 'fontSize', value: fullState.fontSize });
                             toolbarListenersRef.current.forEach(cb => {
                                 try { cb(items); } catch (_) { }
                             });
@@ -657,6 +873,10 @@ export const VeyraTiptapYjsEditor = forwardRef<VeyraTiptapEditorRef, VeyraTiptap
                                 textColor: data.textColor || null,
                                 highlightColor: data.highlightColor || null,
                                 fontFamily: data.fontFamily || null,
+                                fontSize: data.fontSize || null,
+                                isTable: Boolean(data.isTable),
+                                canMergeCells: Boolean(data.canMergeCells),
+                                canSplitCell: Boolean(data.canSplitCell),
                             });
                             break;
                         case 'PREVIEW_UPDATE':

@@ -2919,6 +2919,7 @@ export default function NoteDetailAndEditScreen() {
                                 ? handlePromptActivatePilot
                                 : undefined
                         }
+                        stats={yjsToolbarState.stats}
                     />
 
                     {/* Modal de Tipografía General de la Nota */}

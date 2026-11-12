@@ -23,6 +23,7 @@ import {
     Clock,
     Type,
     Zap,
+    AlignLeft,
 } from '@tamagui/lucide-icons';
 import { useVeyraTheme } from '../../theme/useVeyraTheme';
 import { VeyraSurface } from '../ui/VeyraSurface';
@@ -45,6 +46,11 @@ export interface NoteOptionsMenuProps {
     isEditMode?: boolean;
     onToggleEditMode?: () => void;
     onActivatePilotYjs?: () => void;
+    stats?: {
+        words: number;
+        characters: number;
+        readingTimeMinutes: number;
+    };
 }
 
 export function NoteOptionsMenu({
@@ -64,6 +70,7 @@ export function NoteOptionsMenu({
     onShare,
     onViewHistory,
     onActivatePilotYjs,
+    stats,
 }: NoteOptionsMenuProps) {
     const { t } = useTranslation();
     const insets = useSafeAreaInsets();
@@ -164,6 +171,32 @@ export function NoteOptionsMenu({
                             },
                         ]}
                     >
+                        {/* Contador de palabras y lectura */}
+                        {stats && (
+                            <View
+                                style={[
+                                    styles.menuRow,
+                                    {
+                                        backgroundColor: isDark ? 'rgba(255, 255, 255, 0.04)' : 'rgba(0, 0, 0, 0.03)',
+                                        borderRadius: 12,
+                                        marginVertical: 2,
+                                    },
+                                ]}
+                            >
+                                <View style={styles.iconSlot}>
+                                    <AlignLeft size={16} color={accent.primary as any} strokeWidth={2.2} />
+                                </View>
+                                <View style={{ flex: 1 }}>
+                                    <Text style={[styles.menuLabel, { color: colors.textPrimary }]}>
+                                        {stats.words.toLocaleString()} {stats.words === 1 ? 'palabra' : 'palabras'}
+                                    </Text>
+                                    <Text style={{ fontSize: 11, color: colors.textMuted }}>
+                                        {stats.characters.toLocaleString()} caracteres • ~{stats.readingTimeMinutes} min
+                                    </Text>
+                                </View>
+                            </View>
+                        )}
+
                         {/* 1. Exportar a PDF */}
                         <TouchableOpacity
                             activeOpacity={0.65}

@@ -1,4 +1,4 @@
-import { Editor, Node } from '@tiptap/core';
+import { Editor, Node, Extension, InputRule, Mark } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
 import Collaboration from '@tiptap/extension-collaboration';
 import CollaborationCursor from '@tiptap/extension-collaboration-cursor';
@@ -10,8 +10,17 @@ import TextStyle from '@tiptap/extension-text-style';
 import FontFamily from '@tiptap/extension-font-family';
 import TaskList from '@tiptap/extension-task-list';
 import TaskItem from '@tiptap/extension-task-item';
+import { Table } from '@tiptap/extension-table';
+import { TableRow } from '@tiptap/extension-table-row';
+import { TableHeader } from '@tiptap/extension-table-header';
+import { TableCell } from '@tiptap/extension-table-cell';
+import { CodeBlockLowlight } from '@tiptap/extension-code-block-lowlight';
+import { common, createLowlight } from 'lowlight';
+import { CodeBlockNodeView } from './codeblock-nodeview.js';
 import { CustomImage } from './image-node.js';
 import { createYouTubeNodeView } from './youtube-nodeview.js';
+import { AIPromptNodeView } from './aiprompt-nodeview.js';
+import { BookmarkPromptNodeView } from './bookmarkprompt-nodeview.js';
 import * as Y from 'yjs';
 import * as awarenessProtocol from 'y-protocols/awareness';
 import { ySyncPluginKey, yCursorPluginKey, absolutePositionToRelativePosition } from 'y-prosemirror';
@@ -53,6 +62,204 @@ let lastClickedImagePos = null;
 let suppressImageDismissedUntil = 0;
 let lastClickedYoutubePos = null;
 let suppressYoutubeDismissedUntil = 0;
+
+// ═══════════════════════════════════════════════════════════════
+// EXTENSIÓN PERSONALIZADA TAMAÑO DE TEXTO (FONT SIZE)
+// ═══════════════════════════════════════════════════════════════
+const FontSize = Extension.create({
+    name: 'fontSize',
+    addOptions() {
+        return {
+            types: ['textStyle'],
+        };
+    },
+    addGlobalAttributes() {
+        return [
+            {
+                types: this.options.types,
+                attributes: {
+                    fontSize: {
+                        default: null,
+                        parseHTML: element => element.style.fontSize || null,
+                        renderHTML: attributes => {
+                            if (!attributes.fontSize) return {};
+                            return { style: `font-size: ${attributes.fontSize}` };
+                        },
+                    },
+                },
+            },
+        ];
+    },
+    addCommands() {
+        return {
+            setFontSize: fontSize => ({ chain }) => {
+                return chain().setMark('textStyle', { fontSize }).run();
+            },
+            unsetFontSize: () => ({ chain }) => {
+                return chain().setMark('textStyle', { fontSize: null }).removeEmptyTextStyle().run();
+            },
+        };
+    },
+});
+
+// ═══════════════════════════════════════════════════════════════
+// EXTENSIONES DE TABLAS PARA MÓVIL
+// ═══════════════════════════════════════════════════════════════
+const CustomTableCell = TableCell.extend({
+    addAttributes() {
+        return {
+            ...this.parent?.(),
+            backgroundColor: {
+                default: null,
+                parseHTML: element => element.style.backgroundColor || element.getAttribute('data-background-color') || null,
+                renderHTML: attributes => {
+                    if (!attributes.backgroundColor) return {};
+                    return {
+                        style: `background-color: ${attributes.backgroundColor};`,
+                        'data-background-color': attributes.backgroundColor,
+                    };
+                },
+            },
+        };
+    },
+});
+
+const CustomTableHeader = TableHeader.extend({
+    addAttributes() {
+        return {
+            ...this.parent?.(),
+            backgroundColor: {
+                default: null,
+                parseHTML: element => element.style.backgroundColor || element.getAttribute('data-background-color') || null,
+                renderHTML: attributes => {
+                    if (!attributes.backgroundColor) return {};
+                    return {
+                        style: `background-color: ${attributes.backgroundColor};`,
+                        'data-background-color': attributes.backgroundColor,
+                    };
+                },
+            },
+        };
+    },
+});
+
+const CustomTable = Table.extend({
+    addAttributes() {
+        return {
+            tableStyle: {
+                default: 'default',
+                parseHTML: element => element.getAttribute('data-table-style') || 'default',
+                renderHTML: attributes => {
+                    if (!attributes.tableStyle || attributes.tableStyle === 'default') return {};
+                    return { 'data-table-style': attributes.tableStyle };
+                },
+            },
+            borderColor: {
+                default: null,
+                parseHTML: element => element.getAttribute('data-border-color') || null,
+                renderHTML: attributes => {
+                    if (!attributes.borderColor) return {};
+                    return {
+                        'data-border-color': attributes.borderColor,
+                        style: `--table-custom-border: ${attributes.borderColor};`,
+                    };
+                },
+            },
+        };
+    },
+}).configure({
+    resizable: false, // En móvil desactivado para permitir scroll horizontal fluido sin bloqueos táctiles
+    HTMLAttributes: {
+        class: 'veyra-table',
+    },
+});
+
+// ═══════════════════════════════════════════════════════════════
+// EXTENSIÓN BLOQUE DE CÓDIGO CON RESALTADO DE SINTAXIS (LOWLIGHT)
+// ═══════════════════════════════════════════════════════════════
+const lowlight = createLowlight(common);
+const CustomCodeBlock = CodeBlockLowlight.extend({
+    addAttributes() {
+        return {
+            ...this.parent?.(),
+            wrap: {
+                default: false,
+                parseHTML: element => element.getAttribute('data-wrap') === 'true',
+                renderHTML: attributes => attributes.wrap ? { 'data-wrap': 'true' } : {},
+            },
+        };
+    },
+    addNodeView() {
+        return (props) => new CodeBlockNodeView(props.node, props.view, props.getPos);
+    },
+}).configure({
+    lowlight,
+    defaultLanguage: 'auto',
+});
+
+// ═══════════════════════════════════════════════════════════════
+// EXTENSIÓN NODO INLINE ASISTENTE IA (FLAT / MINIMALISTA)
+// ═══════════════════════════════════════════════════════════════
+const AIPrompt = Node.create({
+    name: 'aiPrompt',
+    group: 'block',
+    atom: true,
+    selectable: false,
+    draggable: false,
+
+    parseHTML() {
+        return [{ tag: 'div[data-type="ai-prompt"]' }];
+    },
+
+    renderHTML({ HTMLAttributes }) {
+        return ['div', { ...HTMLAttributes, 'data-type': 'ai-prompt' }];
+    },
+
+    addNodeView() {
+        return (props) => new AIPromptNodeView(props.node, props.view, props.getPos, props.editor);
+    },
+
+    addCommands() {
+        return {
+            insertAIPrompt: () => ({ commands }) => {
+                return commands.insertContent({ type: this.name });
+            },
+        };
+    },
+
+    addInputRules() {
+        return [
+            new InputRule({
+                find: /^\/(?:ia|ai)\s$/,
+                handler: ({ state, range }) => {
+                    const { tr } = state;
+                    tr.replaceWith(range.from, range.to, this.type.create());
+                },
+            }),
+        ];
+    },
+});
+
+const AICommandExtension = Extension.create({
+    name: 'aiCommand',
+    addKeyboardShortcuts() {
+        return {
+            Enter: ({ editor }) => {
+                const { selection } = editor.state;
+                if (!selection.empty) return false;
+                const { $from } = selection;
+                const parentNode = $from.parent;
+                if (!parentNode || !parentNode.isTextblock) return false;
+                const lineText = parentNode.textContent;
+                if (!/^\s*\/(?:ia|ai)\s*$/i.test(lineText)) return false;
+                const fromPos = $from.start();
+                const toPos = $from.end();
+                editor.chain().focus().deleteRange({ from: fromPos, to: toPos }).insertContent({ type: 'aiPrompt' }).run();
+                return true;
+            },
+        };
+    },
+});
 
 // ═══════════════════════════════════════════════════════════════
 // NODO PERSONALIZADO YOUTUBE (Tiptap v2 + Vanilla JS Facade)
@@ -245,7 +452,7 @@ const YoutubeNode = Node.create({
                                 message: '[YT paste DEBUG]',
                                 payload: debugData
                             });
-                        } catch (e) {}
+                        } catch (e) { }
 
                         if (!plain.trim()) return false;
 
@@ -271,6 +478,238 @@ const YoutubeNode = Node.create({
     },
 });
 
+
+// ═══════════════════════════════════════════════════════════════
+// EXTENSIÓN TARJETA DE ENLACE WEB (BOOKMARK)
+// ═══════════════════════════════════════════════════════════════
+const BookmarkNode = Node.create({
+    name: 'bookmark',
+    group: 'block',
+    atom: true,
+    draggable: true,
+    selectable: false,
+
+    addAttributes() {
+        return {
+            url: {
+                default: '',
+                parseHTML: element => element.getAttribute('data-bookmark-url') || element.getAttribute('href') || '',
+                renderHTML: attributes => ({ 'data-bookmark-url': attributes.url || '' }),
+            },
+            title: {
+                default: '',
+                parseHTML: element => element.getAttribute('data-bookmark-title') || '',
+                renderHTML: attributes => ({ 'data-bookmark-title': attributes.title || '' }),
+            },
+            description: {
+                default: '',
+                parseHTML: element => element.getAttribute('data-bookmark-desc') || '',
+                renderHTML: attributes => ({ 'data-bookmark-desc': attributes.description || '' }),
+            },
+            favicon: {
+                default: '',
+                parseHTML: element => element.getAttribute('data-bookmark-favicon') || '',
+                renderHTML: attributes => ({ 'data-bookmark-favicon': attributes.favicon || '' }),
+            },
+            domain: {
+                default: '',
+                parseHTML: element => element.getAttribute('data-bookmark-domain') || '',
+                renderHTML: attributes => ({ 'data-bookmark-domain': attributes.domain || '' }),
+            },
+            image: {
+                default: null,
+                parseHTML: element => element.getAttribute('data-bookmark-image') || element.querySelector('.veyra-bookmark-cover')?.getAttribute('src') || null,
+                renderHTML: attributes => {
+                    if (!attributes.image) return {};
+                    return { 'data-bookmark-image': attributes.image };
+                },
+            },
+        };
+    },
+
+    parseHTML() {
+        return [
+            { tag: 'div[data-bookmark-url]' },
+            { tag: 'a[data-bookmark-card]' },
+        ];
+    },
+
+    renderHTML({ HTMLAttributes }) {
+        const url = HTMLAttributes['data-bookmark-url'] || '#';
+        const title = HTMLAttributes['data-bookmark-title'] || url;
+        const desc = HTMLAttributes['data-bookmark-desc'] || '';
+        const domain = HTMLAttributes['data-bookmark-domain'] || '';
+        const favicon = HTMLAttributes['data-bookmark-favicon'] || '';
+        const image = HTMLAttributes['data-bookmark-image'] || '';
+
+        return [
+            'a',
+            mergeAttributes(
+                {
+                    href: url,
+                    target: '_blank',
+                    rel: 'noopener noreferrer',
+                    class: 'veyra-bookmark-card',
+                    'data-bookmark-card': '',
+                },
+                HTMLAttributes
+            ),
+            [
+                'div',
+                { class: 'veyra-bookmark-body' },
+                [
+                    'div',
+                    { class: 'veyra-bookmark-meta' },
+                    favicon
+                        ? [
+                            'img',
+                            {
+                                class: 'veyra-bookmark-favicon',
+                                src: favicon,
+                                alt: '',
+                                loading: 'lazy',
+                            },
+                        ]
+                        : ['span', {}],
+                    ['span', { class: 'veyra-bookmark-domain' }, domain || url],
+                ],
+                ['div', { class: 'veyra-bookmark-title' }, title],
+                desc ? ['div', { class: 'veyra-bookmark-desc' }, desc] : ['span', {}],
+            ],
+            image
+                ? [
+                    'div',
+                    { class: 'veyra-bookmark-cover-wrapper' },
+                    [
+                        'img',
+                        {
+                            class: 'veyra-bookmark-cover',
+                            src: image,
+                            alt: '',
+                            loading: 'lazy',
+                        },
+                    ],
+                ]
+                : ['span', {}],
+        ];
+    },
+
+    addCommands() {
+        return {
+            setBookmark:
+                attributes =>
+                ({ commands }) => {
+                    return commands.insertContent({
+                        type: this.name,
+                        attrs: attributes,
+                    });
+                },
+        };
+    },
+
+    addProseMirrorPlugins() {
+        return [
+            new Plugin({
+                key: new PluginKey('bookmarkPasteHandler'),
+                props: {
+                    handlePaste: (view, event) => {
+                        const cd = event.clipboardData;
+                        const plain = (cd ? cd.getData('text/plain') : '').trim();
+                        if (!plain || plain.includes('\n')) return false;
+
+                        // Si es YouTube, lo dejamos para el manejador de YouTube
+                        if (plain.match(YT_REGEX)) return false;
+
+                        // Si es una URL web solitaria
+                        if (/^https?:\/\/[^\s$.?#].[^\s]*$/i.test(plain)) {
+                            try {
+                                const parsed = new URL(plain);
+                                const domain = parsed.hostname.replace(/^www\./, '');
+                                const favicon = `https://www.google.com/s2/favicons?domain=${domain}&sz=64`;
+                                event.preventDefault();
+                                this.editor
+                                    .chain()
+                                    .focus()
+                                    .insertContent({
+                                        type: 'bookmark',
+                                        attrs: {
+                                            url: plain,
+                                            title: domain,
+                                            domain,
+                                            favicon,
+                                            description: plain,
+                                        },
+                                    })
+                                    .run();
+                                return true;
+                            } catch (_) { }
+                        }
+                        return false;
+                    },
+                },
+            }),
+        ];
+    },
+});
+
+const BookmarkPrompt = Node.create({
+    name: 'bookmarkPrompt',
+    group: 'block',
+    atom: true,
+    selectable: false,
+    draggable: false,
+
+    parseHTML() {
+        return [{ tag: 'div[data-type="bookmark-prompt"]' }];
+    },
+
+    renderHTML({ HTMLAttributes }) {
+        return ['div', mergeAttributes(HTMLAttributes, { 'data-type': 'bookmark-prompt' })];
+    },
+
+    addNodeView() {
+        return (props) => new BookmarkPromptNodeView(props.node, props.view, props.getPos, props.editor);
+    },
+
+    addCommands() {
+        return {
+            insertBookmarkPrompt: () => ({ commands }) => {
+                return commands.insertContent({ type: this.name });
+            },
+        };
+    },
+});
+
+const CustomLink = Mark.create({
+    name: 'link',
+    priority: 1000,
+    keepOnSplit: false,
+    inclusive: false,
+    addAttributes() {
+        return {
+            href: {
+                default: null,
+                parseHTML: element => element.getAttribute('href'),
+            },
+            target: {
+                default: '_blank',
+            },
+            rel: {
+                default: 'noopener noreferrer nofollow',
+            },
+        };
+    },
+    parseHTML() {
+        return [
+            {
+                tag: 'a[href]:not(.veyra-bookmark-card):not([data-bookmark-url])',
+            },
+        ];
+    },
+    renderHTML({ HTMLAttributes }) {
+        return ['a', HTMLAttributes, 0];
+    },
+});
 
 // Evitar que Tiptap/ProseMirror bloquee el gesto nativo de pinch-to-zoom
 if (typeof document !== 'undefined') {
@@ -346,6 +785,9 @@ function getToolbarState() {
         isBulletList,
         isOrderedList,
         isTaskList,
+        isTable: editor.isActive('table'),
+        canMergeCells: editor.can().mergeCells(),
+        canSplitCell: editor.can().splitCell(),
         textAlign: editor.isActive({ textAlign: 'center' })
             ? 'center'
             : editor.isActive({ textAlign: 'right' })
@@ -356,6 +798,19 @@ function getToolbarState() {
         textColor: (editor.getAttributes('textStyle') && editor.getAttributes('textStyle').color) || null,
         highlightColor: (editor.getAttributes('highlight') && editor.getAttributes('highlight').color) || (editor.isActive('highlight') ? 'rgba(250, 204, 21, 0.35)' : null),
         fontFamily: (editor.getAttributes('textStyle') && editor.getAttributes('textStyle').fontFamily) || null,
+        fontSize: (editor.getAttributes('textStyle') && editor.getAttributes('textStyle').fontSize) || null,
+        stats: (() => {
+            const text = (editor.state && editor.state.doc && editor.state.doc.textContent) || '';
+            const trimmed = text.trim();
+            const words = trimmed.length > 0 ? trimmed.split(/\s+/).length : 0;
+            const characters = text.length;
+            const readingTimeMinutes = Math.max(1, Math.ceil(words / 200));
+            return {
+                words,
+                characters,
+                readingTimeMinutes: words > 0 ? readingTimeMinutes : 0,
+            };
+        })(),
     };
 }
 
@@ -411,23 +866,35 @@ function initEditor(fragmentName) {
                 history: false,
                 heading: {
                     levels: [1, 2, 3]
-                }
+                },
+                codeBlock: false,
             }),
+            CustomCodeBlock,
             Underline,
             TextStyle,
             Color,
             Highlight.configure({ multicolor: true }),
             FontFamily,
+            FontSize,
+            CustomTable,
+            TableRow,
+            CustomTableHeader,
+            CustomTableCell,
             TextAlign.configure({
-                types: ['heading', 'paragraph', 'image']
+                types: ['heading', 'paragraph', 'image', 'tableCell', 'tableHeader']
             }),
             CustomImage,
             YoutubeNode,
+            BookmarkNode,
+            BookmarkPrompt,
+            CustomLink,
             TaskList,
             TaskItem.configure({
                 nested: true,
                 onReadOnlyChecked: () => true
             }),
+            AIPrompt,
+            AICommandExtension,
             Collaboration.configure({
                 document: ydoc,
                 field: currentFragmentName
@@ -472,8 +939,15 @@ function initEditor(fragmentName) {
                 updateLocalCursor();
             }
             window.veyraBroadcastAwareness();
+            checkMobileSlashMenu();
         },
         onSelectionUpdate: () => {
+            if (editor && editor.state && editor.state.selection) {
+                const { from, to, empty } = editor.state.selection;
+                if (!empty) {
+                    lastSelectionSnapshot = { from, to };
+                }
+            }
             const isTaskList = editor ? editor.isActive('taskList') : false;
             const isOrderedList = !isTaskList && editor ? editor.isActive('orderedList') : false;
             const isBulletList = !isTaskList && !isOrderedList && editor ? editor.isActive('bulletList') : false;
@@ -492,6 +966,7 @@ function initEditor(fragmentName) {
                 updateLocalCursor();
             }
             window.veyraBroadcastAwareness();
+            checkMobileSlashMenu();
         },
         editorProps: {
             handlePaste: (view, event) => {
@@ -506,7 +981,7 @@ function initEditor(fragmentName) {
                         message: '[YT diag editorProps.handlePaste]',
                         payload: diagProps
                     });
-                } catch (_) {}
+                } catch (_) { }
 
                 const clipboardData = event.clipboardData;
                 if (!clipboardData) return false;
@@ -708,7 +1183,7 @@ function initEditor(fragmentName) {
             console.log('[YT diag paste-cap]', payload);
             try {
                 sendToNative({ type: 'DIAG_LOG', message: '[YT diag paste-cap]', payload });
-            } catch (_) {}
+            } catch (_) { }
         }, true);
 
         // B) MECANISMO A: beforeinput en document con capture (cubre Gboard / commitText)
@@ -724,7 +1199,7 @@ function initEditor(fragmentName) {
             console.log('[YT diag-v2 beforeinput]', diagV2);
             try {
                 sendToNative({ type: 'DIAG_LOG', message: '[YT diag-v2 beforeinput]', payload: diagV2 });
-            } catch (_) {}
+            } catch (_) { }
 
             const it = event.inputType || '';
             const isPasteLike =
@@ -753,7 +1228,7 @@ function initEditor(fragmentName) {
                 console.log('[YT fix MECANISMO A fired]', { videoId: m[1] });
                 try {
                     sendToNative({ type: 'DIAG_LOG', message: '[YT fix MECANISMO A fired]', payload: { videoId: m[1] } });
-                } catch (_) {}
+                } catch (_) { }
                 if (editor) {
                     editor.chain().focus().setYoutube({ videoId: m[1], embed: true }).run();
                 }
@@ -771,7 +1246,7 @@ function initEditor(fragmentName) {
             console.log('[YT diag-v2 input]', diagV2);
             try {
                 sendToNative({ type: 'DIAG_LOG', message: '[YT diag-v2 input]', payload: diagV2 });
-            } catch (_) {}
+            } catch (_) { }
 
             // Solo procesar inputs largos (paste-like). Filtra escritura manual.
             if (!event.data || event.data.length < 11) return;
@@ -791,7 +1266,7 @@ function initEditor(fragmentName) {
                     console.log('[YT fix MECANISMO B fired]', { videoId: m[1] });
                     try {
                         sendToNative({ type: 'DIAG_LOG', message: '[YT fix MECANISMO B fired]', payload: { videoId: m[1] } });
-                    } catch (_) {}
+                    } catch (_) { }
                     const start = $from.start();
                     const end = start + parent.content.size;
                     editor.chain().focus()
@@ -1548,6 +2023,12 @@ window.veyraSetEditing = function (isEditing) {
     }
 };
 
+window.veyraHandleAIResult = function (requestId, result) {
+    if (window.__veyraAIHandlers && window.__veyraAIHandlers.has(requestId)) {
+        window.__veyraAIHandlers.get(requestId)(result);
+    }
+};
+
 // Control de visibilidad de cursores según modo (visualización vs edición)
 window.veyraSetCursorVisible = function (visible) {
     areCursorsVisible = Boolean(visible);
@@ -2039,10 +2520,68 @@ window.veyraSetHighlight = function (color) {
 
 window.veyraSetFont = function (fontFamily) {
     if (!editor) return;
+    if (window.veyraRestoreSelection) window.veyraRestoreSelection();
     if (!fontFamily || fontFamily === 'default' || fontFamily === 'inherit') {
         editor.chain().focus().unsetFontFamily().run();
     } else {
         editor.chain().focus().setFontFamily(fontFamily).run();
+    }
+    if (editor.state && editor.state.selection && !editor.state.selection.empty) {
+        lastSelectionSnapshot = {
+            from: editor.state.selection.from,
+            to: editor.state.selection.to,
+        };
+    }
+    notifyToolbarStateChanged();
+};
+
+window.veyraSetFontSize = function (fontSize) {
+    if (!editor) return;
+    if (window.veyraRestoreSelection) window.veyraRestoreSelection();
+    if (!fontSize || fontSize === 'default' || fontSize === 'inherit') {
+        editor.chain().focus().unsetFontSize().run();
+    } else {
+        editor.chain().focus().setFontSize(fontSize).run();
+    }
+    if (editor.state && editor.state.selection && !editor.state.selection.empty) {
+        lastSelectionSnapshot = {
+            from: editor.state.selection.from,
+            to: editor.state.selection.to,
+        };
+    }
+    notifyToolbarStateChanged();
+};
+
+window.veyraIncreaseFontSize = function () {
+    if (!editor) return;
+    if (window.veyraRestoreSelection) window.veyraRestoreSelection();
+    const current = (editor.getAttributes('textStyle') && editor.getAttributes('textStyle').fontSize) || '16px';
+    const num = parseInt(current, 10) || 16;
+    const steps = [12, 14, 16, 18, 20, 24, 28, 32, 36];
+    const next = steps.find(s => s > num) || (num + 4);
+    editor.chain().focus().setFontSize(`${next}px`).run();
+    if (editor.state && editor.state.selection && !editor.state.selection.empty) {
+        lastSelectionSnapshot = {
+            from: editor.state.selection.from,
+            to: editor.state.selection.to,
+        };
+    }
+    notifyToolbarStateChanged();
+};
+
+window.veyraDecreaseFontSize = function () {
+    if (!editor) return;
+    if (window.veyraRestoreSelection) window.veyraRestoreSelection();
+    const current = (editor.getAttributes('textStyle') && editor.getAttributes('textStyle').fontSize) || '16px';
+    const num = parseInt(current, 10) || 16;
+    const steps = [12, 14, 16, 18, 20, 24, 28, 32, 36];
+    const prev = [...steps].reverse().find(s => s < num) || Math.max(10, num - 2);
+    editor.chain().focus().setFontSize(`${prev}px`).run();
+    if (editor.state && editor.state.selection && !editor.state.selection.empty) {
+        lastSelectionSnapshot = {
+            from: editor.state.selection.from,
+            to: editor.state.selection.to,
+        };
     }
     notifyToolbarStateChanged();
 };
@@ -2056,9 +2595,378 @@ window.veyraUnsetFormat = function () {
         .unsetColor()
         .unsetHighlight()
         .unsetFontFamily()
+        .unsetFontSize()
         .run();
     notifyToolbarStateChanged();
 };
+
+// ═══════════════════════════════════════════════════════════════
+// COMANDOS DE TABLAS PARA MÓVIL
+// ═══════════════════════════════════════════════════════════════
+window.veyraInsertTable = function (rows, cols) {
+    if (!editor) return;
+    editor.chain().focus().insertTable({ rows: rows || 3, cols: cols || 3, withHeaderRow: true }).run();
+    notifyToolbarStateChanged();
+};
+
+window.veyraAddRowAfter = function () {
+    if (!editor) return;
+    editor.chain().focus().addRowAfter().run();
+    notifyToolbarStateChanged();
+};
+
+window.veyraAddRowBefore = function () {
+    if (!editor) return;
+    editor.chain().focus().addRowBefore().run();
+    notifyToolbarStateChanged();
+};
+
+window.veyraDeleteRow = function () {
+    if (!editor) return;
+    editor.chain().focus().deleteRow().run();
+    notifyToolbarStateChanged();
+};
+
+window.veyraAddColumnAfter = function () {
+    if (!editor) return;
+    editor.chain().focus().addColumnAfter().run();
+    notifyToolbarStateChanged();
+};
+
+window.veyraAddColumnBefore = function () {
+    if (!editor) return;
+    editor.chain().focus().addColumnBefore().run();
+    notifyToolbarStateChanged();
+};
+
+window.veyraDeleteColumn = function () {
+    if (!editor) return;
+    editor.chain().focus().deleteColumn().run();
+    notifyToolbarStateChanged();
+};
+
+window.veyraMergeCells = function () {
+    if (!editor) return;
+    editor.chain().focus().mergeCells().run();
+    notifyToolbarStateChanged();
+};
+
+window.veyraSplitCell = function () {
+    if (!editor) return;
+    editor.chain().focus().splitCell().run();
+    notifyToolbarStateChanged();
+};
+
+window.veyraDeleteTable = function () {
+    if (!editor) return;
+    editor.chain().focus().deleteTable().run();
+    notifyToolbarStateChanged();
+};
+
+window.veyraToggleHeaderRow = function () {
+    if (!editor) return;
+    editor.chain().focus().toggleHeaderRow().run();
+    notifyToolbarStateChanged();
+};
+
+window.veyraSetCellColor = function (color) {
+    if (!editor) return;
+    if (!color || color === 'transparent') {
+        editor.chain().focus().setCellAttribute('backgroundColor', null).run();
+    } else {
+        editor.chain().focus().setCellAttribute('backgroundColor', color).run();
+    }
+    notifyToolbarStateChanged();
+};
+
+// ═══════════════════════════════════════════════════════════════
+// MENÚ SLASH (/) PARA MÓVIL
+// ═══════════════════════════════════════════════════════════════
+function normalizeSlashQuery(str) {
+    return (str || '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase()
+        .trim();
+}
+
+const MOBILE_SLASH_ITEMS = [
+    {
+        id: 'aiAssistant',
+        title: 'Asistente IA',
+        desc: 'Escribe /ia y crea tablas, tareas o código',
+        icon: '✦',
+        keywords: ['ia', 'ai', 'inteligencia', 'generar', 'tabla ia', 'asistente', 'crear con ia'],
+        action: () => editor.chain().focus().insertContent({ type: 'aiPrompt' }).run(),
+    },
+    {
+        id: 'h1',
+        title: 'Título 1',
+        desc: 'Encabezado grande para secciones',
+        icon: 'H1',
+        keywords: ['h1', 'titulo 1', 'encabezado 1', 'heading 1', 'header 1'],
+        action: () => editor.chain().focus().toggleHeading({ level: 1 }).run(),
+    },
+    {
+        id: 'h2',
+        title: 'Título 2',
+        desc: 'Subtítulo mediano',
+        icon: 'H2',
+        keywords: ['h2', 'titulo 2', 'subtitulo', 'heading 2', 'header 2'],
+        action: () => editor.chain().focus().toggleHeading({ level: 2 }).run(),
+    },
+    {
+        id: 'table',
+        title: 'Tabla',
+        desc: 'Insertar tabla 3x3',
+        icon: '▦',
+        keywords: ['tabla', 'table', 'cuadricula', 'grid', 'filas', 'columnas'],
+        action: () => editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run(),
+    },
+    {
+        id: 'bulletList',
+        title: 'Lista con viñetas',
+        desc: 'Lista simple con viñetas',
+        icon: '•',
+        keywords: ['lista', 'bullet', 'vineta', 'puntos', 'ul', 'list'],
+        action: () => editor.chain().focus().toggleBulletList().run(),
+    },
+    {
+        id: 'orderedList',
+        title: 'Lista numerada',
+        desc: 'Lista secuencial con números',
+        icon: '1.',
+        keywords: ['numerada', 'ordered', 'numero', 'orden', 'ol', 'numbered'],
+        action: () => editor.chain().focus().toggleOrderedList().run(),
+    },
+    {
+        id: 'taskList',
+        title: 'Lista de tareas',
+        desc: 'Casillas de verificación pendientes',
+        icon: '☑',
+        keywords: ['tarea', 'checklist', 'todo', 'task', 'casilla', 'verificacion'],
+        action: () => editor.chain().focus().toggleTaskList().run(),
+    },
+    {
+        id: 'blockquote',
+        title: 'Cita en bloque',
+        desc: 'Destacar frases o citas importantes',
+        icon: '❝',
+        keywords: ['cita', 'quote', 'blockquote', 'destacado'],
+        action: () => editor.chain().focus().toggleBlockquote().run(),
+    },
+    {
+        id: 'divider',
+        title: 'Línea divisoria',
+        desc: 'Separador horizontal visual',
+        icon: '―',
+        keywords: ['linea', 'divider', 'separador', 'hr', 'horizontal', 'regla'],
+        action: () => editor.chain().focus().setHorizontalRule().run(),
+    },
+    {
+        id: 'codeBlock',
+        title: 'Bloque de código',
+        desc: 'Fragmento de código preformateado',
+        icon: '<>',
+        keywords: ['codigo', 'code', 'snippet', 'programacion'],
+        action: () => editor.chain().focus().toggleCodeBlock().run(),
+    },
+    {
+        id: 'bookmark',
+        title: 'Enlace web o tarjeta',
+        desc: 'Insertar tarjeta previa o enlace directo (bibliografía)',
+        icon: '🔗',
+        keywords: ['enlace', 'link', 'bookmark', 'tarjeta', 'url', 'web', 'bibliografia'],
+        action: () => editor.chain().focus().insertContent({ type: 'bookmarkPrompt' }).run(),
+    },
+];
+
+let slashMenuContainer = null;
+let currentSlashRange = null;
+
+function getSlashTextBeforeCursor() {
+    if (!editor || !editor.state || !editor.state.selection) return null;
+    const { $from, empty } = editor.state.selection;
+    if (!empty) return null;
+    if (!$from.parent || !$from.parent.isTextblock) return null;
+
+    const textBefore = $from.parent.textBetween(0, $from.parentOffset, null, '\ufffc');
+    const slashIdx = textBefore.lastIndexOf('/');
+    if (slashIdx === -1) return null;
+
+    if (slashIdx > 0 && !/\s/.test(textBefore[slashIdx - 1])) {
+        return null;
+    }
+
+    const query = textBefore.slice(slashIdx + 1);
+    if (query.length > 20 || /\s\s/.test(query) || /\n/.test(query)) return null;
+
+    const fromPos = $from.pos - (textBefore.length - slashIdx);
+    const toPos = $from.pos;
+    return { query, fromPos, toPos };
+}
+
+function getFilteredSlashItems(query) {
+    const normQ = normalizeSlashQuery(query);
+    if (!normQ) return MOBILE_SLASH_ITEMS;
+    return MOBILE_SLASH_ITEMS.filter(item => {
+        const titleNorm = normalizeSlashQuery(item.title);
+        const descNorm = normalizeSlashQuery(item.desc);
+        if (titleNorm.includes(normQ) || descNorm.includes(normQ)) return true;
+        return item.keywords.some(k => normalizeSlashQuery(k).includes(normQ));
+    });
+}
+
+let lastRenderedQuery = null;
+let lastExecutedSlashTime = 0;
+
+function showMobileSlashMenu(slashInfo) {
+    if (typeof document === 'undefined') return;
+    if (!slashMenuContainer) {
+        slashMenuContainer = document.createElement('div');
+        slashMenuContainer.id = 'veyra-mobile-slash-menu';
+        slashMenuContainer.className = 'veyra-mobile-slash-menu';
+        slashMenuContainer.addEventListener('touchmove', (e) => {
+            e.stopPropagation();
+        }, { passive: true });
+        document.body.appendChild(slashMenuContainer);
+    }
+    currentSlashRange = slashInfo;
+    const query = slashInfo ? slashInfo.query : '';
+    const items = getFilteredSlashItems(query);
+
+    if (items.length === 0) {
+        hideMobileSlashMenu();
+        return;
+    }
+
+    if (lastRenderedQuery !== query) {
+        lastRenderedQuery = query;
+        slashMenuContainer.innerHTML = '';
+        items.forEach(item => {
+            const el = document.createElement('div');
+            el.className = 'veyra-slash-item';
+            el.innerHTML = `
+                <div class="veyra-slash-icon">${item.icon}</div>
+                <div class="veyra-slash-text">
+                    <span class="veyra-slash-title">${item.title}</span>
+                    <span class="veyra-slash-desc">${item.desc}</span>
+                </div>
+            `;
+
+            let startX = 0;
+            let startY = 0;
+            let isDragging = false;
+
+            el.addEventListener('touchstart', (e) => {
+                if (e.touches && e.touches[0]) {
+                    startX = e.touches[0].clientX;
+                    startY = e.touches[0].clientY;
+                    isDragging = false;
+                }
+            }, { passive: true });
+
+            el.addEventListener('touchmove', (e) => {
+                if (e.touches && e.touches[0]) {
+                    const dx = Math.abs(e.touches[0].clientX - startX);
+                    const dy = Math.abs(e.touches[0].clientY - startY);
+                    if (dx > 7 || dy > 7) {
+                        isDragging = true;
+                    }
+                }
+            }, { passive: true });
+
+            el.addEventListener('touchend', (e) => {
+                if (!isDragging) {
+                    const now = Date.now();
+                    if (now - lastExecutedSlashTime > 300) {
+                        lastExecutedSlashTime = now;
+                        e.preventDefault();
+                        e.stopPropagation();
+                        executeSlashItem(item);
+                    }
+                }
+            });
+
+            el.addEventListener('click', (e) => {
+                if (!isDragging) {
+                    const now = Date.now();
+                    if (now - lastExecutedSlashTime > 300) {
+                        lastExecutedSlashTime = now;
+                        e.preventDefault();
+                        e.stopPropagation();
+                        executeSlashItem(item);
+                    }
+                }
+            });
+
+            slashMenuContainer.appendChild(el);
+        });
+    }
+
+    try {
+        const coords = editor.view.coordsAtPos(slashInfo ? slashInfo.toPos : editor.state.selection.from);
+        const menuHeight = Math.min(items.length * 48 + 16, 230);
+        const screenHeight = window.innerHeight;
+        const screenWidth = window.innerWidth;
+
+        let top = coords.bottom + 8;
+        if (top + menuHeight > screenHeight - 60 && coords.top > menuHeight + 20) {
+            top = coords.top - menuHeight - 8;
+        }
+        let left = Math.max(12, Math.min(coords.left, screenWidth - 310 - 12));
+
+        slashMenuContainer.style.top = `${Math.max(10, top)}px`;
+        slashMenuContainer.style.left = `${left}px`;
+        slashMenuContainer.style.display = 'block';
+    } catch (_) {
+        slashMenuContainer.style.top = '60px';
+        slashMenuContainer.style.left = '16px';
+        slashMenuContainer.style.display = 'block';
+    }
+}
+
+function hideMobileSlashMenu() {
+    if (slashMenuContainer) {
+        slashMenuContainer.style.display = 'none';
+    }
+    currentSlashRange = null;
+    lastRenderedQuery = null;
+}
+
+function executeSlashItem(item) {
+    if (!editor) return;
+    if (currentSlashRange) {
+        editor.chain().focus().deleteRange({ from: currentSlashRange.fromPos, to: currentSlashRange.toPos }).run();
+    }
+    hideMobileSlashMenu();
+    item.action();
+    notifyToolbarStateChanged();
+}
+
+function checkMobileSlashMenu() {
+    const slashInfo = getSlashTextBeforeCursor();
+    if (slashInfo) {
+        showMobileSlashMenu(slashInfo);
+    } else {
+        hideMobileSlashMenu();
+    }
+}
+
+window.veyraOpenSlashMenu = function () {
+    if (!editor) return;
+    editor.commands.focus();
+    const sel = editor.state.selection;
+    showMobileSlashMenu({ query: '', fromPos: sel.from, toPos: sel.to });
+};
+
+if (typeof document !== 'undefined') {
+    document.addEventListener('pointerdown', (e) => {
+        if (slashMenuContainer && slashMenuContainer.style.display !== 'none' && !slashMenuContainer.contains(e.target)) {
+            hideMobileSlashMenu();
+        }
+    }, { capture: true });
+}
 
 window.veyraUndo = function () {
     if (editor) {

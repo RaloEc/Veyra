@@ -306,6 +306,646 @@ export function getTiptapHtml(options: { isDark?: boolean; isAmoled?: boolean; a
             opacity: 0.9;
         }
 
+        /* ─── Nodo Inline Asistente IA Minimalista Flat ─── */
+        .veyra-ai-prompt-wrapper {
+            margin: 8px 0;
+            width: 100%;
+        }
+        .veyra-ai-prompt-container {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 12px;
+            border-radius: 8px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            background: rgba(255, 255, 255, 0.04);
+            color: var(--text-color);
+            transition: border-color 0.15s ease;
+        }
+        html.light .veyra-ai-prompt-container,
+        html:not(.dark):not(.amoled) .veyra-ai-prompt-container {
+            border-color: rgba(0, 0, 0, 0.12);
+            background: rgba(0, 0, 0, 0.03);
+        }
+        .veyra-ai-prompt-label {
+            font-family: monospace;
+            font-size: 13px;
+            color: var(--text-secondary);
+            user-select: none;
+            -webkit-user-select: none;
+            flex-shrink: 0;
+        }
+        .veyra-ai-prompt-input {
+            flex: 1;
+            background: transparent;
+            border: none !important;
+            outline: none !important;
+            box-shadow: none !important;
+            color: var(--text-color);
+            font-size: 14px;
+            font-family: inherit;
+            padding: 0;
+            margin: 0;
+        }
+        .veyra-ai-prompt-input::placeholder {
+            color: var(--placeholder);
+            opacity: 0.7;
+        }
+        .veyra-ai-prompt-action {
+            display: flex;
+            align-items: center;
+            flex-shrink: 0;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        .veyra-ai-enter-badge {
+            font-family: monospace;
+            font-size: 11px;
+            color: var(--text-secondary);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            border-radius: 4px;
+            padding: 2px 6px;
+        }
+        html.light .veyra-ai-enter-badge,
+        html:not(.dark):not(.amoled) .veyra-ai-enter-badge {
+            border-color: rgba(0, 0, 0, 0.15);
+        }
+
+        /* Switch "Solo enlace" en /enlace */
+        .veyra-ai-switch-wrapper {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            cursor: pointer;
+            user-select: none;
+            -webkit-user-select: none;
+            padding: 2px 4px;
+            border-radius: 6px;
+            flex-shrink: 0;
+        }
+        .veyra-ai-switch-label {
+            font-size: 11px;
+            color: var(--text-secondary);
+            transition: color 0.15s ease;
+        }
+        .veyra-ai-switch-label.active {
+            color: var(--accent-primary, #6366f1);
+            font-weight: 600;
+        }
+        .veyra-ai-switch-track {
+            position: relative;
+            width: 26px;
+            height: 15px;
+            background: rgba(148, 163, 184, 0.35);
+            border-radius: 9999px;
+            transition: background-color 0.2s ease;
+        }
+        .veyra-ai-switch-track.active {
+            background: var(--accent-primary, #6366f1);
+        }
+        .veyra-ai-switch-thumb {
+            position: absolute;
+            top: 1.5px;
+            left: 1.5px;
+            width: 12px;
+            height: 12px;
+            background: #ffffff;
+            border-radius: 9999px;
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+            transition: transform 0.2s ease;
+        }
+        .veyra-ai-switch-track.active .veyra-ai-switch-thumb {
+            transform: translateX(11px);
+        }
+
+        /* Enlaces de hipervínculo estándar en Móvil (no tarjetas) */
+        .ProseMirror a:not(.veyra-bookmark-card) {
+            color: var(--accent-primary, #6366f1);
+            text-decoration: underline;
+            text-underline-offset: 3px;
+            word-break: break-all;
+            cursor: pointer;
+        }
+        html.dark .ProseMirror a:not(.veyra-bookmark-card),
+        html.amoled .ProseMirror a:not(.veyra-bookmark-card) {
+            color: #818cf8;
+        }
+        .veyra-ai-loading {
+            font-size: 12px;
+            color: var(--text-secondary);
+            animation: veyraPulse 1.2s infinite ease-in-out;
+        }
+        @keyframes veyraPulse {
+            0%, 100% { opacity: 0.6; }
+            50% { opacity: 1; }
+        }
+
+        /* ─── Bloques de Código en Móvil (Contenedor + Cabecera Minimalista) ─── */
+        .veyra-code-block-wrapper {
+            margin: 12px 0;
+            border-radius: 10px;
+            overflow: hidden;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            background: #0f1013;
+        }
+        html:not(.dark):not(.amoled) .veyra-code-block-wrapper {
+            background: #fcfcfd;
+            border-color: rgba(0, 0, 0, 0.1);
+        }
+        .veyra-code-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 5px 10px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            background: rgba(255, 255, 255, 0.02);
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        html:not(.dark):not(.amoled) .veyra-code-header {
+            border-bottom-color: rgba(0, 0, 0, 0.06);
+            background: rgba(0, 0, 0, 0.02);
+        }
+        .veyra-code-lang-container {
+            position: relative;
+        }
+        .veyra-code-lang-btn {
+            background: transparent;
+            border: none;
+            padding: 2px 6px;
+            border-radius: 6px;
+            color: #a1a1aa;
+            font-size: 11px;
+            font-weight: 500;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            cursor: pointer;
+            outline: none;
+            font-family: inherit;
+        }
+        .veyra-code-lang-btn:active {
+            background: rgba(255, 255, 255, 0.08);
+        }
+        .veyra-code-chevron {
+            font-size: 9px;
+            opacity: 0.6;
+        }
+        .veyra-code-lang-menu {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            margin-top: 4px;
+            background: #18181b;
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-radius: 8px;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+            z-index: 9999;
+            max-height: 180px;
+            overflow-y: auto;
+            -webkit-overflow-scrolling: touch;
+            width: 140px;
+            padding: 3px;
+        }
+        html:not(.dark):not(.amoled) .veyra-code-lang-menu {
+            background: #ffffff;
+            border-color: #e4e4e7;
+            box-shadow: 0 8px 20px rgba(0,0,0,0.12);
+        }
+        .veyra-code-lang-item {
+            padding: 6px 10px;
+            font-size: 11.5px;
+            color: #d4d4d8;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        html:not(.dark):not(.amoled) .veyra-code-lang-item {
+            color: #27272a;
+        }
+        .veyra-code-lang-item:active {
+            background: rgba(139, 92, 246, 0.2);
+            color: var(--accent-primary, #8b5cf6);
+        }
+        .veyra-code-actions {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+        .veyra-code-action-btn {
+            background: transparent;
+            border: none;
+            padding: 3px 6px;
+            border-radius: 5px;
+            color: #a1a1aa;
+            font-size: 11px;
+            font-weight: 500;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            cursor: pointer;
+            outline: none;
+            font-family: inherit;
+        }
+        .veyra-code-action-btn:active {
+            background: rgba(255, 255, 255, 0.08);
+        }
+        .veyra-code-wrap-btn.is-active {
+            color: var(--accent-primary, #8b5cf6);
+            background: rgba(139, 92, 246, 0.15);
+        }
+        .veyra-code-copy-btn.is-copied {
+            color: #10b981;
+        }
+
+        /* ─── Pre & Code en Móvil ─── */
+        .ProseMirror pre {
+            background: transparent !important;
+            border: none !important;
+            border-radius: 0 !important;
+            padding: 10px 12px;
+            margin: 0;
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+            font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+            font-size: 12.5px;
+            line-height: 1.6;
+            color: #9cdcfe;
+            tab-size: 2;
+        }
+        .ProseMirror pre.is-wrapped {
+            white-space: pre-wrap !important;
+            word-break: break-all !important;
+            overflow-x: hidden !important;
+        }
+        .ProseMirror pre.is-wrapped code {
+            white-space: pre-wrap !important;
+            word-break: break-all !important;
+        }
+        html:not(.dark):not(.amoled) .ProseMirror pre {
+            color: #001080;
+        }
+        .ProseMirror pre code {
+            background: transparent !important;
+            color: inherit !important;
+            padding: 0 !important;
+            border-radius: 0 !important;
+            font-size: inherit !important;
+            font-family: inherit !important;
+            display: block;
+            white-space: pre;
+        }
+        .ProseMirror :not(pre) > code {
+            background-color: rgba(139, 92, 246, 0.12);
+            color: var(--accent-primary, #8b5cf6);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 0.88em;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        }
+
+        /* ─── Tokens de Sintaxis en Móvil (VS Code Dark+) ─── */
+        .ProseMirror pre .hljs-keyword,
+        .ProseMirror pre .hljs-selector-tag {
+            color: #c586c0 !important;
+            font-weight: 500;
+        }
+        .ProseMirror pre .hljs-title.function_,
+        .ProseMirror pre .hljs-title.class_,
+        .ProseMirror pre .hljs-title {
+            color: #dcdcaa !important;
+            font-weight: 500;
+        }
+        .ProseMirror pre .hljs-property,
+        .ProseMirror pre .hljs-attr,
+        .ProseMirror pre .hljs-attribute {
+            color: #4ec9b0 !important;
+        }
+        .ProseMirror pre .hljs-string,
+        .ProseMirror pre .hljs-doctag {
+            color: #ce9178 !important;
+        }
+        .ProseMirror pre .hljs-number {
+            color: #b5cea8 !important;
+        }
+        .ProseMirror pre .hljs-literal,
+        .ProseMirror pre .hljs-boolean {
+            color: #569cd6 !important;
+        }
+        .ProseMirror pre .hljs-comment,
+        .ProseMirror pre .hljs-quote {
+            color: #6a9955 !important;
+            font-style: italic;
+        }
+        .ProseMirror pre .hljs-type,
+        .ProseMirror pre .hljs-built_in,
+        .ProseMirror pre .hljs-builtin-name {
+            color: #4ec9b0 !important;
+        }
+        .ProseMirror pre .hljs-tag {
+            color: #808080 !important;
+        }
+        .ProseMirror pre .hljs-name {
+            color: #569cd6 !important;
+        }
+        .ProseMirror pre .hljs-operator,
+        .ProseMirror pre .hljs-punctuation {
+            color: #d4d4d4 !important;
+        }
+        .ProseMirror pre .hljs-variable,
+        .ProseMirror pre .hljs-template-variable,
+        .ProseMirror pre .hljs-params {
+            color: #9cdcfe !important;
+        }
+        .ProseMirror pre .hljs-meta {
+            color: #9cdcfe !important;
+        }
+
+        /* Tokens de Sintaxis en Móvil (VS Code Light+) */
+        html:not(.dark):not(.amoled) .ProseMirror pre .hljs-keyword,
+        html:not(.dark):not(.amoled) .ProseMirror pre .hljs-selector-tag {
+            color: #af00db !important;
+        }
+        html:not(.dark):not(.amoled) .ProseMirror pre .hljs-title.function_,
+        html:not(.dark):not(.amoled) .ProseMirror pre .hljs-title.class_,
+        html:not(.dark):not(.amoled) .ProseMirror pre .hljs-title {
+            color: #795e26 !important;
+        }
+        html:not(.dark):not(.amoled) .ProseMirror pre .hljs-property,
+        html:not(.dark):not(.amoled) .ProseMirror pre .hljs-attr,
+        html:not(.dark):not(.amoled) .ProseMirror pre .hljs-attribute {
+            color: #0070c1 !important;
+        }
+        html:not(.dark):not(.amoled) .ProseMirror pre .hljs-string,
+        html:not(.dark):not(.amoled) .ProseMirror pre .hljs-doctag {
+            color: #a31515 !important;
+        }
+        html:not(.dark):not(.amoled) .ProseMirror pre .hljs-number {
+            color: #098658 !important;
+        }
+        html:not(.dark):not(.amoled) .ProseMirror pre .hljs-literal,
+        html:not(.dark):not(.amoled) .ProseMirror pre .hljs-boolean {
+            color: #0000ff !important;
+        }
+        html:not(.dark):not(.amoled) .ProseMirror pre .hljs-comment,
+        html:not(.dark):not(.amoled) .ProseMirror pre .hljs-quote {
+            color: #008000 !important;
+            font-style: italic;
+        }
+        html:not(.dark):not(.amoled) .ProseMirror pre .hljs-type,
+        html:not(.dark):not(.amoled) .ProseMirror pre .hljs-built_in,
+        html:not(.dark):not(.amoled) .ProseMirror pre .hljs-builtin-name {
+            color: #267f99 !important;
+        }
+        html:not(.dark):not(.amoled) .ProseMirror pre .hljs-name {
+            color: #800000 !important;
+        }
+
+        /* ─── Tablas en Móvil ─── */
+        .tableWrapper {
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+            margin: 12px 0;
+            max-width: 100%;
+        }
+        .veyra-table {
+            border-collapse: collapse;
+            table-layout: auto;
+            min-width: 100%;
+            margin: 0;
+            border: 1.5px solid var(--table-custom-border, rgba(148, 163, 184, 0.4));
+            border-radius: 4px;
+        }
+        .veyra-table tr {
+            box-sizing: border-box;
+        }
+        .veyra-table td,
+        .veyra-table th {
+            min-width: 80px;
+            padding: 5px 8px;
+            border: 1px solid var(--table-custom-border, rgba(148, 163, 184, 0.35));
+            vertical-align: middle;
+            box-sizing: border-box;
+            position: relative;
+            text-align: inherit;
+            line-height: 1.35;
+        }
+        .veyra-table th {
+            font-weight: 600;
+            background-color: rgba(148, 163, 184, 0.12);
+        }
+        .veyra-table p {
+            margin: 0 !important;
+            line-height: 1.35 !important;
+        }
+
+        /* Presets de tabla en Móvil */
+        .veyra-table[data-table-style="minimal"] {
+            border-left: none !important;
+            border-right: none !important;
+            border-top: 1.5px solid var(--table-custom-border, rgba(148, 163, 184, 0.4));
+            border-bottom: 1.5px solid var(--table-custom-border, rgba(148, 163, 184, 0.4));
+        }
+        .veyra-table[data-table-style="minimal"] td,
+        .veyra-table[data-table-style="minimal"] th {
+            border-left: none !important;
+            border-right: none !important;
+            border-top: 1px solid var(--table-custom-border, rgba(148, 163, 184, 0.25));
+            border-bottom: 1px solid var(--table-custom-border, rgba(148, 163, 184, 0.25));
+        }
+        .veyra-table[data-table-style="striped"] tr:nth-child(even) td {
+            background-color: rgba(148, 163, 184, 0.08);
+        }
+        .veyra-table[data-table-style="borderless"] {
+            border: none !important;
+        }
+        .veyra-table[data-table-style="borderless"] td,
+        .veyra-table[data-table-style="borderless"] th {
+            border: 1px solid transparent !important;
+        }
+        .veyra-table[data-table-style="compact"] td,
+        .veyra-table[data-table-style="compact"] th {
+            padding: 3px 6px !important;
+            font-size: 11.5px;
+        }
+
+        /* ─── Tarjetas de Enlace Web (Bookmarks) en Móvil (Estilo Notion con Portada) ─── */
+        .veyra-bookmark-card {
+            display: flex;
+            align-items: stretch;
+            justify-content: space-between;
+            margin: 12px 0;
+            border-radius: 12px;
+            border: 1px solid rgba(148, 163, 184, 0.28);
+            background: rgba(255, 255, 255, 0.9);
+            text-decoration: none !important;
+            color: inherit !important;
+            user-select: none;
+            -webkit-user-select: none;
+            overflow: hidden;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+            transition: all 0.15s ease;
+        }
+        .dark .veyra-bookmark-card,
+        .amoled .veyra-bookmark-card {
+            background: #18181b;
+            border-color: rgba(255, 255, 255, 0.1);
+        }
+        .veyra-bookmark-card:active {
+            opacity: 0.9;
+        }
+        .veyra-bookmark-body {
+            flex: 1;
+            min-width: 0;
+            padding: 10px 12px;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+        }
+        .veyra-bookmark-meta {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            font-size: 11px;
+            font-family: monospace;
+            color: #71717a;
+            margin-bottom: 4px;
+        }
+        .dark .veyra-bookmark-meta,
+        .amoled .veyra-bookmark-meta {
+            color: #a1a1aa;
+        }
+        .veyra-bookmark-favicon {
+            width: 13px;
+            height: 13px;
+            border-radius: 2px;
+            object-fit: contain;
+            flex-shrink: 0;
+        }
+        .veyra-bookmark-domain {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .veyra-bookmark-title {
+            font-size: 13.5px;
+            font-weight: 600;
+            color: #18181b;
+            line-height: 1.35;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+        }
+        .dark .veyra-bookmark-title,
+        .amoled .veyra-bookmark-title {
+            color: #f4f4f5;
+        }
+        .veyra-bookmark-desc {
+            font-size: 11.5px;
+            color: #71717a;
+            margin-top: 3px;
+            line-height: 1.4;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+        }
+        .dark .veyra-bookmark-desc,
+        .amoled .veyra-bookmark-desc {
+            color: #a1a1aa;
+        }
+        .veyra-bookmark-cover-wrapper {
+            width: 100px;
+            min-height: 80px;
+            flex-shrink: 0;
+            position: relative;
+            background: rgba(148, 163, 184, 0.12);
+            border-left: 1px solid rgba(148, 163, 184, 0.2);
+            overflow: hidden;
+        }
+        .veyra-bookmark-cover {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: block;
+        }
+
+        /* ─── Menú Flotante de Comandos (Slash Menu) en Móvil ─── */
+        .veyra-mobile-slash-menu {
+            position: fixed;
+            z-index: 99999;
+            width: calc(100vw - 32px);
+            max-width: 310px;
+            max-height: 230px;
+            overflow-y: auto !important;
+            -webkit-overflow-scrolling: touch !important;
+            touch-action: pan-y !important;
+            overscroll-behavior: contain;
+            user-select: none;
+            -webkit-user-select: none;
+            border-radius: 14px;
+            padding: 6px;
+            box-shadow: 0 12px 28px rgba(0, 0, 0, 0.35);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid rgba(148, 163, 184, 0.25);
+            background: rgba(255, 255, 255, 0.96);
+            color: #18181b;
+            font-family: 'Plus Jakarta Sans', system-ui, sans-serif;
+            font-size: 13px;
+        }
+        html.dark .veyra-mobile-slash-menu,
+        html.amoled .veyra-mobile-slash-menu {
+            background: rgba(24, 24, 27, 0.96);
+            color: #f4f4f5;
+            border-color: rgba(255, 255, 255, 0.15);
+        }
+        .veyra-slash-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 10px;
+            border-radius: 9px;
+            cursor: pointer;
+            transition: background 0.15s ease;
+            user-select: none;
+            -webkit-user-select: none;
+            touch-action: pan-y !important;
+            -webkit-tap-highlight-color: transparent;
+        }
+        .veyra-slash-item:active {
+            background: rgba(139, 92, 246, 0.2);
+        }
+        .veyra-slash-icon {
+            width: 28px;
+            height: 28px;
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(139, 92, 246, 0.15);
+            color: var(--accent-primary, #8b5cf6);
+            flex-shrink: 0;
+            font-size: 12px;
+            font-weight: 700;
+        }
+        .veyra-slash-text {
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        .veyra-slash-title {
+            font-weight: 600;
+            font-size: 13px;
+            line-height: 1.2;
+        }
+        .veyra-slash-desc {
+            font-size: 10.5px;
+            opacity: 0.65;
+            line-height: 1.2;
+            margin-top: 1px;
+        }
+
         /* ─── Imágenes en el Editor ─── */
         .ProseMirror img {
             max-width: 100%;
