@@ -37,13 +37,31 @@ import * as Linking from 'expo-linking';
 import { APP_NOTE_FONTS_MAP } from '../src/constants/noteFonts';
 
 const BACKGROUND_FETCH_TASK = 'background-reminder-check';
+const BACKGROUND_NOTIFICATION_TASK = 'background-notification-handler';
+
+// Tarea para procesar notificaciones silenciosas en segundo plano (ej. descartar avisos cuando se completan en la web)
+TaskManager.defineTask(BACKGROUND_NOTIFICATION_TASK, async ({ data, error }: any) => {
+    if (error) {
+        console.warn('[BackgroundTask] Error en notificación de fondo:', error);
+        return;
+    }
+    try {
+        const notifData = data?.notification?.data || data?.data;
+        if (notifData?.type === 'dismiss' && notifData?.reminderId) {
+            console.log('[BackgroundTask] 🛑 Descartando notificación de fondo para:', notifData.reminderId);
+            await NotificationService.cancelNotificationsForReminder(notifData.reminderId);
+        }
+    } catch (e) {
+        console.warn('[BackgroundTask] Excepción en background notification task:', e);
+    }
+});
 
 // Tarea de seguridad no-op: si un APK anterior dejó el Job registrado en el sistema operativo,
 // responde instantáneamente en 0ms y se desregistra para evitar cualquier congelamiento (ANR).
 TaskManager.defineTask(BACKGROUND_FETCH_TASK, async () => {
     try {
         await BackgroundFetch.unregisterTaskAsync(BACKGROUND_FETCH_TASK);
-    } catch {}
+    } catch { }
     return BackgroundFetch.BackgroundFetchResult.NoData;
 });
 
@@ -65,7 +83,7 @@ function AppShell({ theme, isAmoled }: { theme: 'dark' | 'light'; isAmoled: bool
                     (NavigationBar as any).setHidden(false);
                 }
                 if (isAmoled && typeof (NavigationBar as any).setBackgroundColorAsync === 'function') {
-                    (NavigationBar as any).setBackgroundColorAsync('#000000').catch(() => {});
+                    (NavigationBar as any).setBackgroundColorAsync('#000000').catch(() => { });
                 }
             } catch (err) {
                 console.warn('[NavigationBar] Failed to set navigation bar style:', err);
@@ -182,7 +200,7 @@ export default function RootLayout() {
                 const errMsg = String(e?.message || '');
                 if (errMsg.includes('Refresh Token') || errMsg.includes('refresh_token_not_found') || e?.name === 'AuthApiError') {
                     console.log('[Auth] Limpiando sesión huérfana de almacenamiento local...');
-                    setTimeout(() => supabase.auth.signOut().catch(() => {}), 0);
+                    setTimeout(() => supabase.auth.signOut().catch(() => { }), 0);
                     if (isMounted) applySessionIfChanged(null);
                 }
             } finally {
@@ -202,7 +220,7 @@ export default function RootLayout() {
                     setIsAuthChecking(false);
                 }
             } else if ((event as any) === 'USER_DELETED') {
-                setTimeout(() => supabase.auth.signOut().catch(() => {}), 0);
+                setTimeout(() => supabase.auth.signOut().catch(() => { }), 0);
                 if (isMounted) {
                     applySessionIfChanged(null);
                     setIsAuthChecking(false);
@@ -373,7 +391,7 @@ export default function RootLayout() {
                     useNotesStore.getState().loadNotes(),
                     useFoldersStore.getState().loadFolders(),
                     useEventsStore.getState().loadAllEvents(),
-                ]).catch(() => {});
+                ]).catch(() => { });
 
                 // Inicializar notificaciones y migraciones en segundo plano sin bloquear el arranque visual
                 (async () => {
@@ -385,7 +403,7 @@ export default function RootLayout() {
                         const initialSounds = useStore.getState().soundSettings;
                         await NotificationService.requestPermissions(initialSounds);
                         await NotificationService.registerCategories();
-                        NotificationService.getDiagnosticInfo().catch(() => {});
+                        NotificationService.getDiagnosticInfo().catch(() => { });
 
                         const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient || Constants.appOwnership === 'expo';
                         if (!isExpoGo) {
@@ -394,7 +412,12 @@ export default function RootLayout() {
                                 if (isRegistered) {
                                     await BackgroundFetch.unregisterTaskAsync(BACKGROUND_FETCH_TASK);
                                 }
-                            } catch {}
+                                // Registrar manejador en segundo plano para notificaciones push silenciosas
+                                const isNotifTaskReg = await TaskManager.isTaskRegisteredAsync(BACKGROUND_NOTIFICATION_TASK);
+                                if (!isNotifTaskReg) {
+                                    await Notifications.registerTaskAsync(BACKGROUND_NOTIFICATION_TASK);
+                                }
+                            } catch { }
                         }
                     } catch (bgErr) {
                         console.warn('[Layout] Background notification init notice:', bgErr);
@@ -411,11 +434,11 @@ export default function RootLayout() {
                         useStore.getState().theme || 'system',
                         useStore.getState().accentTheme || 'blue',
                         useStore.getState().amoledEnabled ?? false
-                    ).catch(() => {});
+                    ).catch(() => { });
                     WidgetService.syncAccessibility(
                         useStore.getState().widgetTextScale ?? 1.0,
                         useStore.getState().widgetHighContrast ?? false
-                    ).catch(() => {});
+                    ).catch(() => { });
                 }, 1200);
             } catch (err) {
                 console.error('Initialization Failed:', err);
@@ -427,10 +450,11 @@ export default function RootLayout() {
         const subscription = Notifications.addNotificationResponseReceivedListener(response => {
             const data = response.notification.request.content.data;
             const reminderId = data?.reminderId as string;
+            const eventId = data?.eventId as string;
             const targetType = data?.targetType as string;
             const targetId = data?.targetId as string;
             const actionId = response.actionIdentifier;
-            console.log(`[NotificationResponse] Accion recibida: "${actionId}" para reminder: "${reminderId || targetId}"`);
+            console.log(`[NotificationResponse] Accion recibida: "${actionId}" para item: "${reminderId || targetId || eventId}"`);
 
             if (reminderId) {
                 if (actionId === Notifications.DEFAULT_ACTION_IDENTIFIER) {
@@ -440,6 +464,8 @@ export default function RootLayout() {
                 } else if (actionId === 'SNOOZE') {
                     useStore.getState().snoozeReminder(reminderId, 10);
                 }
+            } else if (eventId && actionId === Notifications.DEFAULT_ACTION_IDENTIFIER) {
+                router.push(`/events/${eventId}` as any);
             } else if (targetType && targetId && actionId === Notifications.DEFAULT_ACTION_IDENTIFIER) {
                 if (targetType === 'reminder') {
                     router.push(`/reminder/${targetId}` as any);
@@ -451,10 +477,13 @@ export default function RootLayout() {
             }
         });
 
-        // Escucha en primer plano: si otro usuario completa un recordatorio compartido, cancelar alarmas locales
+        // Escucha en primer plano: si otro usuario completa un recordatorio compartido o si se descarta en la web
         const foregroundNotificationSub = Notifications.addNotificationReceivedListener(notification => {
             const data = notification.request.content.data;
-            if (data?.targetType === 'reminder' && data?.action === 'completed' && data?.targetId) {
+            if (data?.type === 'dismiss' && data?.reminderId) {
+                NotificationService.cancelNotificationsForReminder(data.reminderId as string);
+                useStore.getState().loadReminders();
+            } else if (data?.targetType === 'reminder' && data?.action === 'completed' && data?.targetId) {
                 NotificationService.cancelNotificationsForReminder(data.targetId as string);
                 useStore.getState().loadReminders();
             }
@@ -465,12 +494,15 @@ export default function RootLayout() {
             if (response) {
                 const data = response.notification.request.content.data;
                 const reminderId = data?.reminderId as string;
+                const eventId = data?.eventId as string;
                 const targetType = data?.targetType as string;
                 const targetId = data?.targetId as string;
                 const actionId = response.actionIdentifier;
-                console.log(`[NotificationResponse] Cold start respuesta: "${actionId}" para reminder: "${reminderId || targetId}"`);
+                console.log(`[NotificationResponse] Cold start respuesta: "${actionId}" para item: "${reminderId || targetId || eventId}"`);
                 if (reminderId && actionId === Notifications.DEFAULT_ACTION_IDENTIFIER) {
                     navigateToConfirm(reminderId);
+                } else if (eventId && actionId === Notifications.DEFAULT_ACTION_IDENTIFIER) {
+                    router.push(`/events/${eventId}` as any);
                 } else if (targetType && targetId && actionId === Notifications.DEFAULT_ACTION_IDENTIFIER) {
                     if (targetType === 'reminder') {
                         router.push(`/reminder/${targetId}` as any);
@@ -620,23 +652,23 @@ export default function RootLayout() {
             if (initialUrl) {
                 handleIncomingUrl(initialUrl);
             }
-        }).catch(() => {});
+        }).catch(() => { });
 
         // Sincronizar y procesar acciones del widget y nube al volver a primer plano o salir a segundo plano
         const appStateSubscription = AppState.addEventListener('change', (nextAppState) => {
             if (nextAppState === 'active') {
                 WidgetService.processPendingActions()
                     .then(() => WidgetService.syncAll())
-                    .catch(() => {});
+                    .catch(() => { });
 
                 // Sincronización en segundo plano con Supabase al reabrir la app (respetando cooldown de 2.5 min)
                 const state = useStore.getState();
                 if (state.session?.user?.id && state.cloudSyncEnabled && !state.isSyncing) {
-                    state.triggerSync(false, true).catch(() => {});
+                    state.triggerSync(false, true).catch(() => { });
                 }
             } else if (nextAppState === 'background' || nextAppState === 'inactive') {
                 // Al minimizar o salir de la app, forzar que el widget refleje inmediatamente los últimos cambios
-                updateTodayWidget().catch(() => {});
+                updateTodayWidget().catch(() => { });
             }
         });
 

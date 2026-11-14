@@ -7,6 +7,7 @@ import { useStore } from '../store/useStore';
 import { useNotesStore } from '../store/useNotesStore';
 import { useFoldersStore } from '../store/useFoldersStore';
 import { useEventsStore } from '../store/useEventsStore';
+import Constants from 'expo-constants';
 
 class RealtimeServiceManager {
     private channel: RealtimeChannel | null = null;
@@ -139,7 +140,7 @@ class RealtimeServiceManager {
                     }
                 }
             )
-            // ─── 5. AJUSTES EN VIVO (THEME_CHANGED) ────────────────────
+            // ─── 5. AJUSTES EN VIVO (THEME_CHANGED / SETTINGS_CHANGED) ───
             .on(
                 'broadcast',
                 { event: 'THEME_CHANGED' },
@@ -147,6 +148,48 @@ class RealtimeServiceManager {
                     if (payload?.accentTheme) {
                         console.log(`[RealtimeService] 🎨 Tema de acento recibido por Realtime: ${payload.accentTheme}`);
                         useStore.getState().setAccentTheme(payload.accentTheme, true);
+                    }
+                }
+            )
+            .on(
+                'broadcast',
+                { event: 'SETTINGS_CHANGED' },
+                ({ payload }) => {
+                    if (payload?.settings) {
+                        console.log('[RealtimeService] ⚙️ Ajustes recibidos desde la Web por Realtime');
+                        const s = payload.settings;
+                        if (s.accentTheme) useStore.getState().setAccentTheme(s.accentTheme, true);
+                        if (s.theme) useStore.getState().setTheme(s.theme);
+                        if (s.defaultControlLevel) useStore.getState().setDefaultControlLevel(s.defaultControlLevel);
+                        if (s.userName) useStore.getState().setUserName(s.userName);
+                        if (s.userProfile) useStore.getState().setUserProfile(s.userProfile);
+                        if (s.notePageFormat) useStore.getState().setNotePageFormat(s.notePageFormat);
+                    }
+                }
+            )
+            // ─── 6. CIERRE DE SESIÓN REMOTO (REVOCACIÓN DE DISPOSITIVO) ───
+            .on(
+                'broadcast',
+                { event: 'FORCE_SIGNOUT_DEVICE' },
+                async ({ payload }) => {
+                    const currentDeviceId = Constants.installationId;
+                    const targetToken = payload?.targetToken;
+                    const targetDeviceId = payload?.targetDeviceId;
+
+                    // Si la orden apunta a este hardware o a todos
+                    const isTarget =
+                        !targetDeviceId ||
+                        targetDeviceId === '*' ||
+                        (currentDeviceId && targetDeviceId === currentDeviceId) ||
+                        (payload?.pushTokenId && payload?.pushTokenId === targetToken);
+
+                    if (isTarget) {
+                        console.log('[RealtimeService] 🔒 Orden de cierre de sesión remoto recibida. Cerrando sesión...');
+                        try {
+                            await useStore.getState().signOut();
+                        } catch (err) {
+                            console.warn('[RealtimeService] Error durante cierre forzado:', err);
+                        }
                     }
                 }
             )

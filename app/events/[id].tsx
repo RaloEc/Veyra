@@ -256,11 +256,19 @@ export default function EventDetailScreen() {
     const endDate = useMemo(() => new Date(event?.end_time_ms || Date.now()), [event?.end_time_ms]);
     const displayDate = useMemo(() => {
         if (occurrenceDateParam) {
+            if (/^\d{4}-\d{2}-\d{2}$/.test(occurrenceDateParam)) {
+                const [y, m, d] = occurrenceDateParam.split('-').map(Number);
+                return new Date(y, m - 1, d, 12, 0, 0);
+            }
             const parsed = new Date(occurrenceDateParam);
             if (!isNaN(parsed.getTime())) return parsed;
         }
+        if (event?.is_all_day && event?.all_day_date && /^\d{4}-\d{2}-\d{2}$/.test(event.all_day_date)) {
+            const [y, m, d] = event.all_day_date.split('-').map(Number);
+            return new Date(y, m - 1, d, 12, 0, 0);
+        }
         return startDate;
-    }, [occurrenceDateParam, startDate]);
+    }, [occurrenceDateParam, startDate, event?.is_all_day, event?.all_day_date]);
 
     const isAllDay = Boolean(event?.is_all_day);
     const isRecurring = Boolean(

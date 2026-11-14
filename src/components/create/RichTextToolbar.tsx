@@ -184,6 +184,7 @@ export function RichTextToolbar({
     const [isTableActive, setIsTableActive] = useState<boolean>(false);
     const [canMergeCells, setCanMergeCells] = useState<boolean>(false);
     const [canSplitCell, setCanSplitCell] = useState<boolean>(false);
+    const [activeTableAlign, setActiveTableAlign] = useState<'left' | 'center' | 'right'>('left');
     const lastActionTimestamp = useRef<number>(0);
     const theme = useVeyraTheme();
     const colors = theme.colors;
@@ -230,6 +231,7 @@ export function RichTextToolbar({
                     let foundTable = false;
                     let foundMerge = false;
                     let foundSplit = false;
+                    let foundTableAlign: 'left' | 'center' | 'right' = 'left';
 
                     for (const item of items) {
                         if (typeof item === 'string') {
@@ -240,6 +242,7 @@ export function RichTextToolbar({
                                 foundTable = Boolean(item.isTable);
                                 foundMerge = Boolean(item.canMergeCells);
                                 foundSplit = Boolean(item.canSplitCell);
+                                if (item.tableAlign) foundTableAlign = item.tableAlign;
                             } else if (item.type === 'foreColor' && item.value) {
                                 foundTextColor = item.value;
                             } else if (item.type === 'hiliteColor' && item.value) {
@@ -256,6 +259,7 @@ export function RichTextToolbar({
                     setIsTableActive(foundTable);
                     setCanMergeCells(foundMerge);
                     setCanSplitCell(foundSplit);
+                    setActiveTableAlign(foundTableAlign);
 
                     if (foundTextColor && isCustomTextColor(foundTextColor, isDark)) {
                         setActiveTextColor(foundTextColor);
@@ -355,6 +359,8 @@ export function RichTextToolbar({
                 ...prev.filter(s => !s.startsWith('justify')),
                 action,
             ]);
+        } else if (action === 'setTableAlign') {
+            setActiveTableAlign(data || 'left');
         }
     };
 
@@ -778,6 +784,63 @@ export function RichTextToolbar({
                         >
                             <AlignJustify size={18} color={getActiveIconColor(isAlignFullActive)} />
                         </TouchableOpacity>
+
+                        {isTableActive && (
+                            <>
+                                <View style={{ width: 1, height: 18, backgroundColor: colors.borderSubtle, marginHorizontal: 8 }} />
+                                <Text style={{ fontSize: 11, fontWeight: '700', color: colors.textSecondary, alignSelf: 'center', marginRight: 6 }}>
+                                    Tabla:
+                                </Text>
+                                <TouchableOpacity
+                                    style={[
+                                        styles.toolBtn,
+                                        activeTableAlign === 'left' && {
+                                            backgroundColor: accent.primary + '22',
+                                            borderColor: accent.primary + '66',
+                                            borderWidth: 1.5,
+                                        },
+                                    ]}
+                                    activeOpacity={0.6}
+                                    delayPressIn={0}
+                                    hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}
+                                    onPress={() => handleAction('setTableAlign', 'left')}
+                                >
+                                    <AlignLeft size={16} color={(activeTableAlign === 'left' ? accent.primary : colors.textPrimary) as any} />
+                                </TouchableOpacity>
+                                <TouchableOpacity
+                                    style={[
+                                        styles.toolBtn,
+                                        activeTableAlign === 'center' && {
+                                            backgroundColor: accent.primary + '22',
+                                            borderColor: accent.primary + '66',
+                                            borderWidth: 1.5,
+                                        },
+                                    ]}
+                                    activeOpacity={0.6}
+                                    delayPressIn={0}
+                                    hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}
+                                    onPress={() => handleAction('setTableAlign', 'center')}
+                                >
+                                    <AlignCenter size={16} color={(activeTableAlign === 'center' ? accent.primary : colors.textPrimary) as any} />
+                                </TouchableOpacity>
+                                <TouchableOpacity
+                                    style={[
+                                        styles.toolBtn,
+                                        activeTableAlign === 'right' && {
+                                            backgroundColor: accent.primary + '22',
+                                            borderColor: accent.primary + '66',
+                                            borderWidth: 1.5,
+                                        },
+                                    ]}
+                                    activeOpacity={0.6}
+                                    delayPressIn={0}
+                                    hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}
+                                    onPress={() => handleAction('setTableAlign', 'right')}
+                                >
+                                    <AlignRight size={16} color={(activeTableAlign === 'right' ? accent.primary : colors.textPrimary) as any} />
+                                </TouchableOpacity>
+                            </>
+                        )}
                     </ScrollView>
                 </View>
             )}
@@ -1254,6 +1317,60 @@ export function RichTextToolbar({
                                         Dividir
                                     </Text>
                                 </TouchableOpacity>
+
+                                <View style={{ width: 1, height: 18, backgroundColor: colors.borderSubtle, marginHorizontal: 4 }} />
+
+                                {/* Posición de la tabla (Izquierda, Centro, Derecha) */}
+                                <TouchableOpacity
+                                    style={[
+                                        styles.toolBtn,
+                                        activeTableAlign === 'left' && {
+                                            backgroundColor: accent.primary + '22',
+                                            borderColor: accent.primary + '66',
+                                            borderWidth: 1.5,
+                                        },
+                                    ]}
+                                    activeOpacity={0.6}
+                                    delayPressIn={0}
+                                    hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}
+                                    onPress={() => handleAction('setTableAlign', 'left')}
+                                >
+                                    <AlignLeft size={16} color={(activeTableAlign === 'left' ? accent.primary : colors.textPrimary) as any} />
+                                </TouchableOpacity>
+                                <TouchableOpacity
+                                    style={[
+                                        styles.toolBtn,
+                                        activeTableAlign === 'center' && {
+                                            backgroundColor: accent.primary + '22',
+                                            borderColor: accent.primary + '66',
+                                            borderWidth: 1.5,
+                                        },
+                                    ]}
+                                    activeOpacity={0.6}
+                                    delayPressIn={0}
+                                    hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}
+                                    onPress={() => handleAction('setTableAlign', 'center')}
+                                >
+                                    <AlignCenter size={16} color={(activeTableAlign === 'center' ? accent.primary : colors.textPrimary) as any} />
+                                </TouchableOpacity>
+                                <TouchableOpacity
+                                    style={[
+                                        styles.toolBtn,
+                                        activeTableAlign === 'right' && {
+                                            backgroundColor: accent.primary + '22',
+                                            borderColor: accent.primary + '66',
+                                            borderWidth: 1.5,
+                                        },
+                                    ]}
+                                    activeOpacity={0.6}
+                                    delayPressIn={0}
+                                    hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}
+                                    onPress={() => handleAction('setTableAlign', 'right')}
+                                >
+                                    <AlignRight size={16} color={(activeTableAlign === 'right' ? accent.primary : colors.textPrimary) as any} />
+                                </TouchableOpacity>
+
+                                <View style={{ width: 1, height: 18, backgroundColor: colors.borderSubtle, marginHorizontal: 4 }} />
 
                                 <TouchableOpacity
                                     style={[styles.toolBtn, { backgroundColor: 'rgba(239, 68, 68, 0.15)', minWidth: 34 }]}

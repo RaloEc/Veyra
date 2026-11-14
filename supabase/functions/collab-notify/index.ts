@@ -1,14 +1,24 @@
 // Supabase Edge Function: collab-notify
-// Desplegable con: supabase functions deploy collab-notify
-// Notifica a los miembros y dueños de un recurso compartido cuando se produce una acción.
+// Notifica a los miembros y dueños de un recurso compartido (Móvil vía Expo + Web vía Web Push)
 
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.8';
+import * as webPush from 'https://esm.sh/web-push@3.6.7?target=deno';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
+
+const VAPID_PUBLIC_KEY = Deno.env.get('VAPID_PUBLIC_KEY') || 'BN6CaKHTF5yD1p3DhLk7Wg9bcChY4OrYA7t8SSfsZ8Ca5BGU6qVRmzcb7kGU9QNkHLMyJ2exCnGMOMOpEIvKqQg';
+const VAPID_PRIVATE_KEY = Deno.env.get('VAPID_PRIVATE_KEY') || 'MqjjQWUlfIYV-v911pFFiOYvZqzDWRZ7rr6hbGl8IxY';
+const VAPID_SUBJECT = Deno.env.get('VAPID_SUBJECT') || 'mailto:admin@veyra.app';
+
+try {
+  webPush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
+} catch (e) {
+  console.warn('[collab-notify] WebPush VAPID config warning:', e);
+}
 
 interface NotifyPayload {
   targetType: 'folder' | 'reminder' | 'note' | 'event';
@@ -120,26 +130,7 @@ serve(async (req: Request) => {
       });
     }
 
-    // 4. Buscar push tokens activos para los destinatarios
-    const { data: tokens, error: tokensError } = await supabase
-      .from('push_tokens')
-      .select('token')
-      .in('user_id', recipientIds);
-
-    if (tokensError) {
-      console.error('[collab-notify] Error fetching push tokens:', tokensError);
-    }
-
-    const validTokens = (tokens || []).map(t => t.token).filter(Boolean);
-
-    if (validTokens.length === 0) {
-      return new Response(JSON.stringify({ success: true, message: 'No push tokens found' }), {
-        status: 200,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
-    }
-
-    // 5. Construir cuerpo del mensaje
+    // 4. Construir cuerpo del mensaje
     const name = actorName || 'Un colaborador';
     const title = itemTitle || 'un elemento';
 
@@ -170,44 +161,94 @@ serve(async (req: Request) => {
         break;
     }
 
-    // 6. Enviar a Expo Push API
-    const pushMessages = validTokens.map(token => ({
-      to: token,
-      sound: 'default',
-      title: 'Veyra',
-      body: bodyText,
-      data: {
-        targetType,
-        targetId,
-        action,
-      },
-    }));
+    // 5. Enviar a Móvil (Expo Push API)
+    const { data: tokens } = await supabase
+      .from('push_tokens')
+      .select('token')
+      .in('user_id', recipientIds);
 
-    const expoRes = await fetch('https://exp.host/--/api/v2/push/send', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Accept: 'application/json',
-      },
-      body: JSON.stringify(pushMessages),
-    });
+    const validTokens = (tokens || []).map((t) => t.token).filter(Boolean);
+    let expoSent = 0;
 
-    const expoData = await expoRes.json();
+    if (validTokens.length > 0) {
+      const pushMessages = validTokens.map((token) => ({
+        to: token,
+        sound: 'default',
+        title: 'Veyra Colaboración',
+        body: bodyText,
+        data: {
+          targetType,
+          targetId,
+          action,
+        },
+      }));
+
+      try {
+        const expoRes = await fetch('https://exp.host/--/api/v2/push/send', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Accept: 'application/json',
+          },
+          body: JSON.stringify(pushMessages),
+        });
+        if (expoRes.ok) {
+          expoSent = pushMessages.length;
+        }
+      } catch (expoErr) {
+        console.error('[collab-notify] Expo send error:', expoErr);
+      }
+    }
+
+    // 6. Enviar a Web (Web Push API)
+    const { data: webSubs } = await supabase
+      .from('web_push_subscriptions')
+      .select('id, endpoint, p256dh, auth')
+      .in('user_id', recipientIds);
+
+    let webSent = 0;
+    if (webSubs && webSubs.length > 0) {
+      const webPayload = JSON.stringify({
+        title: 'Veyra Colaboración',
+        body: bodyText,
+        url: targetType === 'reminder' ? `/reminders/${targetId}` : `/notes/${targetId}`,
+        tag: `collab-${targetType}-${targetId}`,
+      });
+
+      for (const sub of webSubs) {
+        try {
+          const pushSubscription = {
+            endpoint: sub.endpoint,
+            keys: {
+              p256dh: sub.p256dh,
+              auth: sub.auth,
+            },
+          };
+          await webPush.sendNotification(pushSubscription, webPayload);
+          webSent++;
+        } catch (pushErr: unknown) {
+          const errorStatus = (pushErr as { statusCode?: number })?.statusCode;
+          if (errorStatus === 404 || errorStatus === 410) {
+            await supabase.from('web_push_subscriptions').delete().eq('id', sub.id);
+          }
+        }
+      }
+    }
 
     return new Response(
       JSON.stringify({
         success: true,
-        sent: pushMessages.length,
-        expoResponse: expoData,
+        expoSent,
+        webSent,
       }),
       {
         status: 200,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       }
     );
-  } catch (err: any) {
+  } catch (err: unknown) {
     console.error('[collab-notify] Unexpected error:', err);
-    return new Response(JSON.stringify({ error: err.message }), {
+    return new Response(JSON.stringify({ error: String(err) }), {
       status: 500,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });

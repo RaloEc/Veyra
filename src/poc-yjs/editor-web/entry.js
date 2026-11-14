@@ -23,7 +23,7 @@ import { AIPromptNodeView } from './aiprompt-nodeview.js';
 import { BookmarkPromptNodeView } from './bookmarkprompt-nodeview.js';
 import * as Y from 'yjs';
 import * as awarenessProtocol from 'y-protocols/awareness';
-import { ySyncPluginKey, yCursorPluginKey, absolutePositionToRelativePosition } from 'y-prosemirror';
+import { ySyncPluginKey, yCursorPluginKey, absolutePositionToRelativePosition, yXmlFragmentToProseMirrorRootNode } from 'y-prosemirror';
 import { DOMSerializer } from 'prosemirror-model';
 import { Plugin, PluginKey } from 'prosemirror-state';
 
@@ -162,6 +162,17 @@ const CustomTable = Table.extend({
                     return {
                         'data-border-color': attributes.borderColor,
                         style: `--table-custom-border: ${attributes.borderColor};`,
+                    };
+                },
+            },
+            tableAlign: {
+                default: 'left',
+                parseHTML: element => element.getAttribute('data-table-align') || element.getAttribute('align') || 'left',
+                renderHTML: attributes => {
+                    const align = attributes.tableAlign || 'left';
+                    return {
+                        'data-table-align': align,
+                        align: align,
                     };
                 },
             },
@@ -524,12 +535,21 @@ const BookmarkNode = Node.create({
                     return { 'data-bookmark-image': attributes.image };
                 },
             },
+            isLoading: {
+                default: false,
+                parseHTML: element => element.getAttribute('data-bookmark-loading') === 'true',
+                renderHTML: attributes => {
+                    if (!attributes.isLoading) return {};
+                    return { 'data-bookmark-loading': 'true' };
+                },
+            },
         };
     },
 
     parseHTML() {
         return [
             { tag: 'div[data-bookmark-url]' },
+            { tag: 'div[data-bookmark-card]' },
             { tag: 'a[data-bookmark-card]' },
         ];
     },
@@ -541,16 +561,89 @@ const BookmarkNode = Node.create({
         const domain = HTMLAttributes['data-bookmark-domain'] || '';
         const favicon = HTMLAttributes['data-bookmark-favicon'] || '';
         const image = HTMLAttributes['data-bookmark-image'] || '';
+        const isLoading = HTMLAttributes['data-bookmark-loading'] === 'true' || HTMLAttributes.isLoading;
+
+        if (isLoading) {
+            return [
+                'div',
+                mergeAttributes(
+                    {
+                        class: 'veyra-bookmark-card veyra-bookmark-skeleton',
+                        'data-bookmark-card': '',
+                        'data-bookmark-url': url,
+                        'data-bookmark-loading': 'true',
+                    },
+                    HTMLAttributes
+                ),
+                [
+                    'div',
+                    { class: 'veyra-bookmark-body' },
+                    [
+                        'div',
+                        { class: 'veyra-bookmark-meta' },
+                        favicon
+                            ? [
+                                'img',
+                                {
+                                    class: 'veyra-bookmark-favicon',
+                                    src: favicon,
+                                    alt: '',
+                                },
+                            ]
+                            : ['span', {}],
+                        ['span', { class: 'veyra-bookmark-domain' }, domain || url],
+                        ['span', { class: 'veyra-bookmark-loading-pill' }, 'Cargando...'],
+                    ],
+                    [
+                        'div',
+                        { class: 'veyra-bookmark-skeleton-lines' },
+                        ['div', { class: 'veyra-skeleton-line veyra-skeleton-title-1' }],
+                        ['div', { class: 'veyra-skeleton-line veyra-skeleton-title-2' }],
+                        ['div', { class: 'veyra-skeleton-line veyra-skeleton-desc' }],
+                    ],
+                    [
+                        'div',
+                        { class: 'veyra-bookmark-footer' },
+                        [
+                            'a',
+                            {
+                                class: 'veyra-bookmark-open-link',
+                                href: url,
+                                target: '_blank',
+                                rel: 'noopener noreferrer',
+                            },
+                            'Abrir ↗',
+                        ],
+                        [
+                            'div',
+                            {
+                                class: 'veyra-bookmark-switch-btn',
+                                'data-bookmark-action': 'convert-to-text',
+                                title: 'Cambiar a solo enlace en texto',
+                            },
+                            ['span', { class: 'veyra-bookmark-switch-label' }, 'Solo texto'],
+                            [
+                                'div',
+                                { class: 'veyra-bookmark-switch-track' },
+                                ['span', { class: 'veyra-bookmark-switch-thumb' }],
+                            ],
+                        ],
+                    ],
+                ],
+                [
+                    'div',
+                    { class: 'veyra-bookmark-cover-wrapper veyra-skeleton-cover' },
+                ],
+            ];
+        }
 
         return [
-            'a',
+            'div',
             mergeAttributes(
                 {
-                    href: url,
-                    target: '_blank',
-                    rel: 'noopener noreferrer',
                     class: 'veyra-bookmark-card',
                     'data-bookmark-card': '',
+                    'data-bookmark-url': url,
                 },
                 HTMLAttributes
             ),
@@ -575,6 +668,34 @@ const BookmarkNode = Node.create({
                 ],
                 ['div', { class: 'veyra-bookmark-title' }, title],
                 desc ? ['div', { class: 'veyra-bookmark-desc' }, desc] : ['span', {}],
+                [
+                    'div',
+                    { class: 'veyra-bookmark-footer' },
+                    [
+                        'a',
+                        {
+                            class: 'veyra-bookmark-open-link',
+                            href: url,
+                            target: '_blank',
+                            rel: 'noopener noreferrer',
+                        },
+                        'Abrir ↗',
+                    ],
+                    [
+                        'div',
+                        {
+                            class: 'veyra-bookmark-switch-btn',
+                            'data-bookmark-action': 'convert-to-text',
+                            title: 'Cambiar a solo enlace en texto',
+                        },
+                        ['span', { class: 'veyra-bookmark-switch-label' }, 'Solo texto'],
+                        [
+                            'div',
+                            { class: 'veyra-bookmark-switch-track' },
+                            ['span', { class: 'veyra-bookmark-switch-thumb' }],
+                        ],
+                    ],
+                ],
             ],
             image
                 ? [
@@ -598,12 +719,12 @@ const BookmarkNode = Node.create({
         return {
             setBookmark:
                 attributes =>
-                ({ commands }) => {
-                    return commands.insertContent({
-                        type: this.name,
-                        attrs: attributes,
-                    });
-                },
+                    ({ commands }) => {
+                        return commands.insertContent({
+                            type: this.name,
+                            attrs: attributes,
+                        });
+                    },
         };
     },
 
@@ -627,6 +748,8 @@ const BookmarkNode = Node.create({
                                 const domain = parsed.hostname.replace(/^www\./, '');
                                 const favicon = `https://www.google.com/s2/favicons?domain=${domain}&sz=64`;
                                 event.preventDefault();
+
+                                // 1. Inserción inmediata de la tarjeta con estado de carga (Skeleton animado)
                                 this.editor
                                     .chain()
                                     .focus()
@@ -637,10 +760,64 @@ const BookmarkNode = Node.create({
                                             title: domain,
                                             domain,
                                             favicon,
-                                            description: plain,
+                                            description: '',
+                                            image: null,
+                                            isLoading: true,
                                         },
                                     })
                                     .run();
+
+                                // 2. Carga en segundo plano de metadatos OpenGraph vía Microlink
+                                const controller = new AbortController();
+                                const timeout = setTimeout(() => controller.abort(), 4000);
+                                fetch(`https://api.microlink.io?url=${encodeURIComponent(plain)}`, {
+                                    signal: controller.signal,
+                                })
+                                    .then(r => r.ok ? r.json() : null)
+                                    .then(json => {
+                                        clearTimeout(timeout);
+                                        let title = domain;
+                                        let description = '';
+                                        let metaFavicon = favicon;
+                                        let image = null;
+                                        if (json && json.status === 'success' && json.data) {
+                                            title = json.data.title || title;
+                                            description = json.data.description || '';
+                                            metaFavicon = json.data.logo?.url || favicon;
+                                            image = json.data.image?.url || null;
+                                        }
+                                        if (this.editor && !this.editor.isDestroyed) {
+                                            const { state } = this.editor;
+                                            state.doc.descendants((node, pos) => {
+                                                if (node.type.name === 'bookmark' && node.attrs.url === plain && node.attrs.isLoading) {
+                                                    this.editor.chain().setNodeMarkup(pos, undefined, {
+                                                        ...node.attrs,
+                                                        title,
+                                                        description,
+                                                        favicon: metaFavicon,
+                                                        image,
+                                                        isLoading: false,
+                                                    }).run();
+                                                    return false;
+                                                }
+                                            });
+                                        }
+                                    })
+                                    .catch(() => {
+                                        clearTimeout(timeout);
+                                        if (this.editor && !this.editor.isDestroyed) {
+                                            const { state } = this.editor;
+                                            state.doc.descendants((node, pos) => {
+                                                if (node.type.name === 'bookmark' && node.attrs.url === plain && node.attrs.isLoading) {
+                                                    this.editor.chain().setNodeMarkup(pos, undefined, {
+                                                        ...node.attrs,
+                                                        isLoading: false,
+                                                    }).run();
+                                                    return false;
+                                                }
+                                            });
+                                        }
+                                    });
                                 return true;
                             } catch (_) { }
                         }
@@ -788,6 +965,18 @@ function getToolbarState() {
         isTable: editor.isActive('table'),
         canMergeCells: editor.can().mergeCells(),
         canSplitCell: editor.can().splitCell(),
+        tableAlign: (() => {
+            if (!editor.isActive('table')) return 'left';
+            try {
+                const { $from } = editor.state.selection;
+                for (let d = $from.depth; d > 0; d--) {
+                    if ($from.node(d).type.name === 'table') {
+                        return $from.node(d).attrs.tableAlign || 'left';
+                    }
+                }
+            } catch (e) { }
+            return 'left';
+        })(),
         textAlign: editor.isActive({ textAlign: 'center' })
             ? 'center'
             : editor.isActive({ textAlign: 'right' })
@@ -827,9 +1016,45 @@ function notifyToolbarStateChanged() {
     }, 100);
 }
 
+// Ajusta dinámicamente las etiquetas de los cursores remotos para que nunca se salgan del borde derecho de la pantalla
+// y neutraliza los saltos de línea (trailingBreak) espurios que ProseMirror inyecta al final del bloque
+function adjustCollaboratorCursorLabels() {
+    const carets = document.querySelectorAll('.collaboration-cursor__caret');
+    if (!carets.length) return;
+    const viewportWidth = window.innerWidth || document.documentElement.clientWidth;
+    for (let i = 0; i < carets.length; i++) {
+        const caret = carets[i];
+        const label = caret.querySelector('.collaboration-cursor__label');
+        if (label) {
+            const rect = caret.getBoundingClientRect();
+            const labelWidth = label.offsetWidth || 70;
+            // Si el caret está tan a la derecha que la etiqueta sobresaldría del margen derecho del viewport
+            if (rect.left + labelWidth > viewportWidth - 8) {
+                caret.classList.add('collaboration-cursor__caret--flip-x');
+            } else if (rect.left - labelWidth < 8) {
+                caret.classList.remove('collaboration-cursor__caret--flip-x');
+            } else {
+                caret.classList.remove('collaboration-cursor__caret--flip-x');
+            }
+        }
+
+        // Neutralizar trailing breaks o separators en el bloque padre si el cursor está presente
+        const parent = caret.parentElement;
+        if (parent) {
+            const hacks = parent.querySelectorAll('.ProseMirror-trailingBreak, .ProseMirror-separator');
+            for (let j = 0; j < hacks.length; j++) {
+                hacks[j].style.setProperty('display', 'none', 'important');
+            }
+        }
+    }
+}
+
 function initEditor(fragmentName) {
     if (typeof window !== 'undefined' && window.VEYRA_INITIAL_THEME && typeof window.veyraSetTheme === 'function') {
         window.veyraSetTheme(window.VEYRA_INITIAL_THEME);
+    }
+    if (typeof window !== 'undefined' && window.VEYRA_INITIAL_PAGE_FORMAT && typeof window.veyraSetPageFormat === 'function') {
+        window.veyraSetPageFormat(window.VEYRA_INITIAL_PAGE_FORMAT, true);
     }
     const editorElement = document.getElementById('editor');
     if (!editorElement) return;
@@ -905,20 +1130,28 @@ function initEditor(fragmentName) {
                 render: (user) => {
                     const cursor = document.createElement('span');
                     cursor.classList.add('collaboration-cursor__caret');
-                    cursor.setAttribute('style', `border-color: ${user.color || '#8B5CF6'}; border-left-color: ${user.color || '#8B5CF6'};`);
+                    const userColor = user.color || '#8B5CF6';
 
-                    const label = document.createElement('div');
+                    // Línea vertical visible del cursor (100% absoluta, 0 impacto en el line-box)
+                    const line = document.createElement('span');
+                    line.classList.add('collaboration-cursor__line');
+                    line.style.backgroundColor = userColor;
+                    cursor.appendChild(line);
+
+                    // Etiqueta flotante con el nombre del usuario (100% absoluta, 0 impacto en el line-box)
+                    const label = document.createElement('span');
                     label.classList.add('collaboration-cursor__label');
-                    label.setAttribute('style', `background-color: ${user.color || '#8B5CF6'};`);
-                    label.insertBefore(document.createTextNode(user.name || 'Invitado'), null);
+                    label.style.backgroundColor = userColor;
+                    label.appendChild(document.createTextNode(user.name || 'Invitado'));
+                    cursor.appendChild(label);
 
-                    cursor.insertBefore(label, null);
                     return cursor;
                 }
             })
         ],
         onTransaction: () => {
             notifyToolbarStateChanged();
+            adjustCollaboratorCursorLabels();
         },
         onUpdate: () => {
             const isTaskList = editor ? editor.isActive('taskList') : false;
@@ -1110,6 +1343,54 @@ function initEditor(fragmentName) {
                 }
             }
 
+            // Manejo de clic en tarjeta de enlace enriquecida (Bookmark)
+            const bookmarkCard = target && target.closest ? target.closest('.veyra-bookmark-card') : null;
+            if (bookmarkCard) {
+                const switchBtn = target.closest ? target.closest('[data-bookmark-action="convert-to-text"]') : null;
+                if (switchBtn) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    if (editor && editor.isEditable) {
+                        const url = bookmarkCard.getAttribute('data-bookmark-url') || '';
+                        if (url) {
+                            try {
+                                const pos = editor.view.posAtDOM(bookmarkCard, 0);
+                                let targetPos = pos;
+                                let node = editor.state.doc.nodeAt(pos);
+                                if (!node || node.type.name !== 'bookmark') {
+                                    const $pos = editor.state.doc.resolve(pos);
+                                    for (let d = $pos.depth; d > 0; d--) {
+                                        const parent = $pos.node(d);
+                                        if (parent && parent.type.name === 'bookmark') {
+                                            node = parent;
+                                            targetPos = $pos.before(d);
+                                            break;
+                                        }
+                                    }
+                                }
+                                const size = node ? node.nodeSize : 1;
+                                const fullUrl = url.startsWith('http://') || url.startsWith('https://') ? url : `https://${url}`;
+                                editor
+                                    .chain()
+                                    .focus()
+                                    .deleteRange({ from: targetPos, to: targetPos + size })
+                                    .insertContent(`<p><a href="${fullUrl}" target="_blank" rel="noopener noreferrer nofollow">${url}</a>&nbsp;</p>`)
+                                    .run();
+                            } catch (_) { }
+                        }
+                    }
+                    return;
+                }
+                const openLink = target.closest ? target.closest('.veyra-bookmark-open-link') : null;
+                if (openLink || !editor.isEditable) {
+                    const url = bookmarkCard.getAttribute('data-bookmark-url');
+                    if (url) {
+                        const fullUrl = url.startsWith('http://') || url.startsWith('https://') ? url : `https://${url}`;
+                        window.open(fullUrl, '_blank', 'noopener,noreferrer');
+                    }
+                }
+            }
+
             // Manejo táctil de Checklist / TaskItem (tanto en modo edición como en modo lectura)
             const label = target && target.closest ? target.closest('li[data-type="taskItem"] > label, li[data-type="task-item"] > label') : null;
             if (label) {
@@ -1284,6 +1565,23 @@ function initEditor(fragmentName) {
         trySetInitialCursor(0);
     }, 200);
 
+    // Ajuste responsivo de cursores colaborativos y escala A4
+    window.addEventListener('resize', () => {
+        adjustCollaboratorCursorLabels();
+        applyVeyraA4Zoom();
+        scheduleVeyraA4Pagination();
+    }, { passive: true });
+    window.addEventListener('scroll', adjustCollaboratorCursorLabels, { passive: true, capture: true });
+    try {
+        const cursorObserver = new MutationObserver(() => {
+            adjustCollaboratorCursorLabels();
+        });
+        const editorDom = document.getElementById('editor');
+        if (editorDom) {
+            cursorObserver.observe(editorDom, { childList: true, subtree: true });
+        }
+    } catch (_) { }
+
     let contentRenderedTimer = null;
     let hasSentContentRendered = false;
 
@@ -1323,6 +1621,9 @@ function initEditor(fragmentName) {
         measureAndNotify();
     }, 1500);
 
+    window.editor = editor;
+    applyVeyraA4Zoom();
+    scheduleVeyraA4Pagination();
     sendToNative({ type: 'EDITOR_READY' });
 }
 
@@ -1490,6 +1791,11 @@ awareness.on('change', () => {
             clientLastSeen.set(clientId, now);
         }
     });
+    if (typeof requestAnimationFrame === 'function') {
+        requestAnimationFrame(adjustCollaboratorCursorLabels);
+    } else {
+        setTimeout(adjustCollaboratorCursorLabels, 16);
+    }
 });
 
 setInterval(() => {
@@ -2679,6 +2985,29 @@ window.veyraSetCellColor = function (color) {
     notifyToolbarStateChanged();
 };
 
+window.veyraSetTableAlign = function (align) {
+    if (!editor) return;
+    const { selection } = editor.state;
+    let tablePos = null;
+    let tableNode = null;
+    const $from = selection.$from;
+    for (let d = $from.depth; d > 0; d--) {
+        if ($from.node(d).type.name === 'table') {
+            tablePos = $from.before(d);
+            tableNode = $from.node(d);
+            break;
+        }
+    }
+    if (tablePos !== null && tableNode) {
+        const tr = editor.state.tr.setNodeMarkup(tablePos, null, {
+            ...tableNode.attrs,
+            tableAlign: align || 'left',
+        });
+        editor.view.dispatch(tr);
+        notifyToolbarStateChanged();
+    }
+};
+
 // ═══════════════════════════════════════════════════════════════
 // MENÚ SLASH (/) PARA MÓVIL
 // ═══════════════════════════════════════════════════════════════
@@ -3077,6 +3406,754 @@ window.veyraSetTheme = function (theme) {
     }
 };
 
+let veyraA4LastBreaks = '';
+let veyraA4LastSheetsJson = '';
+let veyraA4ActiveSheetIdx = 0;
+let veyraA4RafId = null;
+let veyraA4Ro = null;
+let veyraA4IsCalculating = false;
+let veyraA4SettledW = 0;
+let veyraA4SettledH = 0;
+let veyraNoteTitle = '';
+let veyraAuthorName = '';
+let veyraA4ZoomMode = 'fit'; // 'fit' | '100'
+let veyraA4CurrentZoom = 1;
+let veyraA4ExplicitScreenWidth = null;
+
+window.veyraSetScreenWidth = function (w) {
+    if (typeof w === 'number' && w > 0) {
+        veyraA4ExplicitScreenWidth = w;
+        if (veyraA4ZoomMode === 'fit') {
+            applyVeyraA4Zoom();
+            scheduleVeyraA4Pagination();
+        }
+    }
+};
+
+let veyraA4FitScale = 1;
+
+function sendZoomUpdateToNative() {
+    const isA4 = document.documentElement && document.documentElement.classList.contains('a4-page-mode');
+    if (!isA4) return;
+    const vpScale = (window.visualViewport && window.visualViewport.scale) ? window.visualViewport.scale : 1;
+    const fitBase = veyraA4FitScale > 0 ? veyraA4FitScale : 1;
+    const userZoomRatio = ((veyraA4CurrentZoom || fitBase) / fitBase) * vpScale;
+    let userZoomPercent = Math.max(10, Math.round(userZoomRatio * 100));
+    if (Math.abs(userZoomPercent - 100) <= 2) {
+        userZoomPercent = 100;
+    }
+    const isZoomed = userZoomPercent !== 100;
+
+    sendToNative({
+        type: 'A4_ZOOM_UPDATED',
+        zoomPercent: userZoomPercent,
+        isZoomed: isZoomed
+    });
+}
+
+if (typeof window !== 'undefined' && window.visualViewport) {
+    try {
+        window.visualViewport.addEventListener('resize', sendZoomUpdateToNative, { passive: true });
+        window.visualViewport.addEventListener('scroll', sendZoomUpdateToNative, { passive: true });
+    } catch (_) { }
+}
+
+function applyVeyraA4Zoom() {
+    const isA4 = document.documentElement && document.documentElement.classList.contains('a4-page-mode');
+    const container = document.getElementById('editor-container');
+    if (!container) return;
+
+    if (!isA4) {
+        container.style.zoom = '';
+        container.style.transform = '';
+        container.style.transformOrigin = '';
+        veyraA4CurrentZoom = 1;
+        veyraA4FitScale = 1;
+        return;
+    }
+
+    const rawScreenW = veyraA4ExplicitScreenWidth || (window.visualViewport ? window.visualViewport.width : null) || (window.screen ? window.screen.width : null) || (document.documentElement ? document.documentElement.clientWidth : 390);
+    const A4_TOTAL_WIDTH = 820; // 794px hoja + 26px padding
+
+    const targetScreenW = Math.min(rawScreenW, 820);
+    if (targetScreenW < A4_TOTAL_WIDTH) {
+        veyraA4FitScale = Math.min(1, Math.max(0.2, (targetScreenW - 8) / A4_TOTAL_WIDTH));
+    } else {
+        veyraA4FitScale = 1;
+    }
+
+    if (veyraA4ZoomMode === 'zoom_in' || veyraA4ZoomMode === '100') {
+        veyraA4CurrentZoom = Math.min(1.0, veyraA4FitScale * 1.5);
+    } else {
+        veyraA4CurrentZoom = veyraA4FitScale;
+    }
+
+    container.style.zoom = String(veyraA4CurrentZoom);
+    sendZoomUpdateToNative();
+}
+let veyraA4HeaderFooterConfig = {
+    differentFirstPage: false,
+    oddEvenDifferent: false,
+    headerTopCm: 1.25,
+    footerBottomCm: 1.25,
+    header: { left: '', center: '', right: '', images: [] },
+    footer: { left: '', center: '', right: '', images: [] },
+    firstPageHeader: { left: '', center: '', right: '', images: [] },
+    firstPageFooter: { left: '', center: '', right: '', images: [] },
+    evenHeader: { left: '', center: '', right: '', images: [] },
+    evenFooter: { left: '', center: '', right: '', images: [] },
+};
+
+function escapeVeyraHtml(str) {
+    return String(str || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+}
+
+function replaceVeyraHfTokens(raw, pageNumber, totalPages) {
+    if (!raw) return '';
+    const dateStr = new Date().toLocaleDateString('es-ES', {
+        day: '2-digit',
+        month: 'short',
+        year: 'numeric',
+    });
+    return String(raw)
+        .replace(/\{page\}/gi, String(pageNumber))
+        .replace(/\{total\}/gi, String(totalPages))
+        .replace(/\{date\}/gi, dateStr)
+        .replace(/\{title\}/gi, veyraNoteTitle || 'Sin título')
+        .replace(/\{author\}/gi, veyraAuthorName || '');
+}
+
+function resolveVeyraPageBand(cfg, kind, pageNumber) {
+    if (!cfg || typeof cfg !== 'object') return { left: '', center: '', right: '', images: [] };
+    if (pageNumber === 1 && cfg.differentFirstPage) {
+        return (kind === 'header' ? cfg.firstPageHeader : cfg.firstPageFooter) || { left: '', center: '', right: '', images: [] };
+    }
+    if (cfg.oddEvenDifferent && pageNumber % 2 === 0) {
+        return (kind === 'header' ? cfg.evenHeader : cfg.evenFooter) || { left: '', center: '', right: '', images: [] };
+    }
+    return (kind === 'header' ? cfg.header : cfg.footer) || { left: '', center: '', right: '', images: [] };
+}
+
+function getEffectiveZoneHeightPx(config, zone) {
+    const defaultMarginPx = 95; // 2,5 cm
+    if (!config || typeof config !== 'object') return defaultMarginPx;
+    const manualHeight = zone === 'header' ? config.customHeaderHeightPx : config.customFooterHeightPx;
+    const baseMarginPx = manualHeight ? Math.max(48, Math.min(260, manualHeight)) : defaultMarginPx;
+
+    const slotGroups = zone === 'header'
+        ? [
+            config.header || config.headerSlots,
+            ...(config.differentFirstPage ? [config.firstPageHeader || config.firstPageHeaderSlots] : []),
+            ...(config.oddEvenDifferent || config.differentOddEven ? [config.evenHeader || config.evenPageHeaderSlots] : [])
+        ]
+        : [
+            config.footer || config.footerSlots,
+            ...(config.differentFirstPage ? [config.firstPageFooter || config.firstPageFooterSlots] : []),
+            ...(config.oddEvenDifferent || config.differentOddEven ? [config.evenFooter || config.evenPageFooterSlots] : [])
+        ];
+
+    let maxImagesBottom = 0;
+    for (const group of slotGroups) {
+        if (group && Array.isArray(group.images)) {
+            for (const img of group.images) {
+                const bottom = Math.round((Number(img.y) || 0) + (Number(img.height) || 60) + 12);
+                if (bottom > maxImagesBottom) {
+                    maxImagesBottom = Math.min(260, bottom);
+                }
+            }
+        }
+    }
+    return Math.max(baseMarginPx, maxImagesBottom);
+}
+
+function renderVeyraBandHtml(kind, pageIdx, totalPages, A4_HEIGHT_PX, STRIDE, marginVPx, marginHPx, pmWidth) {
+    const pageNumber = pageIdx + 1;
+    const band = resolveVeyraPageBand(veyraA4HeaderFooterConfig, kind, pageNumber);
+    const leftTxt = escapeVeyraHtml(replaceVeyraHfTokens(band.left, pageNumber, totalPages));
+    const centerTxt = escapeVeyraHtml(replaceVeyraHfTokens(band.center, pageNumber, totalPages));
+    const rightTxt = escapeVeyraHtml(replaceVeyraHfTokens(band.right, pageNumber, totalPages));
+    const images = Array.isArray(band.images) ? band.images : [];
+    const hasAnyContent = Boolean(leftTxt.trim() || centerTxt.trim() || rightTxt.trim() || images.length > 0);
+
+    const scaleX = pmWidth > 0 ? pmWidth / 794 : 1;
+    const scaleY = marginVPx > 0 ? marginVPx / 95 : scaleX;
+
+    const topPx = kind === 'header'
+        ? pageIdx * STRIDE
+        : pageIdx * STRIDE + A4_HEIGHT_PX - marginVPx;
+
+    const imgsHtml = images.map((img) => {
+        if (!img || !img.src) return '';
+        const left = Math.round((Number(img.x) || 0) * scaleX);
+        const top = Math.round((Number(img.y) || 0) * scaleY);
+        const w = Math.max(14, Math.round((Number(img.width) || 80) * scaleX));
+        const h = Math.max(10, Math.round((Number(img.height) || 36) * scaleX));
+        return `<img class="veyra-a4-hf-img" src="${escapeVeyraHtml(img.src)}" style="left:${left}px;top:${top}px;width:${w}px;height:${h}px;" alt="" />`;
+    }).join('');
+
+    const innerHtml = hasAnyContent
+        ? `
+            ${imgsHtml}
+            <div class="veyra-a4-hf-row" style="padding: 0 ${marginHPx}px;">
+                <div class="veyra-a4-hf-slot" style="text-align:left;">${leftTxt}</div>
+                <div class="veyra-a4-hf-slot" style="text-align:center;">${centerTxt}</div>
+                <div class="veyra-a4-hf-slot" style="text-align:right;">${rightTxt}</div>
+            </div>
+        `
+        : `<div class="veyra-a4-hf-hint">${kind === 'header' ? 'Encabezado' : 'Pie de página'}</div>`;
+
+    return `
+        <div class="veyra-a4-hf-band" data-hf-kind="${kind}" data-hf-page="${pageNumber}" style="top:${topPx}px;height:${marginVPx}px;">
+            ${innerHtml}
+        </div>
+    `;
+}
+
+function renderVeyraBandHtmlForPrint(kind, pageIdx, totalPages, marginVPx, marginHPx) {
+    const pageNumber = pageIdx + 1;
+    const band = resolveVeyraPageBand(veyraA4HeaderFooterConfig, kind, pageNumber);
+    const leftTxt = escapeVeyraHtml(replaceVeyraHfTokens(band.left, pageNumber, totalPages));
+    const centerTxt = escapeVeyraHtml(replaceVeyraHfTokens(band.center, pageNumber, totalPages));
+    const rightTxt = escapeVeyraHtml(replaceVeyraHfTokens(band.right, pageNumber, totalPages));
+    const images = Array.isArray(band.images) ? band.images : [];
+    const hasAnyContent = Boolean(leftTxt.trim() || centerTxt.trim() || rightTxt.trim() || images.length > 0);
+    if (!hasAnyContent) return '';
+
+    const imgsHtml = images.map((img) => {
+        if (!img || !img.src) return '';
+        const left = Math.round(Number(img.x) || 0);
+        const top = Math.round(Number(img.y) || 0);
+        const w = Math.max(14, Math.round(Number(img.width) || 80));
+        const h = Math.max(10, Math.round(Number(img.height) || 36));
+        return `<img class="print-hf-img" src="${escapeVeyraHtml(img.src)}" style="left:${left}px;top:${top}px;width:${w}px;height:${h}px;" alt="" />`;
+    }).join('');
+
+    return `
+        <div style="position:relative;width:100%;height:100%;">
+            ${imgsHtml}
+            <div class="print-hf-row">
+                <div class="print-hf-slot" style="text-align:left;">${leftTxt}</div>
+                <div class="print-hf-slot" style="text-align:center;">${centerTxt}</div>
+                <div class="print-hf-slot" style="text-align:right;">${rightTxt}</div>
+            </div>
+        </div>
+    `;
+}
+
+function collectVeyraListItems(listEl, listSelector, isTopLevelList, out) {
+    const children = Array.from(listEl.children);
+    for (let idx = 0; idx < children.length; idx++) {
+        const li = children[idx];
+        if (li.tagName.toLowerCase() !== 'li') continue;
+        const j = idx + 1;
+        const liSelector = `${listSelector} > :nth-child(${j})`;
+        const pushListInstead = isTopLevelList && j === 1;
+        const selector = pushListInstead ? listSelector : liSelector;
+        const targetEl = pushListInstead ? listEl : li;
+
+        const liChildren = Array.from(li.children);
+        const nestedLists = [];
+        let firstContentEl = null;
+
+        for (let cIdx = 0; cIdx < liChildren.length; cIdx++) {
+            const c = liChildren[cIdx];
+            const cTag = c.tagName.toLowerCase();
+            if (cTag === 'ul' || cTag === 'ol') {
+                nestedLists.push({ el: c, childIdx: cIdx + 1 });
+            } else if (!firstContentEl) {
+                firstContentEl = c;
+            }
+        }
+
+        if (nestedLists.length > 0) {
+            const measureEl = firstContentEl || li;
+            out.push({
+                topEl: measureEl,
+                bottomEl: measureEl,
+                targetEl,
+                selector,
+                prop: 'margin-top',
+                isHeadingOrLead: true
+            });
+            for (const nl of nestedLists) {
+                collectVeyraListItems(nl.el, `${liSelector} > :nth-child(${nl.childIdx})`, false, out);
+            }
+        } else {
+            const text = (li.textContent || '').trim();
+            const isLeadBullet = text.endsWith(':') && text.length < 95;
+            out.push({
+                topEl: li,
+                bottomEl: li,
+                targetEl,
+                selector,
+                prop: 'margin-top',
+                isHeadingOrLead: isLeadBullet
+            });
+        }
+    }
+}
+
+function runVeyraA4Pagination() {
+    if (veyraA4IsCalculating) return;
+    const root = document.documentElement;
+    const isA4 = root && root.classList.contains('a4-page-mode');
+    let styleEl = document.getElementById('veyra-a4-dynamic-style');
+    let overlayEl = document.getElementById('veyra-a4-breaks-overlay');
+    const editorEl = document.getElementById('editor');
+
+    if (!isA4 || !editorEl) {
+        if (styleEl) styleEl.textContent = '';
+        if (overlayEl && veyraA4LastBreaks !== '') {
+            overlayEl.innerHTML = '';
+            veyraA4LastBreaks = '';
+        }
+        return;
+    }
+
+    const pm = editorEl.querySelector('.ProseMirror');
+    if (!pm || pm.children.length === 0) return;
+
+    veyraA4IsCalculating = true;
+    try {
+        if (!styleEl) {
+            styleEl = document.createElement('style');
+            styleEl.id = 'veyra-a4-dynamic-style';
+            document.head.appendChild(styleEl);
+        }
+
+        // Dimensiones estándar A4 (exactamente idénticas a la versión Web)
+        const A4_HEIGHT_PX = 1123;
+        const PAGE_GAP_PX = 36;
+        const STRIDE = A4_HEIGHT_PX + PAGE_GAP_PX;
+        const baseMarginVPx = 95; // 25mm estándar
+        const marginVPx = baseMarginVPx;
+        const marginTopPx = Math.max(
+            48,
+            getEffectiveZoneHeightPx(veyraA4HeaderFooterConfig, 'header') || baseMarginVPx
+        );
+        const marginBottomPx = Math.max(
+            48,
+            getEffectiveZoneHeightPx(veyraA4HeaderFooterConfig, 'footer') || baseMarginVPx
+        );
+        const marginHPx = 113; // 30mm estándar
+        const pmWidth = 794; // Ancho exacto A4 (210mm)
+
+        const prevPmH = pm.offsetHeight;
+        pm.style.minHeight = `${Math.max(A4_HEIGHT_PX, prevPmH)}px`;
+        const basePaddingRule =
+            marginTopPx !== 95 || marginBottomPx !== 95
+                ? `html.a4-page-mode .ProseMirror { padding-top: ${marginTopPx}px !important; padding-bottom: ${marginBottomPx}px !important; }`
+                : '';
+        styleEl.textContent = basePaddingRule;
+
+        const items = [];
+        const pmChildren = Array.from(pm.children);
+        for (let i = 1; i <= pmChildren.length; i++) {
+            const child = pmChildren[i - 1];
+            const tag = child.tagName.toLowerCase();
+            const childSelector = `html.a4-page-mode .ProseMirror > :nth-child(${i})`;
+
+            if (tag === 'ul' || tag === 'ol') {
+                collectVeyraListItems(child, childSelector, true, items);
+                continue;
+            }
+
+            if (child.classList.contains('tableWrapper')) {
+                const rows = Array.from(child.querySelectorAll('tr'));
+                if (rows.length > 0) {
+                    for (let rIdx = 0; rIdx < rows.length; rIdx++) {
+                        const row = rows[rIdx];
+                        const parentEl = row.parentElement;
+                        const parentTag = parentEl ? parentEl.tagName.toLowerCase() : 'tbody';
+                        const nthRow = parentEl ? Array.from(parentEl.children).indexOf(row) + 1 : rIdx + 1;
+                        const rowH = row.getBoundingClientRect().height / (veyraA4CurrentZoom || 1);
+                        const isHeaderRow = row.querySelector('th') !== null || (rowH < 56 && row.querySelector('strong, b') !== null);
+
+                        if (rIdx === 0) {
+                            items.push({
+                                topEl: row,
+                                bottomEl: row,
+                                targetEl: child,
+                                selector: childSelector,
+                                prop: 'margin-top',
+                                isHeadingOrLead: isHeaderRow
+                            });
+                        } else {
+                            const firstCell = row.querySelector('td, th') || row;
+                            const cellContent = firstCell.firstElementChild || firstCell;
+                            const rowCellsSelector = `${childSelector} ${parentTag} > tr:nth-child(${nthRow}) > td, ${childSelector} ${parentTag} > tr:nth-child(${nthRow}) > th`;
+                            items.push({
+                                topEl: cellContent,
+                                bottomEl: row,
+                                targetEl: firstCell,
+                                selector: rowCellsSelector,
+                                prop: 'padding-top',
+                                isHeadingOrLead: isHeaderRow
+                            });
+                        }
+                    }
+                    continue;
+                }
+            }
+
+            const text = (child.textContent || '').trim();
+            const isHeading = /^h[1-6]$/.test(tag) || (tag === 'p' && text.endsWith(':') && text.length < 95 && child.querySelector('strong, b') !== null);
+            items.push({
+                topEl: child,
+                bottomEl: child,
+                targetEl: child,
+                selector: childSelector,
+                prop: 'margin-top',
+                isHeadingOrLead: isHeading
+            });
+        }
+
+        const rules = basePaddingRule ? [basePaddingRule] : [];
+        const breaks = [];
+        let currentPage = 0;
+        const zoom = veyraA4CurrentZoom || 1;
+
+        const applyPush = (target, desiredTop) => {
+            const pRect = pm.getBoundingClientRect();
+            const tRect = target.topEl.getBoundingClientRect();
+            const currentTop = (tRect.top - pRect.top) / zoom;
+            const cs = window.getComputedStyle(target.targetEl);
+            const baseVal = parseFloat(target.prop === 'margin-top' ? cs.marginTop : cs.paddingTop) || 0;
+            let neededVal = Math.max(0, Math.round(baseVal + (desiredTop - currentTop)));
+            const extraRule = target.prop === 'padding-top' ? ' vertical-align: top !important;' : '';
+            const ruleIndex = rules.length;
+            rules.push(`${target.selector} { ${target.prop}: ${neededVal}px !important;${extraRule} }`);
+            styleEl.textContent = rules.join('\n');
+
+            const vPmRect = pm.getBoundingClientRect();
+            const vTopRect = target.topEl.getBoundingClientRect();
+            const actualTop = (vTopRect.top - vPmRect.top) / zoom;
+            const diff = Math.round(desiredTop - actualTop);
+            if (Math.abs(diff) > 1) {
+                neededVal = Math.max(0, neededVal + diff);
+                rules[ruleIndex] = `${target.selector} { ${target.prop}: ${neededVal}px !important;${extraRule} }`;
+                styleEl.textContent = rules.join('\n');
+            }
+        };
+
+        for (let k = 0; k < items.length; k++) {
+            const item = items[k];
+            let pmRect = pm.getBoundingClientRect();
+            let itemTop = (item.topEl.getBoundingClientRect().top - pmRect.top) / zoom;
+            let itemBottom = (item.bottomEl.getBoundingClientRect().bottom - pmRect.top) / zoom;
+
+            let minPrintableY = currentPage * STRIDE + marginTopPx;
+            let maxPrintableY = currentPage * STRIDE + A4_HEIGHT_PX - marginBottomPx;
+
+            if (currentPage > 0 && itemTop < minPrintableY - 2) {
+                applyPush(item, minPrintableY);
+                pmRect = pm.getBoundingClientRect();
+                itemTop = (item.topEl.getBoundingClientRect().top - pmRect.top) / zoom;
+                itemBottom = (item.bottomEl.getBoundingClientRect().bottom - pmRect.top) / zoom;
+            }
+
+            if (itemBottom > maxPrintableY) {
+                let pushIdx = k;
+                while (pushIdx > 0 && items[pushIdx - 1].isHeadingOrLead) {
+                    const prevTop = (items[pushIdx - 1].topEl.getBoundingClientRect().top - pmRect.top) / zoom;
+                    if (prevTop > minPrintableY + 28) {
+                        pushIdx -= 1;
+                    } else {
+                        break;
+                    }
+                }
+
+                const target = items[pushIdx];
+                const targetTop = (target.topEl.getBoundingClientRect().top - pmRect.top) / zoom;
+
+                if (targetTop > minPrintableY + 14) {
+                    breaks.push(currentPage * STRIDE + A4_HEIGHT_PX);
+                    currentPage += 1;
+                    const desiredTop = currentPage * STRIDE + marginTopPx;
+                    applyPush(target, desiredTop);
+
+                    pmRect = pm.getBoundingClientRect();
+                    itemBottom = (item.bottomEl.getBoundingClientRect().bottom - pmRect.top) / zoom;
+                    minPrintableY = currentPage * STRIDE + marginTopPx;
+                    maxPrintableY = currentPage * STRIDE + A4_HEIGHT_PX - marginBottomPx;
+                }
+
+                while (itemBottom > currentPage * STRIDE + A4_HEIGHT_PX - marginBottomPx) {
+                    breaks.push(currentPage * STRIDE + A4_HEIGHT_PX);
+                    currentPage += 1;
+                }
+            }
+        }
+
+        const totalMinHeight = (currentPage + 1) * A4_HEIGHT_PX + currentPage * PAGE_GAP_PX;
+        pm.style.minHeight = `${totalMinHeight}px`;
+
+        veyraA4SettledW = editorEl.offsetWidth;
+        veyraA4SettledH = editorEl.offsetHeight;
+
+        if (!overlayEl) {
+            overlayEl = document.createElement('div');
+            overlayEl.id = 'veyra-a4-breaks-overlay';
+            overlayEl.addEventListener('click', (ev) => {
+                const bandEl = ev.target && ev.target.closest ? ev.target.closest('.veyra-a4-hf-band') : null;
+                if (bandEl) {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    const kind = bandEl.getAttribute('data-hf-kind') || 'header';
+                    const pageNumber = parseInt(bandEl.getAttribute('data-hf-page') || '1', 10) || 1;
+                    sendToNative({ type: 'A4_HEADER_FOOTER_TAP', kind, pageNumber });
+                }
+            });
+            editorEl.appendChild(overlayEl);
+        }
+
+        const totalSheets = currentPage + 1;
+        const hfCfgStr = JSON.stringify(veyraA4HeaderFooterConfig);
+        const nextOverlayKey = `${breaks.join(',')}|${totalSheets}|${pmWidth}|${marginVPx}|${veyraNoteTitle}|${veyraAuthorName}|${hfCfgStr}`;
+
+        if (veyraA4LastBreaks !== nextOverlayKey) {
+            veyraA4LastBreaks = nextOverlayKey;
+            const bandsParts = [];
+            for (let s = 0; s < totalSheets; s++) {
+                bandsParts.push(renderVeyraBandHtml('header', s, totalSheets, A4_HEIGHT_PX, STRIDE, marginVPx, marginHPx, pmWidth));
+                bandsParts.push(renderVeyraBandHtml('footer', s, totalSheets, A4_HEIGHT_PX, STRIDE, marginVPx, marginHPx, pmWidth));
+            }
+            const breaksHtml = breaks.map((bt, idx) => `
+                <div class="veyra-a4-break-gap" style="top: ${bt}px;">
+                    <div class="veyra-a4-break-edge-top"></div>
+                    <div class="veyra-a4-break-body">
+                        <span class="veyra-a4-break-pill">Hoja ${idx + 2}</span>
+                    </div>
+                    <div class="veyra-a4-break-edge-bottom"></div>
+                </div>
+            `).join('');
+            overlayEl.innerHTML = bandsParts.join('') + breaksHtml;
+        }
+
+        // Calcular metadatos reales de cada hoja física A4 para el Organizador de Hojas móvil
+        const finalPmRect = pm.getBoundingClientRect();
+        const sheets = [];
+        for (let s = 0; s < totalSheets; s++) {
+            const sTop = s * STRIDE;
+            const sBottom = s * STRIDE + A4_HEIGHT_PX;
+            const texts = [];
+            let firstHeading = '';
+            let words = 0;
+
+            for (let cIdx = 0; cIdx < pmChildren.length; cIdx++) {
+                const ch = pmChildren[cIdx];
+                const r = ch.getBoundingClientRect();
+                const relTop = (r.top - finalPmRect.top) / zoom;
+                const relBottom = (r.bottom - finalPmRect.top) / zoom;
+                if (relBottom <= sTop + 4 || relTop >= sBottom - 4) continue;
+                const rawText = (ch.textContent || '').replace(/\s+/g, ' ').trim();
+                if (!rawText) continue;
+                if (!firstHeading && /^h[1-3]$/i.test(ch.tagName)) {
+                    firstHeading = rawText.slice(0, 60);
+                }
+                texts.push(rawText);
+                words += rawText.split(/\s+/).filter(Boolean).length;
+            }
+
+            const snippet = texts.join(' ').slice(0, 140);
+            sheets.push({
+                index: s,
+                title: firstHeading || `Hoja ${s + 1}`,
+                snippet,
+                wordCount: words,
+            });
+        }
+
+        const nextSheetsJson = JSON.stringify(sheets);
+        if (veyraA4LastSheetsJson !== nextSheetsJson) {
+            veyraA4LastSheetsJson = nextSheetsJson;
+            sendToNative({
+                type: 'A4_SHEETS_UPDATED',
+                sheets,
+                totalSheets,
+            });
+        }
+    } finally {
+        veyraA4IsCalculating = false;
+    }
+}
+
+function scheduleVeyraA4Pagination() {
+    if (veyraA4RafId !== null) cancelAnimationFrame(veyraA4RafId);
+    veyraA4RafId = requestAnimationFrame(() => {
+        veyraA4RafId = null;
+        runVeyraA4Pagination();
+    });
+}
+
+window.veyraSetPageFormat = function (format, fromRemoteOrInit) {
+    const normalized = format === 'a4' ? 'a4' : 'infinite';
+    const isA4 = normalized === 'a4';
+    const root = document.documentElement;
+    if (root) {
+        const wasA4 = root.classList.contains('a4-page-mode');
+        if (wasA4 !== isA4 && !fromRemoteOrInit) {
+            root.classList.remove('veyra-animating-to-a4', 'veyra-animating-to-infinite');
+            void root.offsetWidth;
+            root.classList.add(isA4 ? 'veyra-animating-to-a4' : 'veyra-animating-to-infinite');
+            setTimeout(() => {
+                root.classList.remove('veyra-animating-to-a4', 'veyra-animating-to-infinite');
+            }, 450);
+        }
+
+        if (isA4) {
+            root.classList.add('a4-page-mode');
+            if (!veyraA4Ro && typeof ResizeObserver !== 'undefined') {
+                const ed = document.getElementById('editor');
+                if (ed) {
+                    veyraA4Ro = new ResizeObserver(() => {
+                        if (ed.offsetWidth === veyraA4SettledW && ed.offsetHeight === veyraA4SettledH) return;
+                        scheduleVeyraA4Pagination();
+                    });
+                    veyraA4Ro.observe(ed);
+                }
+            }
+        } else {
+            root.classList.remove('a4-page-mode');
+            const pm = document.querySelector('.ProseMirror');
+            if (pm) pm.style.minHeight = '';
+        }
+        applyVeyraA4Zoom();
+        scheduleVeyraA4Pagination();
+    }
+    if (!fromRemoteOrInit && ydoc) {
+        try {
+            const metaMap = ydoc.getMap('meta');
+            if (metaMap.get('pageFormat') !== normalized) {
+                metaMap.set('pageFormat', normalized);
+            }
+        } catch (_) { }
+    }
+};
+
+window.veyraResetA4ZoomToFit = function () {
+    veyraA4ZoomMode = 'fit';
+    applyVeyraA4Zoom();
+
+    // Resetear escala de visualViewport si hubo pinch-to-zoom
+    const vp = document.getElementById('veyra-viewport');
+    if (vp) {
+        try {
+            vp.setAttribute('content', 'width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no');
+            setTimeout(() => {
+                vp.setAttribute('content', 'width=device-width, initial-scale=1.0, maximum-scale=5.0, minimum-scale=1.0, user-scalable=yes, viewport-fit=cover');
+                sendZoomUpdateToNative();
+            }, 60);
+        } catch (_) { }
+    }
+    window.scrollTo({ left: 0, behavior: 'smooth' });
+    sendZoomUpdateToNative();
+    scheduleVeyraA4Pagination();
+};
+
+window.veyraSetA4Zoom = function (action, explicitWidth) {
+    if (typeof explicitWidth === 'number' && explicitWidth > 0) {
+        veyraA4ExplicitScreenWidth = explicitWidth;
+    }
+    if (action === 'fit' || action === 'reset') {
+        window.veyraResetA4ZoomToFit();
+    } else if (action === 'zoom_in') {
+        veyraA4ZoomMode = 'zoom_in';
+        applyVeyraA4Zoom();
+        sendZoomUpdateToNative();
+        scheduleVeyraA4Pagination();
+    } else {
+        veyraA4ZoomMode = action === '100' ? '100' : 'fit';
+        applyVeyraA4Zoom();
+        scheduleVeyraA4Pagination();
+    }
+};
+
+window.veyraSetA4HeaderFooterConfig = function (configInput, fromRemoteOrInit, noteTitle, authorName) {
+    try {
+        const parsed = typeof configInput === 'string' ? JSON.parse(configInput) : configInput;
+        if (parsed && typeof parsed === 'object') {
+            veyraA4HeaderFooterConfig = {
+                ...veyraA4HeaderFooterConfig,
+                ...parsed,
+            };
+        }
+        if (typeof noteTitle === 'string') veyraNoteTitle = noteTitle;
+        if (typeof authorName === 'string') veyraAuthorName = authorName;
+        veyraA4LastBreaks = '';
+        scheduleVeyraA4Pagination();
+
+        if (!fromRemoteOrInit && ydoc) {
+            const metaMap = ydoc.getMap('meta');
+            const serialized = JSON.stringify(veyraA4HeaderFooterConfig);
+            if (metaMap.get('a4HeaderFooterConfig') !== serialized) {
+                metaMap.set('a4HeaderFooterConfig', serialized);
+            }
+        }
+    } catch (e) {
+        console.warn('[veyraSetA4HeaderFooterConfig]', e);
+    }
+};
+
+window.veyraSetNoteMetaContext = function (noteTitle, authorName) {
+    let changed = false;
+    if (typeof noteTitle === 'string' && veyraNoteTitle !== noteTitle) {
+        veyraNoteTitle = noteTitle;
+        changed = true;
+    }
+    if (typeof authorName === 'string' && veyraAuthorName !== authorName) {
+        veyraAuthorName = authorName;
+        changed = true;
+    }
+    if (changed) {
+        veyraA4LastBreaks = '';
+        scheduleVeyraA4Pagination();
+    }
+};
+
+window.veyraScrollToA4Sheet = function (sheetIndex) {
+    try {
+        const idx = Math.max(0, Number(sheetIndex) || 0);
+        const A4_HEIGHT_PX = 1123;
+        const PAGE_GAP_PX = 36;
+        const STRIDE = A4_HEIGHT_PX + PAGE_GAP_PX;
+        const zoom = veyraA4CurrentZoom || 1;
+        const targetY = Math.max(0, Math.round(idx * STRIDE * zoom));
+        window.scrollTo({ top: targetY, behavior: 'smooth' });
+        veyraA4ActiveSheetIdx = idx;
+        sendToNative({ type: 'A4_ACTIVE_SHEET_CHANGED', activeSheetIndex: idx });
+    } catch (_) { }
+};
+
+// Observar ydoc.getMap('meta') para sincronizar formato A4 y encabezados/pie entre Web y Móvil
+try {
+    const veyraMetaMap = ydoc.getMap('meta');
+    const syncMetaFromYDoc = () => {
+        try {
+            const yFmt = veyraMetaMap.get('pageFormat');
+            if (yFmt === 'a4' || yFmt === 'infinite') {
+                window.veyraSetPageFormat(yFmt, true);
+                sendToNative({ type: 'PAGE_FORMAT_CHANGED', pageFormat: yFmt });
+            }
+            const yHfRaw = veyraMetaMap.get('a4HeaderFooterConfig');
+            if (typeof yHfRaw === 'string' && yHfRaw.trim().startsWith('{')) {
+                const parsedHf = JSON.parse(yHfRaw);
+                if (parsedHf && typeof parsedHf === 'object') {
+                    window.veyraSetA4HeaderFooterConfig(parsedHf, true);
+                    sendToNative({ type: 'A4_HEADER_FOOTER_CHANGED', config: parsedHf });
+                }
+            }
+        } catch (_) { }
+    };
+    veyraMetaMap.observe(() => {
+        syncMetaFromYDoc();
+    });
+} catch (_) { }
+
 window.veyraGetStateVector = function () {
     const sv = Y.encodeStateVector(ydoc);
     return uint8ArrayToBase64(sv);
@@ -3215,12 +4292,280 @@ window.veyraRequestPreview = function () {
     sendToNative({ type: 'PREVIEW_RESULT', preview });
 };
 
+window.veyraGetA4ExportHtml = function (customTitle) {
+    const editorEl = document.getElementById('editor');
+    const pm = editorEl ? editorEl.querySelector('.ProseMirror') : null;
+    if (!editorEl || !pm) {
+        return editor ? editor.getHTML() : '';
+    }
+
+    const A4_HEIGHT_PX = 1123;
+    const PAGE_GAP_PX = 36;
+    const STRIDE = A4_HEIGHT_PX + PAGE_GAP_PX;
+    const baseMarginVPx = 95;
+    const marginTopPx = Math.max(48, getEffectiveZoneHeightPx(veyraA4HeaderFooterConfig, 'header') || baseMarginVPx);
+    const marginBottomPx = Math.max(48, getEffectiveZoneHeightPx(veyraA4HeaderFooterConfig, 'footer') || baseMarginVPx);
+    const marginHPx = 113;
+    const zoom = veyraA4CurrentZoom || 1;
+
+    try {
+        runVeyraA4Pagination();
+    } catch (_) { }
+
+    const finalPmRect = pm.getBoundingClientRect();
+    const pmChildren = Array.from(pm.children);
+    const totalSheets = Math.max(1, Math.ceil((pm.scrollHeight || pm.offsetHeight) / STRIDE));
+
+    const sheetsHtmlParts = [];
+
+    for (let s = 0; s < totalSheets; s++) {
+        const sTop = s * STRIDE;
+        const sBottom = s * STRIDE + A4_HEIGHT_PX;
+        const sheetContentEls = [];
+
+        for (let cIdx = 0; cIdx < pmChildren.length; cIdx++) {
+            const ch = pmChildren[cIdx];
+            const r = ch.getBoundingClientRect();
+            const relTop = (r.top - finalPmRect.top) / zoom;
+            const relBottom = (r.bottom - finalPmRect.top) / zoom;
+
+            if (relBottom <= sTop + 4 || relTop >= sBottom - 4) continue;
+
+            const tag = ch.tagName.toLowerCase();
+            if (tag === 'ul' || tag === 'ol') {
+                const lis = Array.from(ch.children).filter(li => li.tagName && li.tagName.toLowerCase() === 'li');
+                const sheetLis = lis.filter(li => {
+                    const liR = li.getBoundingClientRect();
+                    const liTop = (liR.top - finalPmRect.top) / zoom;
+                    const liBottom = (liR.bottom - finalPmRect.top) / zoom;
+                    return liBottom > sTop + 2 && liTop < sBottom - 2;
+                });
+                if (sheetLis.length > 0) {
+                    const listClone = ch.cloneNode(false);
+                    sheetLis.forEach(li => {
+                        const liClone = li.cloneNode(true);
+                        liClone.style.marginTop = '';
+                        liClone.style.paddingTop = '';
+                        listClone.appendChild(liClone);
+                    });
+                    sheetContentEls.push(listClone.outerHTML);
+                }
+                continue;
+            }
+
+            if (ch.classList.contains('tableWrapper') || ch.querySelector('table')) {
+                const table = ch.querySelector('table') || ch;
+                const rows = Array.from(table.querySelectorAll('tr'));
+                const sheetRows = rows.filter(tr => {
+                    const trR = tr.getBoundingClientRect();
+                    const trTop = (trR.top - finalPmRect.top) / zoom;
+                    const trBottom = (trR.bottom - finalPmRect.top) / zoom;
+                    return trBottom > sTop + 2 && trTop < sBottom - 2;
+                });
+                if (sheetRows.length > 0) {
+                    const tableClone = table.cloneNode(false);
+                    const tbody = document.createElement('tbody');
+                    sheetRows.forEach(tr => {
+                        const trClone = tr.cloneNode(true);
+                        Array.from(trClone.children).forEach(cell => {
+                            cell.style.marginTop = '';
+                            cell.style.paddingTop = '';
+                        });
+                        tbody.appendChild(trClone);
+                    });
+                    tableClone.appendChild(tbody);
+                    sheetContentEls.push(tableClone.outerHTML);
+                }
+                continue;
+            }
+
+            const clone = ch.cloneNode(true);
+            clone.style.marginTop = '';
+            clone.style.paddingTop = '';
+            sheetContentEls.push(clone.outerHTML);
+        }
+
+        const headerHtml = renderVeyraBandHtmlForPrint('header', s, totalSheets, marginTopPx, marginHPx);
+        const footerHtml = renderVeyraBandHtmlForPrint('footer', s, totalSheets, marginBottomPx, marginHPx);
+
+        sheetsHtmlParts.push(`
+            <div class="print-a4-sheet">
+                <div class="print-a4-header" style="height:${marginTopPx}px;padding:0 ${marginHPx}px;">
+                    ${headerHtml}
+                </div>
+                <div class="print-a4-body" style="top:${marginTopPx}px;bottom:${marginBottomPx}px;left:${marginHPx}px;right:${marginHPx}px;">
+                    ${sheetContentEls.join('\n')}
+                </div>
+                <div class="print-a4-footer" style="height:${marginBottomPx}px;padding:0 ${marginHPx}px;">
+                    ${footerHtml}
+                </div>
+            </div>
+        `);
+    }
+
+    const cleanTitle = escapeVeyraHtml(customTitle || veyraNoteTitle || 'Documento');
+
+    return `<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="utf-8" />
+    <title>${cleanTitle}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <style>
+        @page {
+            size: 210mm 297mm;
+            margin: 0;
+        }
+        * {
+            box-sizing: border-box;
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
+        }
+        html, body {
+            margin: 0;
+            padding: 0;
+            background: #FFFFFF;
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            font-size: 14px;
+            line-height: 1.7;
+            color: #1F2937;
+        }
+        .print-a4-sheet {
+            width: 210mm;
+            height: 297mm;
+            min-height: 297mm;
+            max-height: 297mm;
+            box-sizing: border-box;
+            position: relative;
+            background: #FFFFFF;
+            page-break-after: always;
+            break-after: page;
+            page-break-inside: avoid;
+            break-inside: avoid;
+            overflow: hidden;
+        }
+        .print-a4-sheet:last-child {
+            page-break-after: avoid;
+            break-after: avoid;
+        }
+        .print-a4-header {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            box-sizing: border-box;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            z-index: 10;
+        }
+        .print-a4-body {
+            position: absolute;
+            box-sizing: border-box;
+            overflow: hidden;
+        }
+        .print-a4-footer {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            box-sizing: border-box;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            z-index: 10;
+        }
+        p {
+            font-size: 14px;
+            line-height: 1.7;
+            margin-top: 0.25rem;
+            margin-bottom: 0.5rem;
+            width: 100%;
+            word-wrap: break-word;
+            color: #1F2937;
+        }
+        h1 { font-size: 24px; font-weight: 700; margin: 1.25rem 0 0.5rem 0; line-height: 1.3; color: #0F172A; }
+        h2 { font-size: 20px; font-weight: 700; margin: 1rem 0 0.4rem 0; line-height: 1.35; color: #1E293B; }
+        h3 { font-size: 16px; font-weight: 600; margin: 0.75rem 0 0.35rem 0; line-height: 1.4; color: #334155; }
+        ul, ol { margin: 0.25rem 0 0.5rem 0; padding-left: 24px; }
+        li { margin-bottom: 0.25rem; line-height: 1.7; }
+        img { max-width: 100%; height: auto; border-radius: 4px; display: block; margin: 8px auto; }
+        table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: 13px; }
+        td, th { border: 1px solid #CBD5E1; padding: 6px 10px; }
+        th { background: #F8FAFC; font-weight: 600; }
+        blockquote { border-left: 3px solid #8B5CF6; padding-left: 12px; margin: 0.75rem 0; color: #4B5563; font-style: italic; }
+        code { font-family: monospace; font-size: 12px; background: #F3F4F6; padding: 2px 4px; border-radius: 3px; }
+        pre { background: #1E293B; color: #F8FAFC; padding: 10px 14px; border-radius: 6px; font-size: 12px; line-height: 1.45; margin: 10px 0; overflow: hidden; }
+        pre code { background: transparent; color: inherit; padding: 0; }
+        hr { border: none; border-top: 1px solid rgba(148, 163, 184, 0.45); margin: 1.5rem 0; height: 0; }
+        .print-hf-img { position: absolute; object-fit: contain; pointer-events: none; }
+        .print-hf-row { position: relative; z-index: 2; display: grid; grid-template-columns: 1fr 1fr 1fr; align-items: center; width: 100%; height: 100%; }
+        .print-hf-slot { font-size: 9.5px; color: #64748B; line-height: 1.25; white-space: pre-wrap; overflow: hidden; text-overflow: ellipsis; }
+    </style>
+</head>
+<body>
+    ${sheetsHtmlParts.join('\n')}
+</body>
+</html>`;
+};
+
+window.veyraGetAllPagesHtml = function () {
+    if (!editor || !editor.schema) return [];
+    try {
+        const pageOrder = ydoc ? ydoc.getArray('pageOrder') : null;
+        const pageIds = pageOrder && pageOrder.length > 0
+            ? pageOrder.toArray().map(String)
+            : [currentFragmentName || 'default'];
+
+        const serializer = DOMSerializer.fromSchema(editor.schema);
+
+        return pageIds.map(pageId => {
+            if (pageId === currentFragmentName && editor && !editor.isDestroyed) {
+                return {
+                    id: pageId,
+                    content: editor.getHTML()
+                };
+            }
+            try {
+                const fragment = ydoc.getXmlFragment(pageId);
+                if (!fragment || fragment.length === 0) {
+                    return { id: pageId, content: '' };
+                }
+                const pmNode = yXmlFragmentToProseMirrorRootNode(fragment, editor.schema);
+                const domFragment = serializer.serializeFragment(pmNode.content);
+                const tempDiv = document.createElement('div');
+                tempDiv.appendChild(domFragment);
+                return {
+                    id: pageId,
+                    content: tempDiv.innerHTML
+                };
+            } catch (e) {
+                console.error('Error serializing page', pageId, e);
+                return { id: pageId, content: '' };
+            }
+        });
+    } catch (err) {
+        console.error('Error in veyraGetAllPagesHtml:', err);
+        return [{ id: currentFragmentName || 'default', content: editor ? editor.getHTML() : '' }];
+    }
+};
+
 // Receptor de mensajes nativos desde React Native
 function handleNativeIncomingMessage(data) {
     if (!data || typeof data !== 'object') return;
     switch (data.type) {
         case 'GET_HTML':
             sendToNative({ type: 'HTML_RESULT', html: editor ? editor.getHTML() : '' });
+            break;
+        case 'GET_ALL_PAGES_HTML':
+            const allPages = typeof window.veyraGetAllPagesHtml === 'function' ? window.veyraGetAllPagesHtml() : [];
+            sendToNative({ type: 'ALL_PAGES_HTML_RESULT', pages: allPages });
+            break;
+        case 'GET_A4_EXPORT_HTML':
+            const a4Html = typeof window.veyraGetA4ExportHtml === 'function' ? window.veyraGetA4ExportHtml(data && data.title) : '';
+            sendToNative({ type: 'A4_EXPORT_HTML_RESULT', html: a4Html });
             break;
     }
 }
@@ -3251,6 +4596,19 @@ if (typeof window !== 'undefined') {
         }
         if (Date.now() >= suppressYoutubeDismissedUntil) {
             sendToNative({ type: 'YOUTUBE_DISMISSED' });
+        }
+        const root = document.documentElement;
+        if (root && root.classList.contains('a4-page-mode')) {
+            const A4_HEIGHT_PX = 1123;
+            const STRIDE = A4_HEIGHT_PX + 36;
+            const zoom = veyraA4CurrentZoom || 1;
+            const scrollTop = (window.scrollY || document.documentElement.scrollTop || 0) / zoom;
+            const viewportH = (window.innerHeight || 600) / zoom;
+            const idx = Math.max(0, Math.floor((scrollTop + viewportH * 0.35) / STRIDE));
+            if (idx !== veyraA4ActiveSheetIdx) {
+                veyraA4ActiveSheetIdx = idx;
+                sendToNative({ type: 'A4_ACTIVE_SHEET_CHANGED', activeSheetIndex: idx });
+            }
         }
     }, { passive: true });
 }

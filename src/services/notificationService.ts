@@ -8,6 +8,7 @@ import i18n from '../lib/i18n';
 import { VeyraAlarm } from './veyraAlarm';
 import { getDB } from '../db';
 import { supabase } from '../lib/supabase';
+import { expandOccurrences } from './recurrence/recurrenceEngine';
 
 export const DEFAULT_SOUND_SETTINGS = {
     normal: 'ping_brillante.wav',
@@ -39,6 +40,7 @@ export const NotificationService = {
             handleNotification: async (notification) => {
                 console.log(`[NotificationService] 🔔 Notificación recibida en primer plano: [${notification.request.identifier}] "${notification.request.content.title}"`);
                 return {
+                    shouldShowAlert: true,
                     shouldShowBanner: true,
                     shouldShowList: true,
                     shouldPlaySound: true,
@@ -325,6 +327,7 @@ export const NotificationService = {
                 reminderId: reminder.id,
                 url: `veyra://confirm/${reminder.id}`,
             },
+            channelId,
             sound: soundFile, // Usado en iOS
             vibrate: vibrationPattern, // Usado explícitamente en Android
             categoryIdentifier: 'REMINDER_ACTION',
@@ -400,36 +403,59 @@ export const NotificationService = {
     },
 
     async cancelNotificationsForReminder(reminderId: string, storedIds?: string[]) {
-        console.log(`[NotificationService] 🛑 Cancelando notificaciones para recordatorio: ${reminderId}`);
+        if (!reminderId) return;
+
+        // Robustez: si se pasa un array de IDs (o JSON de IDs) como primer parámetro
+        let actualReminderId = reminderId;
+        const idsToCancel: string[] = storedIds ? [...storedIds] : [];
+        if (typeof reminderId === 'string' && reminderId.trim().startsWith('[') && reminderId.trim().endsWith(']')) {
+            try {
+                const parsed = JSON.parse(reminderId);
+                if (Array.isArray(parsed)) {
+                    idsToCancel.push(...parsed);
+                }
+                actualReminderId = '';
+            } catch {}
+        }
+
+        console.log(`[NotificationService] 🛑 Cancelando notificaciones para recordatorio: ${actualReminderId || 'por IDs'}`);
         // Cancelar también cualquier alarma activa en el motor nativo
-        if (VeyraAlarm.isAvailable()) {
-            VeyraAlarm.cancel(reminderId).catch(() => {});
+        if (actualReminderId && VeyraAlarm.isAvailable()) {
+            VeyraAlarm.cancel(actualReminderId).catch(() => {});
         }
         // Descartar notificaciones ya presentadas en la barra de estado
         try {
             const presented = await Notifications.getPresentedNotificationsAsync();
             for (const notif of presented) {
                 const notifReminderId = notif.request.content.data?.reminderId;
-                if (notifReminderId === reminderId || notif.request.identifier === reminderId) {
-                    await Notifications.dismissNotificationAsync(notif.request.identifier);
+                if (
+                    (actualReminderId && (notifReminderId === actualReminderId || notif.request.identifier === actualReminderId)) ||
+                    idsToCancel.includes(notif.request.identifier)
+                ) {
+                    await Notifications.dismissNotificationAsync(notif.request.identifier).catch(() => {});
                 }
             }
         } catch (dismissErr) {
             console.warn('[NotificationService] Error descartando notificaciones presentadas:', dismissErr);
         }
-        if (storedIds && storedIds.length > 0) {
-            await Promise.all(storedIds.map(id => Notifications.cancelScheduledNotificationAsync(id)));
-            console.log(`[NotificationService] Canceladas ${storedIds.length} notificaciones por ID almacenado`);
-        } else {
-            const scheduled = await Notifications.getAllScheduledNotificationsAsync();
-            let canceledCount = 0;
-            for (const notif of scheduled) {
-                if (notif.content.data?.reminderId === reminderId) {
-                    await Notifications.cancelScheduledNotificationAsync(notif.identifier);
-                    canceledCount++;
+        if (idsToCancel.length > 0) {
+            await Promise.all(idsToCancel.map(id => Notifications.cancelScheduledNotificationAsync(id).catch(() => {})));
+            console.log(`[NotificationService] Canceladas ${idsToCancel.length} notificaciones por ID almacenado`);
+        }
+        if (actualReminderId) {
+            try {
+                const scheduled = await Notifications.getAllScheduledNotificationsAsync();
+                let canceledCount = 0;
+                for (const notif of scheduled) {
+                    if (notif.content.data?.reminderId === actualReminderId) {
+                        await Notifications.cancelScheduledNotificationAsync(notif.identifier).catch(() => {});
+                        canceledCount++;
+                    }
                 }
+                console.log(`[NotificationService] Canceladas ${canceledCount} notificaciones coincidentes`);
+            } catch (schedErr) {
+                console.warn('[NotificationService] Error leyendo notificaciones programadas:', schedErr);
             }
-            console.log(`[NotificationService] Canceladas ${canceledCount} notificaciones coincidentes`);
         }
     },
 
@@ -528,62 +554,87 @@ export const NotificationService = {
         const scheduledIds: string[] = [];
         const now = Date.now();
 
-        for (const offsetMin of offsets) {
-            const offsetMs = offsetMin * 60 * 1000;
-            const triggerTime = event.start_time_ms - offsetMs;
+        const isRecurring = Boolean(
+            (event.recurrence_rule && event.recurrence_rule !== 'none' && event.recurrence_rule !== 'null') ||
+            (event.repeat_rule && event.repeat_rule !== 'none' && event.repeat_rule !== 'null')
+        );
 
-            if (triggerTime <= now) {
-                continue;
-            }
-
+        // Si es recurrente, proyectar las ocurrencias de los próximos 14 días
+        const occurrences: { startMs: number; endMs: number }[] = [];
+        if (isRecurring) {
             try {
-                const channelId = await this.ensureChannel('normal', DEFAULT_SOUND_SETTINGS.normal);
-                const startTimeFormatted = format(new Date(event.start_time_ms), 'HH:mm');
-                const endTimeFormatted = format(new Date(event.end_time_ms), 'HH:mm');
+                const upcomingLimit = now + 14 * 24 * 60 * 60 * 1000;
+                const occs = expandOccurrences(event, now, upcomingLimit);
+                for (const occ of occs) {
+                    occurrences.push({ startMs: occ.startTimeMs, endMs: occ.endTimeMs });
+                }
+            } catch (recErr) {
+                console.warn('[NotificationService] Error expandiendo ocurrencias para notificaciones:', recErr);
+            }
+        }
 
-                let body = `${startTimeFormatted} - ${endTimeFormatted}`;
-                if (offsetMin > 0) {
-                    if (offsetMin >= 10080 && offsetMin % 10080 === 0) {
-                        const weeks = offsetMin / 10080;
-                        body = `Comienza en ${weeks} ${weeks === 1 ? 'semana' : 'semanas'} (${startTimeFormatted} - ${endTimeFormatted})`;
-                    } else if (offsetMin >= 1440) {
-                        const days = Math.round(offsetMin / 1440);
-                        body = `Comienza en ${days} ${days === 1 ? 'día' : 'días'} (${startTimeFormatted} - ${endTimeFormatted})`;
-                    } else if (offsetMin >= 60) {
-                        const hours = Math.round(offsetMin / 60);
-                        body = `Comienza en ${hours} ${hours === 1 ? 'hora' : 'horas'} (${startTimeFormatted} - ${endTimeFormatted})`;
+        if (occurrences.length === 0) {
+            occurrences.push({ startMs: event.start_time_ms, endMs: event.end_time_ms || event.start_time_ms });
+        }
+
+        for (const occ of occurrences) {
+            for (const offsetMin of offsets) {
+                const offsetMs = offsetMin * 60 * 1000;
+                const triggerTime = occ.startMs - offsetMs;
+
+                if (triggerTime <= now) {
+                    continue;
+                }
+
+                try {
+                    const channelId = await this.ensureChannel('normal', DEFAULT_SOUND_SETTINGS.normal);
+                    const startTimeFormatted = format(new Date(occ.startMs), 'HH:mm');
+                    const endTimeFormatted = format(new Date(occ.endMs), 'HH:mm');
+
+                    let body = `${startTimeFormatted} - ${endTimeFormatted}`;
+                    if (offsetMin > 0) {
+                        if (offsetMin >= 10080 && offsetMin % 10080 === 0) {
+                            const weeks = offsetMin / 10080;
+                            body = `Comienza en ${weeks} ${weeks === 1 ? 'semana' : 'semanas'} (${startTimeFormatted} - ${endTimeFormatted})`;
+                        } else if (offsetMin >= 1440) {
+                            const days = Math.round(offsetMin / 1440);
+                            body = `Comienza en ${days} ${days === 1 ? 'día' : 'días'} (${startTimeFormatted} - ${endTimeFormatted})`;
+                        } else if (offsetMin >= 60) {
+                            const hours = Math.round(offsetMin / 60);
+                            body = `Comienza en ${hours} ${hours === 1 ? 'hora' : 'horas'} (${startTimeFormatted} - ${endTimeFormatted})`;
+                        } else {
+                            body = `Comienza en ${offsetMin} min (${startTimeFormatted} - ${endTimeFormatted})`;
+                        }
                     } else {
-                        body = `Comienza en ${offsetMin} min (${startTimeFormatted} - ${endTimeFormatted})`;
+                        body = `Comienza ahora (${startTimeFormatted} - ${endTimeFormatted})`;
                     }
-                } else {
-                    body = `Comienza ahora (${startTimeFormatted} - ${endTimeFormatted})`;
-                }
-                if (event.location) {
-                    body += ` • ${event.location}`;
-                }
+                    if (event.location) {
+                        body += ` • ${event.location}`;
+                    }
 
-                const notifId = await Notifications.scheduleNotificationAsync({
-                    content: {
-                        title: `📅 ${event.title}`,
-                        body,
-                        data: {
-                            eventId: event.id,
-                            noteId: event.note_id || undefined,
-                            url: `veyra://event/${event.id}`,
+                    const notifId = await Notifications.scheduleNotificationAsync({
+                        content: {
+                            title: `📅 ${event.title}`,
+                            body,
+                            data: {
+                                eventId: event.id,
+                                noteId: event.note_id || undefined,
+                                url: `veyra://event/${event.id}`,
+                            },
+                            sound: DEFAULT_SOUND_SETTINGS.normal,
+                            priority: Notifications.AndroidNotificationPriority.HIGH,
                         },
-                        sound: DEFAULT_SOUND_SETTINGS.normal,
-                        priority: Notifications.AndroidNotificationPriority.HIGH,
-                    },
-                    trigger: {
-                        type: Notifications.SchedulableTriggerInputTypes.DATE,
-                        date: new Date(triggerTime),
-                        channelId,
-                    },
-                });
+                        trigger: {
+                            type: Notifications.SchedulableTriggerInputTypes.DATE,
+                            date: new Date(triggerTime),
+                            channelId,
+                        },
+                    });
 
-                scheduledIds.push(notifId);
-            } catch (error) {
-                console.warn('[NotificationService] Error scheduling event notification:', error);
+                    scheduledIds.push(notifId);
+                } catch (error) {
+                    console.warn('[NotificationService] Error scheduling event notification:', error);
+                }
             }
         }
 
@@ -643,13 +694,24 @@ export const NotificationService = {
     /**
      * Cancela las notificaciones programadas de un evento.
      */
-    async cancelEventNotifications(notificationIdsJson?: string) {
+    async cancelEventNotifications(notificationIdsJson?: string | string[]) {
         if (!notificationIdsJson) return;
         try {
-            const ids: string[] = JSON.parse(notificationIdsJson);
+            let ids: string[] = [];
+            if (Array.isArray(notificationIdsJson)) {
+                ids = notificationIdsJson;
+            } else if (typeof notificationIdsJson === 'string') {
+                if (notificationIdsJson.trim().startsWith('[')) {
+                    ids = JSON.parse(notificationIdsJson);
+                } else {
+                    ids = [notificationIdsJson];
+                }
+            }
             if (Array.isArray(ids)) {
                 for (const id of ids) {
-                    await Notifications.cancelScheduledNotificationAsync(id);
+                    try {
+                        await Notifications.cancelScheduledNotificationAsync(id);
+                    } catch {}
                 }
             }
         } catch (error) {

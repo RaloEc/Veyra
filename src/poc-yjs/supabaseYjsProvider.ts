@@ -125,6 +125,7 @@ export class SupabaseYjsProvider {
     private pendingWritesCount = 0;
     private isChannelReady = false;
     private broadcastQueue: Array<() => Promise<void>> = [];
+    private sendQueue: Promise<any> = Promise.resolve();
 
     private onStatusChange?: (status: SupabaseYjsStatus) => void;
     private onDetailedStatusChange?: (status: DetailedSyncStatus) => void;
@@ -499,6 +500,14 @@ export class SupabaseYjsProvider {
 
                 // Si el usuario es viewer, solo aplica a memoria; no intenta escribir a PostgreSQL
                 if (this.isViewer()) {
+                    try {
+                        const bytes = base64ToBytes(payload.update);
+                        Y.applyUpdate(this.doc, bytes, 'remote-broadcast');
+                        const currentOrder = this.getPageOrder();
+                        if (currentOrder.length > 0) {
+                            this.onPageOrderChange?.(currentOrder);
+                        }
+                    } catch (_) {}
                     this.onRemoteUpdate?.(payload.update, 'remote-broadcast');
                     return;
                 }
@@ -554,6 +563,10 @@ export class SupabaseYjsProvider {
                 try {
                     const updateBytes = base64ToBytes(payload.update);
                     Y.applyUpdate(this.doc, updateBytes, 'remote');
+                    const currentOrder = this.getPageOrder();
+                    if (currentOrder.length > 0) {
+                        this.onPageOrderChange?.(currentOrder);
+                    }
                 } catch (e) {
                     console.warn('[PoC Yjs Provider] Error aplicando update remoto a this.doc:', e);
                 }
@@ -654,6 +667,10 @@ export class SupabaseYjsProvider {
                 try {
                     const updateBytes = base64ToBytes(payload.update);
                     Y.applyUpdate(this.doc, updateBytes, 'remote-handshake');
+                    const currentOrder = this.getPageOrder();
+                    if (currentOrder.length > 0) {
+                        this.onPageOrderChange?.(currentOrder);
+                    }
                 } catch (_) {}
 
                 this.onRemoteUpdate?.(payload.update, 'remote-broadcast');
@@ -771,7 +788,19 @@ export class SupabaseYjsProvider {
      * 2. Si SQLite local falla o no está configurado, persiste en PostgreSQL ANTES de cualquier Broadcast.
      * 3. Si no hay copia duradera garantizada (local o remota), aborta con error y no difunde.
      */
-    public async sendUpdate(base64Update: string): Promise<SendUpdateResult> {
+    /**
+     * Envía una actualización delta de Yjs garantizando durabilidad y orden estricto (FIFO).
+     */
+    public sendUpdate(base64Update: string): Promise<SendUpdateResult> {
+        return new Promise<SendUpdateResult>((resolve, reject) => {
+            this.sendQueue = this.sendQueue.then(
+                () => this.internalSendUpdate(base64Update).then(resolve, reject),
+                () => this.internalSendUpdate(base64Update).then(resolve, reject)
+            );
+        });
+    }
+
+    private async internalSendUpdate(base64Update: string): Promise<SendUpdateResult> {
         if (this.isViewer()) {
             return {
                 localSaved: false,
@@ -1138,6 +1167,11 @@ export class SupabaseYjsProvider {
 
             if (maxUpdateId > this.lastProcessedReadId) {
                 this.lastProcessedReadId = maxUpdateId;
+            }
+
+            const currentOrder = this.getPageOrder();
+            if (currentOrder.length > 0) {
+                this.onPageOrderChange?.(currentOrder);
             }
 
             this.lastCatchUpSuccess = true;

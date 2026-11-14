@@ -24,6 +24,7 @@ import {
     Type,
     Zap,
     AlignLeft,
+    FileText,
 } from '@tamagui/lucide-icons';
 import { useVeyraTheme } from '../../theme/useVeyraTheme';
 import { VeyraSurface } from '../ui/VeyraSurface';
@@ -37,6 +38,9 @@ export interface NoteOptionsMenuProps {
     isExportingPdf?: boolean;
     onOpenPagesManager: () => void;
     onOpenFontPicker?: () => void;
+    onOpenHeaderFooterModal?: () => void;
+    pageFormat?: 'infinite' | 'a4';
+    onTogglePageFormat?: () => void;
     pageCount: number;
     isPinned: boolean;
     onTogglePin: () => void;
@@ -60,6 +64,9 @@ export function NoteOptionsMenu({
     isExportingPdf = false,
     onOpenPagesManager,
     onOpenFontPicker,
+    onOpenHeaderFooterModal,
+    pageFormat = 'infinite',
+    onTogglePageFormat,
     pageCount,
     isPinned,
     onTogglePin,
@@ -257,6 +264,25 @@ export function NoteOptionsMenu({
                             </TouchableOpacity>
                         )}
 
+                        {/* Formato de página A4 / Continua */}
+                        {onTogglePageFormat && (
+                            <TouchableOpacity
+                                activeOpacity={0.65}
+                                onPress={() => {
+                                    onClose();
+                                    onTogglePageFormat();
+                                }}
+                                style={styles.menuRow}
+                            >
+                                <View style={styles.iconSlot}>
+                                    <FileText size={16} color="#8B5CF6" strokeWidth={2.2} />
+                                </View>
+                                <Text style={[styles.menuLabel, { color: colors.textPrimary }]}>
+                                    {pageFormat === 'a4' ? 'Cambiar a vista continua' : 'Cambiar a formato A4'}
+                                </Text>
+                            </TouchableOpacity>
+                        )}
+
                         {/* 2. Organizador de Hojas */}
                         <TouchableOpacity
                             activeOpacity={0.65}
@@ -270,7 +296,7 @@ export function NoteOptionsMenu({
                                 <Layers size={16} color="#8B5CF6" strokeWidth={2.2} />
                             </View>
                             <Text style={[styles.menuLabel, { color: colors.textPrimary }]}>
-                                {t('notes.pages_manager', { defaultValue: 'Organizar hojas' })}
+                                {pageFormat === 'a4' ? 'Hojas A4' : t('notes.pages_manager', { defaultValue: 'Organizar hojas' })}
                             </Text>
                             <View style={[styles.badgePill, { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.05)' }]}>
                                 <Text style={[styles.badgeText, { color: colors.textSecondary }]}>
@@ -278,6 +304,25 @@ export function NoteOptionsMenu({
                                 </Text>
                             </View>
                         </TouchableOpacity>
+
+                        {/* Encabezado y pie de página (Modo A4) */}
+                        {pageFormat === 'a4' && onOpenHeaderFooterModal && (
+                            <TouchableOpacity
+                                activeOpacity={0.65}
+                                onPress={() => {
+                                    onClose();
+                                    onOpenHeaderFooterModal();
+                                }}
+                                style={styles.menuRow}
+                            >
+                                <View style={styles.iconSlot}>
+                                    <AlignLeft size={16} color="#8B5CF6" strokeWidth={2.2} />
+                                </View>
+                                <Text style={[styles.menuLabel, { color: colors.textPrimary }]}>
+                                    Encabezado y pie de página
+                                </Text>
+                            </TouchableOpacity>
+                        )}
 
                         {/* Tipografía de la nota */}
                         {onOpenFontPicker && (

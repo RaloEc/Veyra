@@ -19,22 +19,25 @@ const template = `/**
  */
 import { GOOGLE_FONTS_CSS_IMPORT } from '../../constants/noteFonts';
 
-export function getTiptapHtml(options: { isDark?: boolean; isAmoled?: boolean; accentColor?: string; activePageId?: string } = {}) {
+export function getTiptapHtml(options: { isDark?: boolean; isAmoled?: boolean; accentColor?: string; activePageId?: string; pageFormat?: 'infinite' | 'a4' } = {}) {
     const isDark = options.isDark ?? true;
     const isAmoled = options.isAmoled ?? false;
     const accentColor = options.accentColor ?? '#8B5CF6';
     const activePageId = options.activePageId || null;
+    const pageFormat = options.pageFormat || 'infinite';
     const initialThemeClass = isAmoled ? 'dark amoled' : (isDark ? 'dark' : 'light');
     const initialBgColor = isAmoled ? '#000000' : (isDark ? '#121212' : '#FFFFFF');
+    const pageFormatClass = pageFormat === 'a4' ? 'a4-page-mode' : '';
+    const initialViewport = 'width=device-width, initial-scale=1.0, maximum-scale=5.0, minimum-scale=1.0, user-scalable=yes, viewport-fit=cover';
     return \`<!DOCTYPE html>
-<html lang="es" class="\${initialThemeClass}">
+<html lang="es" class="\${initialThemeClass} \${pageFormatClass}">
 <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, minimum-scale=1.0, user-scalable=yes, viewport-fit=cover" />
+    <meta name="viewport" id="veyra-viewport" content="\${initialViewport}" />
     <title>Veyra Tiptap Yjs</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500;1,600;1,700&display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500;1,600;1,700&display=swap" rel="stylesheet" />
     <style>
         \${GOOGLE_FONTS_CSS_IMPORT}
         :root {
@@ -142,6 +145,7 @@ export function getTiptapHtml(options: { isDark?: boolean; isAmoled?: boolean; a
             touch-action: pan-x pan-y pinch-zoom;
             overflow-x: hidden !important;
             overflow-y: auto;
+            transition: background-color 0.38s cubic-bezier(0.2, 0.8, 0.2, 1);
         }
         ::-webkit-scrollbar {
             width: 0 !important;
@@ -154,6 +158,7 @@ export function getTiptapHtml(options: { isDark?: boolean; isAmoled?: boolean; a
             box-sizing: border-box;
             min-height: 100%;
             padding: 10px 18px 80px 18px;
+            transition: padding 0.38s cubic-bezier(0.2, 0.8, 0.2, 1);
         }
         .ProseMirror {
             outline: none;
@@ -170,6 +175,245 @@ export function getTiptapHtml(options: { isDark?: boolean; isAmoled?: boolean; a
             white-space: pre-wrap;
             caret-color: var(--accent-color);
             color: var(--text-color) !important;
+            transition: box-shadow 0.38s cubic-bezier(0.2, 0.8, 0.2, 1),
+                        border 0.38s cubic-bezier(0.2, 0.8, 0.2, 1),
+                        border-radius 0.38s ease,
+                        background-color 0.38s cubic-bezier(0.2, 0.8, 0.2, 1);
+        }
+
+        /* TRANSICIONES Y ANIMACIONES FANCY ENTRE FORMATO A4 E INFINITO */
+        @keyframes veyraA4Entrance {
+            0% {
+                opacity: 0.55;
+                transform: scale(0.96) translateY(14px);
+            }
+            60% {
+                transform: scale(1.008) translateY(-2px);
+            }
+            100% {
+                opacity: 1;
+                transform: scale(1) translateY(0);
+            }
+        }
+
+        @keyframes veyraInfiniteEntrance {
+            0% {
+                opacity: 0.6;
+                transform: scale(1.025) translateY(-8px);
+            }
+            100% {
+                opacity: 1;
+                transform: scale(1) translateY(0);
+            }
+        }
+
+        html.veyra-animating-to-a4 #editor {
+            animation: veyraA4Entrance 0.42s cubic-bezier(0.16, 1, 0.3, 1) both;
+            transform-origin: top center;
+        }
+
+        html.veyra-animating-to-infinite #editor {
+            animation: veyraInfiniteEntrance 0.38s cubic-bezier(0.16, 1, 0.3, 1) both;
+            transform-origin: top center;
+        }
+
+        /* FORMATO HOJA A4 CON SEPARACION VISUAL - DIMENSIONES REALES A4 (794x1123px) */
+        html.a4-page-mode, html.a4-page-mode body {
+            background-color: #EEF2F6 !important;
+            width: 100% !important;
+            max-width: 100% !important;
+            min-width: 0 !important;
+            overflow-x: auto !important;
+        }
+        html.dark.a4-page-mode, html.dark.a4-page-mode body {
+            background-color: #0B0D11 !important;
+        }
+        html.amoled.a4-page-mode, html.amoled.a4-page-mode body {
+            background-color: #000000 !important;
+        }
+        html.a4-page-mode #editor-container {
+            width: 820px !important;
+            min-width: 820px !important;
+            max-width: 820px !important;
+            margin: 0 auto !important;
+            padding: 24px 13px 140px 13px !important;
+            box-sizing: border-box !important;
+            transform-origin: top center;
+        }
+        html.a4-page-mode #editor {
+            position: relative !important;
+            width: 794px !important;
+            margin: 0 auto !important;
+        }
+        html.a4-page-mode .ProseMirror {
+            display: flow-root !important;
+            width: 794px !important;
+            min-width: 794px !important;
+            max-width: 794px !important;
+            min-height: 1123px !important;
+            padding: 25mm 30mm !important;
+            box-sizing: border-box !important;
+            border-radius: 4px !important;
+            font-family: 'Inter', system-ui, -apple-system, sans-serif !important;
+            font-size: 14px !important;
+            line-height: 1.7 !important;
+            background-color: #FFFFFF !important;
+            border: 1px solid #E2E8F0 !important;
+            box-shadow: 0 4px 24px rgba(0, 0, 0, 0.08) !important;
+        }
+        html.a4-page-mode .ProseMirror p {
+            font-size: 14px !important;
+            line-height: 1.7 !important;
+            margin-top: 0.25rem !important;
+            margin-bottom: 0.5rem !important;
+            width: 100%;
+        }
+        html.dark.a4-page-mode .ProseMirror {
+            background-color: #16181D !important;
+            border: 1px solid rgba(255, 255, 255, 0.08) !important;
+            box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45) !important;
+        }
+        html.amoled.a4-page-mode .ProseMirror {
+            background-color: #101216 !important;
+            border: 1px solid rgba(255, 255, 255, 0.12) !important;
+            box-shadow: 0 6px 24px rgba(0, 0, 0, 0.6) !important;
+        }
+        .veyra-a4-hf-band {
+            position: absolute;
+            left: 0;
+            right: 0;
+            box-sizing: border-box;
+            user-select: none;
+            z-index: 18;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            pointer-events: auto;
+            cursor: pointer;
+            transition: background-color 0.15s ease, opacity 0.32s ease;
+            animation: veyraHfBandFade 0.35s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+        }
+        @keyframes veyraHfBandFade {
+            0% { opacity: 0; transform: translateY(-4px); }
+            100% { opacity: 1; transform: translateY(0); }
+        }
+        .veyra-a4-hf-band:active {
+            background-color: rgba(139, 92, 246, 0.08);
+        }
+        .veyra-a4-hf-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            align-items: center;
+            gap: 6px;
+            width: 100%;
+            box-sizing: border-box;
+            position: relative;
+            z-index: 2;
+            pointer-events: none;
+        }
+        .veyra-a4-hf-slot {
+            font-size: 9.5px;
+            line-height: 1.25;
+            color: var(--text-secondary);
+            opacity: 0.82;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: pre-wrap;
+        }
+        .veyra-a4-hf-img {
+            position: absolute;
+            object-fit: contain;
+            pointer-events: none;
+            z-index: 1;
+            border-radius: 2px;
+        }
+        .veyra-a4-hf-hint {
+            font-size: 8.5px;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            color: var(--text-secondary);
+            opacity: 0.28;
+            text-align: center;
+            pointer-events: none;
+        }
+        html.a4-page-mode .veyra-table {
+            margin: 1.5rem 0;
+        }
+        html.a4-page-mode .veyra-table td,
+        html.a4-page-mode .veyra-table th {
+            padding: 8px 14px;
+        }
+        html.a4-page-mode hr {
+            border: none;
+            border-top: 1px solid rgba(148, 163, 184, 0.45);
+            margin: 1.5rem 0;
+            height: 0;
+        }
+        html.dark.a4-page-mode hr {
+            border-top-color: rgba(255, 255, 255, 0.12);
+        }
+        #veyra-a4-breaks-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 794px;
+            pointer-events: none;
+            z-index: 25;
+            transition: opacity 0.32s ease;
+        }
+        .veyra-a4-break-gap {
+            position: absolute;
+            left: -1px;
+            right: -1px;
+            height: 36px;
+            pointer-events: none;
+            user-select: none;
+            z-index: 25;
+            display: flex;
+            flex-direction: column;
+            animation: veyraFadeInGap 0.32s ease both;
+        }
+        @keyframes veyraFadeInGap {
+            0% { opacity: 0; }
+            100% { opacity: 1; }
+        }
+            justify-content: space-between;
+        }
+        .veyra-a4-break-edge-top {
+            width: 100%;
+            height: 1px;
+            background: rgba(128, 128, 128, 0.28);
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.18);
+        }
+        .veyra-a4-break-edge-bottom {
+            width: 100%;
+            height: 1px;
+            background: rgba(128, 128, 128, 0.28);
+            box-shadow: 0 -3px 8px rgba(0, 0, 0, 0.14);
+        }
+        .veyra-a4-break-body {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #EEF2F6;
+        }
+        html.dark .veyra-a4-break-body {
+            background: #0B0D11;
+        }
+        html.amoled .veyra-a4-break-body {
+            background: #000000;
+        }
+        .veyra-a4-break-pill {
+            padding: 2px 10px;
+            border-radius: 999px;
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
+            background: var(--bg-color);
+            color: var(--text-secondary);
+            border: 1px solid rgba(128, 128, 128, 0.3);
         }
         .ProseMirror p,
         .ProseMirror li {
@@ -263,10 +507,14 @@ export function getTiptapHtml(options: { isDark?: boolean; isAmoled?: boolean; a
         .ProseMirror mark[style*="rgba"] * {
             color: inherit !important;
         }
+        .ProseMirror > *:first-child {
+            margin-top: 0 !important;
+        }
         .ProseMirror p {
-            margin: 0 0 12px 0;
+            margin-top: 0.25rem;
+            margin-bottom: 0.5rem;
             font-size: 16px;
-            line-height: 24px;
+            line-height: 1.7;
             width: 100%;
             max-width: 100%;
             box-sizing: border-box;
@@ -275,35 +523,87 @@ export function getTiptapHtml(options: { isDark?: boolean; isAmoled?: boolean; a
             white-space: pre-wrap;
         }
         .ProseMirror h1 {
-            font-size: 1.75rem;
-            font-weight: 700;
-            margin: 16px 0 12px 0;
+            font-size: 1.875rem !important; /* ~30px */
+            font-weight: 700 !important;
+            line-height: 1.25 !important;
+            margin-top: 1.75rem;
+            margin-bottom: 0.5rem;
+            letter-spacing: -0.025em;
             color: var(--heading-1);
+            display: block !important;
         }
         .ProseMirror h2 {
-            font-size: 1.4rem;
-            font-weight: 600;
-            margin: 14px 0 10px 0;
+            font-size: 1.45rem !important; /* ~23px */
+            font-weight: 600 !important;
+            line-height: 1.3 !important;
+            margin-top: 1.4rem;
+            margin-bottom: 0.375rem;
+            letter-spacing: -0.02em;
             color: var(--heading-2);
+            display: block !important;
         }
         .ProseMirror h3 {
-            font-size: 1.15rem;
-            font-weight: 600;
-            margin: 12px 0 8px 0;
-        }
-        .ProseMirror ul, .ProseMirror ol {
-            margin: 0 0 12px 0;
-            padding-left: 24px;
-        }
-        .ProseMirror li {
-            margin-bottom: 6px;
+            font-size: 1.2rem !important; /* ~19px */
+            font-weight: 600 !important;
+            line-height: 1.4 !important;
+            margin-top: 1.15rem;
+            margin-bottom: 0.25rem;
+            letter-spacing: -0.015em;
+            color: inherit;
+            display: block !important;
         }
         .ProseMirror blockquote {
             border-left: 3px solid var(--accent-color);
-            padding-left: 12px;
-            margin: 8px 0 12px 0;
+            padding: 0.35rem 0.75rem 0.35rem 1rem;
+            margin: 0.85rem 0;
             font-style: italic;
-            opacity: 0.9;
+            color: var(--text-secondary);
+            background: rgba(255, 255, 255, 0.02);
+            border-radius: 0 6px 6px 0;
+        }
+        .ProseMirror blockquote p {
+            margin: 0 !important;
+        }
+        .ProseMirror ul:not([data-type="taskList"]) {
+            list-style-type: disc !important;
+            padding-left: 1.6rem !important;
+            margin: 0.5rem 0 !important;
+        }
+        .ProseMirror ul:not([data-type="taskList"]) ul {
+            list-style-type: circle !important;
+            padding-left: 1.4rem !important;
+            margin: 0.25rem 0 !important;
+        }
+        .ProseMirror ul:not([data-type="taskList"]) ul ul {
+            list-style-type: square !important;
+        }
+        .ProseMirror ul:not([data-type="taskList"]) li {
+            margin: 0.2rem 0;
+            padding-left: 0.15rem;
+            display: list-item !important;
+        }
+        .ProseMirror ul:not([data-type="taskList"]) li > p {
+            margin: 0 !important;
+        }
+        .ProseMirror ol {
+            padding-left: 1.6rem !important;
+            margin: 0.5rem 0 !important;
+        }
+        .ProseMirror ol li {
+            margin: 0.2rem 0;
+        }
+        .ProseMirror ol li > p {
+            margin: 0 !important;
+        }
+        .ProseMirror ul[data-type="taskList"] {
+            list-style: none;
+            padding: 0;
+            margin: 0.8rem 0;
+        }
+        .ProseMirror ul[data-type="taskList"] li {
+            display: flex;
+            align-items: flex-start;
+            margin-bottom: 0.5rem;
         }
 
         /* ─── Nodo Inline Asistente IA Minimalista Flat ─── */
@@ -354,20 +654,31 @@ export function getTiptapHtml(options: { isDark?: boolean; isAmoled?: boolean; a
         .veyra-ai-prompt-action {
             display: flex;
             align-items: center;
+            gap: 6px;
             flex-shrink: 0;
             user-select: none;
             -webkit-user-select: none;
         }
-        .veyra-ai-enter-badge {
+        .veyra-ai-enter-badge,
+        .veyra-ai-close-badge {
             font-family: monospace;
             font-size: 11px;
             color: var(--text-secondary);
             border: 1px solid rgba(255, 255, 255, 0.15);
             border-radius: 4px;
             padding: 2px 6px;
+            cursor: pointer;
+            transition: all 0.15s ease;
+        }
+        .veyra-ai-enter-badge:active,
+        .veyra-ai-close-badge:active {
+            opacity: 0.7;
+            transform: scale(0.95);
         }
         html.light .veyra-ai-enter-badge,
-        html:not(.dark):not(.amoled) .veyra-ai-enter-badge {
+        html.light .veyra-ai-close-badge,
+        html:not(.dark):not(.amoled) .veyra-ai-enter-badge,
+        html:not(.dark):not(.amoled) .veyra-ai-close-badge {
             border-color: rgba(0, 0, 0, 0.15);
         }
 
@@ -715,6 +1026,36 @@ export function getTiptapHtml(options: { isDark?: boolean; isAmoled?: boolean; a
             border: 1.5px solid var(--table-custom-border, rgba(148, 163, 184, 0.4));
             border-radius: 4px;
         }
+
+        /* ─── Alineación de Posición de Tablas en Móvil ─── */
+        .veyra-table[data-table-align="center"]:not([style*="width"]),
+        .veyra-table[align="center"]:not([style*="width"]) {
+            min-width: unset !important;
+            width: fit-content !important;
+            max-width: 100% !important;
+        }
+        .veyra-table[data-table-align="right"]:not([style*="width"]),
+        .veyra-table[align="right"]:not([style*="width"]) {
+            min-width: unset !important;
+            width: fit-content !important;
+            max-width: 100% !important;
+        }
+        .veyra-table[data-table-align="center"],
+        .veyra-table[align="center"] {
+            margin-left: auto !important;
+            margin-right: auto !important;
+        }
+        .veyra-table[data-table-align="right"],
+        .veyra-table[align="right"] {
+            margin-left: auto !important;
+            margin-right: 0 !important;
+        }
+        .veyra-table[data-table-align="left"],
+        .veyra-table[align="left"],
+        .veyra-table:not([data-table-align]):not([align]) {
+            margin-left: 0 !important;
+            margin-right: auto !important;
+        }
         .veyra-table tr {
             box-sizing: border-box;
         }
@@ -868,6 +1209,131 @@ export function getTiptapHtml(options: { isDark?: boolean; isAmoled?: boolean; a
             height: 100%;
             object-fit: cover;
             display: block;
+        }
+
+        /* Footer con acción de Abrir y switch Solo texto en Móvil */
+        .veyra-bookmark-footer {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-top: 8px;
+            padding-top: 6px;
+            border-top: 1px solid rgba(148, 163, 184, 0.18);
+        }
+        .dark .veyra-bookmark-footer,
+        .amoled .veyra-bookmark-footer {
+            border-top-color: rgba(255, 255, 255, 0.08);
+        }
+        .veyra-bookmark-open-link {
+            font-size: 11px;
+            color: var(--accent-primary, #6366f1);
+            font-weight: 500;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 2px;
+        }
+        .veyra-bookmark-switch-btn {
+            background: transparent;
+            border: none;
+            padding: 2px 4px;
+            border-radius: 6px;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            cursor: pointer;
+            outline: none;
+            color: var(--text-secondary);
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        .veyra-bookmark-switch-btn:active {
+            opacity: 0.8;
+        }
+        .veyra-bookmark-switch-label {
+            font-size: 10.5px;
+            font-weight: 500;
+        }
+        .veyra-bookmark-switch-track {
+            position: relative;
+            width: 24px;
+            height: 14px;
+            background: rgba(148, 163, 184, 0.35);
+            border-radius: 9999px;
+            transition: background-color 0.2s ease;
+        }
+        .dark .veyra-bookmark-switch-track,
+        .amoled .veyra-bookmark-switch-track {
+            background: rgba(255, 255, 255, 0.18);
+        }
+        .veyra-bookmark-switch-thumb {
+            position: absolute;
+            top: 1px;
+            left: 1px;
+            width: 12px;
+            height: 12px;
+            background: #ffffff;
+            border-radius: 9999px;
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+            transition: transform 0.2s ease;
+        }
+
+        /* ─── Bookmark Skeleton Animation en Móvil ─── */
+        @keyframes veyraShimmer {
+            0% { opacity: 0.45; }
+            50% { opacity: 0.85; }
+            100% { opacity: 0.45; }
+        }
+        .veyra-bookmark-loading-pill {
+            margin-left: auto;
+            font-size: 10px;
+            color: var(--accent-primary, #6366f1);
+            animation: veyraShimmer 1.5s infinite ease-in-out;
+            font-family: inherit;
+            display: inline-flex;
+            align-items: center;
+            gap: 3px;
+        }
+        .veyra-bookmark-skeleton-lines {
+            margin: 8px 0 6px 0;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+        .veyra-skeleton-line {
+            height: 12px;
+            border-radius: 4px;
+            background: rgba(148, 163, 184, 0.25);
+            animation: veyraShimmer 1.5s infinite ease-in-out;
+        }
+        .dark .veyra-skeleton-line,
+        .amoled .veyra-skeleton-line {
+            background: rgba(255, 255, 255, 0.1);
+        }
+        .veyra-skeleton-title-1 {
+            width: 82%;
+            height: 14px;
+        }
+        .veyra-skeleton-title-2 {
+            width: 45%;
+            height: 14px;
+        }
+        .veyra-skeleton-desc {
+            width: 65%;
+            height: 10px;
+            margin-top: 2px;
+            opacity: 0.75;
+        }
+        .veyra-skeleton-cover {
+            background: rgba(148, 163, 184, 0.18) !important;
+            animation: veyraShimmer 1.5s infinite ease-in-out;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .dark .veyra-skeleton-cover,
+        .amoled .veyra-skeleton-cover {
+            background: rgba(255, 255, 255, 0.06) !important;
         }
 
         /* ─── Menú Flotante de Comandos (Slash Menu) en Móvil ─── */
@@ -1277,35 +1743,87 @@ export function getTiptapHtml(options: { isDark?: boolean; isAmoled?: boolean; a
             pointer-events: none;
         }
 
-        /* Línea vertical del cursor colaborativo */
+        /* Ancla del cursor colaborativo (0 dimensiones en el flujo, no altera jamás el line-box ni la posición de la línea) */
         .collaboration-cursor__caret {
-            position: relative;
-            margin-left: -1px;
-            margin-right: -1px;
-            border-left: 2px solid;
-            border-right: none;
-            word-break: normal;
-            pointer-events: none;
+            position: relative !important;
+            display: inline !important;
+            width: 0 !important;
+            height: 0 !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            border: none !important;
+            line-height: 0 !important;
+            font-size: 0 !important;
+            vertical-align: baseline !important;
+            word-break: normal !important;
+            pointer-events: none !important;
+            user-select: none !important;
+            -webkit-user-select: none !important;
+            white-space: nowrap !important;
         }
 
-        /* Etiqueta flotante con el nombre del usuario remoto */
+        /* Línea vertical visible del cursor colaborativo (100% absoluta fuera del flujo) */
+        .collaboration-cursor__line {
+            position: absolute !important;
+            left: -1px !important;
+            bottom: -3px !important;
+            width: 2px !important;
+            height: 20px !important;
+            pointer-events: none !important;
+            border-radius: 1px !important;
+            z-index: 20 !important;
+        }
+
+        /* Etiqueta flotante con el nombre del usuario remoto (100% absoluta fuera del flujo) */
         .collaboration-cursor__label {
-            position: absolute;
-            top: -1.4em;
-            left: -1px;
-            font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            font-size: 11px;
-            font-weight: 600;
-            line-height: 1;
-            user-select: none;
+            position: absolute !important;
+            bottom: 19px !important;
+            left: -1px !important;
+            font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+            font-size: 11px !important;
+            font-weight: 600 !important;
+            line-height: 1 !important;
+            user-select: none !important;
+            -webkit-user-select: none !important;
             color: #FFFFFF !important;
-            padding: 2px 6px;
-            border-radius: 4px;
-            white-space: nowrap;
-            pointer-events: none;
-            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
-            z-index: 9999;
-            transition: opacity 0.2s ease-in-out;
+            padding: 2px 6px !important;
+            border-radius: 4px 4px 4px 0 !important;
+            white-space: nowrap !important;
+            pointer-events: none !important;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3) !important;
+            z-index: 9999 !important;
+            transition: opacity 0.2s ease-in-out !important;
+        }
+
+        /* Cuando el cursor está cerca del borde derecho de la pantalla, flipear la etiqueta hacia la izquierda para evitar desbordamiento */
+        .collaboration-cursor__caret.collaboration-cursor__caret--flip-x .collaboration-cursor__label {
+            left: auto !important;
+            right: -1px !important;
+            border-radius: 4px 4px 0 4px !important;
+        }
+
+        /* Anular de raíz los saltos que ProseMirror inyecta al final del párrafo cuando hay widgets (evita que la línea salte hacia abajo) */
+        .ProseMirror p:has(.collaboration-cursor__caret) .ProseMirror-trailingBreak,
+        .ProseMirror li:has(.collaboration-cursor__caret) .ProseMirror-trailingBreak,
+        .ProseMirror h1:has(.collaboration-cursor__caret) .ProseMirror-trailingBreak,
+        .ProseMirror h2:has(.collaboration-cursor__caret) .ProseMirror-trailingBreak,
+        .ProseMirror h3:has(.collaboration-cursor__caret) .ProseMirror-trailingBreak,
+        .ProseMirror blockquote:has(.collaboration-cursor__caret) .ProseMirror-trailingBreak,
+        .ProseMirror-trailingBreak:not(:only-child) {
+            display: none !important;
+            height: 0 !important;
+            font-size: 0 !important;
+            line-height: 0 !important;
+        }
+
+        .ProseMirror-separator,
+        img.ProseMirror-separator {
+            display: none !important;
+            width: 0 !important;
+            height: 0 !important;
+            border: none !important;
+            margin: 0 !important;
+            padding: 0 !important;
         }
 
         /* Selección de texto hecha por el otro dispositivo */
@@ -1482,6 +2000,7 @@ export function getTiptapHtml(options: { isDark?: boolean; isAmoled?: boolean; a
     <script>
         window.VEYRA_INITIAL_PAGE_ID = \${JSON.stringify(activePageId)};
         window.VEYRA_INITIAL_THEME = \${JSON.stringify(initialThemeClass)};
+        window.VEYRA_INITIAL_PAGE_FORMAT = \${JSON.stringify(pageFormat)};
     </script>
     <script>
 ${escapedBundle}

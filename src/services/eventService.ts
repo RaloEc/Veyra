@@ -42,18 +42,18 @@ export interface CreateEventInput {
 function triggerWidgetSync() {
     setTimeout(() => {
         import('../widgets/widgetUpdater').then(({ updateTodayWidget }) => {
-            updateTodayWidget().catch(() => {});
-        }).catch(() => {});
+            updateTodayWidget().catch(() => { });
+        }).catch(() => { });
     }, 0);
 }
 
 function triggerSearchIndex(event: CalendarEvent) {
-    SearchService.indexEvent(event).catch(() => {});
+    SearchService.indexEvent(event).catch(() => { });
 }
 
 function triggerSearchRemove(id: string) {
-    SearchService.removeItem('event', id).catch(() => {});
-    SearchService.removeItem('schedule', id).catch(() => {});
+    SearchService.removeItem('event', id).catch(() => { });
+    SearchService.removeItem('schedule', id).catch(() => { });
 }
 
 export const EventService = {
@@ -249,7 +249,7 @@ export const EventService = {
                 if (Array.isArray(parsed)) {
                     await TagService.setTagsForItem('event', id, parsed);
                 }
-            } catch {}
+            } catch { }
         }
 
         // Si cambió la fecha/hora de inicio, recalcular recordatorios vinculados
@@ -274,7 +274,7 @@ export const EventService = {
 
                     // Reprogramar notificaciones
                     if (rem.notification_ids) {
-                        await NotificationService.cancelNotificationsForReminder(rem.notification_ids);
+                        await NotificationService.cancelNotificationsForReminder(rem.id);
                     }
                     const updatedReminder = { ...rem, due_date_ms: newDueDate };
                     const newNotifIds = await NotificationService.scheduleReminderNotification(updatedReminder);
@@ -307,7 +307,7 @@ export const EventService = {
         }
 
         triggerWidgetSync();
-        this.getEventById(id).then(e => e && triggerSearchIndex(e)).catch(() => {});
+        this.getEventById(id).then(e => e && triggerSearchIndex(e)).catch(() => { });
     },
 
     async deleteEvent(id: string, options?: { cascadeReminders?: boolean }): Promise<void> {
@@ -334,7 +334,7 @@ export const EventService = {
             const { NotificationService } = await import('./notificationService');
             for (const r of linked) {
                 if (r.notification_ids) {
-                    await NotificationService.cancelNotificationsForReminder(r.notification_ids);
+                    await NotificationService.cancelNotificationsForReminder(r.id);
                 }
             }
             await db.runAsync(
@@ -518,8 +518,8 @@ export function isEventOccurringOnDate(event: CalendarEvent, targetDate: Date): 
     if (!event.repeat_rule || event.repeat_rule === 'none' || event.repeat_rule === 'null') {
         const evStart = new Date(event.start_time_ms);
         return evStart.getFullYear() === d.getFullYear() &&
-               evStart.getMonth() === d.getMonth() &&
-               evStart.getDate() === d.getDate();
+            evStart.getMonth() === d.getMonth() &&
+            evStart.getDate() === d.getDate();
     }
 
     const occurrences = expandOccurrences(event, startOfDay, endOfDay);

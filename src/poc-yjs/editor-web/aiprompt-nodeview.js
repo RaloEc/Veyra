@@ -12,6 +12,7 @@ export class AIPromptNodeView {
         this.editor = editor;
         this.isLoading = false;
         this.requestId = 'ai_' + Math.random().toString(36).substring(2, 9);
+        this.hasEverHadContent = false;
 
         this.initDOM();
         this.registerGlobalHandler();
@@ -37,28 +38,49 @@ export class AIPromptNodeView {
 
         const action = document.createElement('div');
         action.className = 'veyra-ai-prompt-action';
-        action.innerHTML = '<span class="veyra-ai-enter-badge">↵</span>';
         this.action = action;
+        this.renderActionButtons();
 
         container.appendChild(label);
         container.appendChild(input);
         container.appendChild(action);
         this.dom.appendChild(container);
 
-        // Prevenir interferencia de ProseMirror y permitir recuperar foco con un click
+        // Prevenir interferencia de ProseMirror y permitir recuperar foco con un click/touch
         container.addEventListener('mousedown', (e) => e.stopPropagation());
+        container.addEventListener('touchstart', (e) => e.stopPropagation(), { passive: true });
         container.addEventListener('click', (e) => {
             e.stopPropagation();
             input.focus();
         });
+
         input.addEventListener('mousedown', (e) => e.stopPropagation());
+        input.addEventListener('touchstart', (e) => e.stopPropagation(), { passive: true });
         input.addEventListener('click', (e) => e.stopPropagation());
 
+        input.addEventListener('input', (e) => {
+            e.stopPropagation();
+            if (input.value.trim().length > 0) {
+                this.hasEverHadContent = true;
+            }
+        });
+
+        input.addEventListener('beforeinput', (e) => {
+            e.stopPropagation();
+        });
+
+        input.addEventListener('keyup', (e) => {
+            e.stopPropagation();
+        });
+
         input.addEventListener('keydown', (e) => {
+            e.stopPropagation();
             if (e.key === 'Escape') {
                 e.preventDefault();
                 this.cancel();
-            } else if (e.key === 'Backspace' && !input.value) {
+            } else if (e.key === 'Backspace' && !input.value && !this.hasEverHadContent) {
+                // Solo auto-cancela si el input está vacío y el usuario NUNCA escribió texto
+                // (ej: usuario acaba de invocar /ia en desktop y presiona Backspace inmediatamente)
                 e.preventDefault();
                 this.cancel();
             } else if (e.key === 'Enter') {
@@ -68,6 +90,35 @@ export class AIPromptNodeView {
         });
 
         setTimeout(() => input.focus(), 60);
+    }
+
+    renderActionButtons() {
+        this.action.innerHTML = '';
+
+        const closeBtn = document.createElement('span');
+        closeBtn.className = 'veyra-ai-close-badge';
+        closeBtn.textContent = '✕';
+        closeBtn.title = 'Cancelar';
+        closeBtn.addEventListener('mousedown', (e) => e.stopPropagation());
+        closeBtn.addEventListener('touchstart', (e) => e.stopPropagation(), { passive: true });
+        closeBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.cancel();
+        });
+
+        const enterBtn = document.createElement('span');
+        enterBtn.className = 'veyra-ai-enter-badge';
+        enterBtn.innerHTML = '↵';
+        enterBtn.title = 'Enviar orden';
+        enterBtn.addEventListener('mousedown', (e) => e.stopPropagation());
+        enterBtn.addEventListener('touchstart', (e) => e.stopPropagation(), { passive: true });
+        enterBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.submit();
+        });
+
+        this.action.appendChild(closeBtn);
+        this.action.appendChild(enterBtn);
     }
 
     registerGlobalHandler() {
@@ -140,11 +191,19 @@ export class AIPromptNodeView {
                 .run();
         } else {
             this.input.disabled = false;
-            this.action.innerHTML = '<span class="veyra-ai-enter-badge">↵</span>';
+            this.renderActionButtons();
             const err = result?.error || 'Error al generar contenido con IA.';
             alert(err);
             this.input.focus();
         }
+    }
+
+    stopEvent(event) {
+        return true;
+    }
+
+    ignoreMutation() {
+        return true;
     }
 
     destroy() {
@@ -153,4 +212,3 @@ export class AIPromptNodeView {
         }
     }
 }
-

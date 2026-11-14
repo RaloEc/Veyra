@@ -121,6 +121,8 @@ interface AppState {
     setWidgetFrostedGlass: (enabled: boolean) => void;
     vibrationEnabled: boolean;
     setVibrationEnabled: (enabled: boolean) => void;
+    notePageFormat: 'infinite' | 'a4';
+    setNotePageFormat: (format: 'infinite' | 'a4') => void;
 }
 
 let currentSyncStartTime = 0;
@@ -640,7 +642,7 @@ export const useStore = create<AppState>()(
                     await NotificationService.cancelNotificationsForReminder(id, storedIds);
 
                     const updatedReminder = { ...reminder, due_date_ms: newTime };
-                    const notifIds = await NotificationService.scheduleReminderNotification(updatedReminder);
+                    const notifIds = await NotificationService.scheduleReminderNotification(updatedReminder, get().soundSettings);
 
                     await ReminderService.updateReminder(id, {
                         due_date_ms: newTime,
@@ -671,7 +673,7 @@ export const useStore = create<AppState>()(
                             const storedIds = safeParseArray(reminder.notification_ids);
                             await NotificationService.cancelNotificationsForReminder(id, storedIds);
                             const updatedReminder = { ...reminder, due_date_ms: newTime, status: 'pending' as ReminderStatus };
-                            const notifIds = await NotificationService.scheduleReminderNotification(updatedReminder);
+                            const notifIds = await NotificationService.scheduleReminderNotification(updatedReminder, get().soundSettings);
                             await ReminderService.updateReminder(id, {
                                 due_date_ms: newTime,
                                 status: 'pending',
@@ -936,6 +938,10 @@ export const useStore = create<AppState>()(
             setVibrationEnabled: (enabled: boolean) => {
                 set({ vibrationEnabled: enabled });
             },
+            notePageFormat: 'infinite',
+            setNotePageFormat: (notePageFormat) => {
+                set({ notePageFormat });
+            },
         }),
         {
             name: 'app-storage',
@@ -971,6 +977,7 @@ export const useStore = create<AppState>()(
                 widgetGlassmorphic: state.widgetGlassmorphic ?? false,
                 widgetFrostedGlass: state.widgetFrostedGlass ?? false,
                 vibrationEnabled: state.vibrationEnabled ?? true,
+                notePageFormat: state.notePageFormat ?? 'infinite',
             }),
             onRehydrateStorage: () => (state) => {
                 currentSyncStartTime = 0;

@@ -50,6 +50,10 @@ export interface PagesOverviewModalProps {
     onReorderPages?: (fromIndex: number, toIndex: number) => void;
     layout?: PageLayoutMode;
     onChangeLayout?: (layout: PageLayoutMode) => void;
+    pageFormat?: 'infinite' | 'a4';
+    a4Sheets?: Array<{ index: number; title: string; snippet: string; wordCount: number }>;
+    activeA4SheetIndex?: number;
+    onSelectA4Sheet?: (sheetIndex: number) => void;
 }
 
 const CARD_HEIGHT = 68;
@@ -248,7 +252,20 @@ export function PagesOverviewModal({
     onReorderPages,
     layout,
     onChangeLayout,
+    pageFormat = 'infinite',
+    a4Sheets = [],
+    activeA4SheetIndex = 0,
+    onSelectA4Sheet,
 }: PagesOverviewModalProps) {
+    const isA4Mode = pageFormat === 'a4';
+    const [overviewTab, setOverviewTab] = useState<'pages' | 'a4Sheets'>(() => isA4Mode ? 'a4Sheets' : 'pages');
+
+    useEffect(() => {
+        if (visible) {
+            setOverviewTab(isA4Mode ? 'a4Sheets' : 'pages');
+        }
+    }, [visible, isA4Mode]);
+
     const { t } = useTranslation();
     const insets = useSafeAreaInsets();
     const { colors, accent, isDark } = useVeyraTheme();
@@ -529,7 +546,9 @@ export function PagesOverviewModal({
                                     {t('notes.pages_manager', { defaultValue: 'Organizador de Hojas' })}
                                 </Text>
                                 <Text style={[styles.sheetSubtitle, { color: colors.textSecondary }]}>
-                                    {pages.length} {pages.length === 1 ? t('notes.page_single', { defaultValue: 'hoja' }) : t('notes.pages_plural', { defaultValue: 'hojas' })}
+                                    {isA4Mode
+                                        ? `${Math.max(1, a4Sheets.length)} ${Math.max(1, a4Sheets.length) === 1 ? 'hoja A4' : 'hojas A4'}`
+                                        : `${pages.length} ${pages.length === 1 ? t('notes.page_single', { defaultValue: 'página' }) : t('notes.pages_plural', { defaultValue: 'páginas' })}`}
                                 </Text>
                             </View>
 
@@ -560,63 +579,140 @@ export function PagesOverviewModal({
                             scrollEventThrottle={16}
                         >
                             <View style={styles.listContainer}>
-                                {pages.map((page, index) => {
-                                    const isCurrent = index === currentPageIndex;
-                                    const isBeingDragged = draggingIndex === index;
-                                    const isTargetSlot = isDragging && hoverIndex === index && draggingIndex !== index;
-                                    const snippet = getPageSnippet(page.content);
+                                {isA4Mode ? (
+                                    (a4Sheets.length > 0 ? a4Sheets : [{ index: 0, title: 'Hoja 1', snippet: '', wordCount: 0 }]).map((sheet, index) => {
+                                        const isCurrent = index === activeA4SheetIndex;
+                                        const isBlank = !sheet.snippet || !sheet.snippet.trim();
+                                        const snippetText = isBlank
+                                            ? t('notes.empty_page', { defaultValue: 'Página en blanco' })
+                                            : sheet.snippet;
 
-                                    return (
-                                        <PageRowItem
-                                            key={page.id || `page_${index}`}
-                                            page={page}
-                                            index={index}
-                                            totalPages={pages.length}
-                                            isCurrent={isCurrent}
-                                            isBeingDragged={isBeingDragged}
-                                            isTargetSlot={isTargetSlot}
-                                            dragTranslateY={dragTranslateY}
-                                            snippet={snippet}
-                                            onSelect={() => {
-                                                if (!isDragging) {
-                                                    onSelectPage(index);
-                                                    onClose();
-                                                }
+                                        return (
+                                            <View key={`a4_sheet_${index}`} style={styles.pageRowSlot}>
+                                                <TouchableOpacity
+                                                    activeOpacity={0.75}
+                                                    onPress={() => {
+                                                        onSelectA4Sheet?.(index);
+                                                        onClose();
+                                                    }}
+                                                    style={[
+                                                        styles.pageCard,
+                                                        {
+                                                            backgroundColor: isCurrent
+                                                                ? (isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.05)')
+                                                                : (isDark ? (colors.bg === '#000000' ? colors.surfaceCard : '#1C1F26') : '#FFFFFF'),
+                                                            borderColor: isCurrent ? accent.primary : colors.borderSubtle,
+                                                            borderWidth: 1,
+                                                            borderLeftWidth: isCurrent ? 3.5 : 1,
+                                                            borderLeftColor: isCurrent ? accent.primary : colors.borderSubtle,
+                                                        },
+                                                    ]}
+                                                >
+                                                    <View style={styles.pageCardBody}>
+                                                        <View style={styles.docIconContainer}>
+                                                            <FileText
+                                                                size={18}
+                                                                color={isCurrent ? accent.primary : (colors.textSecondary as any)}
+                                                            />
+                                                        </View>
+                                                        <View style={styles.pageTextCol}>
+                                                            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                                                                <Text
+                                                                    style={[
+                                                                        styles.pageTitleLabel,
+                                                                        {
+                                                                            color: isCurrent ? accent.primary : colors.textPrimary,
+                                                                            fontWeight: '700',
+                                                                            flex: 1,
+                                                                        },
+                                                                    ]}
+                                                                    numberOfLines={1}
+                                                                >
+                                                                    {sheet.title || `Hoja ${index + 1}`}
+                                                                </Text>
+                                                                <Text style={{ fontSize: 10.5, color: colors.textMuted, marginLeft: 8 }}>
+                                                                    {sheet.wordCount} pal.
+                                                                </Text>
+                                                            </View>
+                                                            <Text
+                                                                style={[
+                                                                    styles.pageSnippet,
+                                                                    {
+                                                                        color: isBlank ? colors.textMuted : colors.textSecondary,
+                                                                        fontStyle: isBlank ? 'italic' : 'normal',
+                                                                    },
+                                                                ]}
+                                                                numberOfLines={2}
+                                                            >
+                                                                {snippetText}
+                                                            </Text>
+                                                        </View>
+                                                    </View>
+                                                </TouchableOpacity>
+                                            </View>
+                                        );
+                                    })
+                                ) : (
+                                    <>
+                                        {pages.map((page, index) => {
+                                            const isCurrent = index === currentPageIndex;
+                                            const isBeingDragged = draggingIndex === index;
+                                            const isTargetSlot = isDragging && hoverIndex === index && draggingIndex !== index;
+                                            const snippet = getPageSnippet(page.content);
+
+                                            return (
+                                                <PageRowItem
+                                                    key={page.id || `page_${index}`}
+                                                    page={page}
+                                                    index={index}
+                                                    totalPages={pages.length}
+                                                    isCurrent={isCurrent}
+                                                    isBeingDragged={isBeingDragged}
+                                                    isTargetSlot={isTargetSlot}
+                                                    dragTranslateY={dragTranslateY}
+                                                    snippet={snippet}
+                                                    onSelect={() => {
+                                                        if (!isDragging) {
+                                                            onSelectPage(index);
+                                                            onClose();
+                                                        }
+                                                    }}
+                                                    onOpenOptions={() => setActionSheetIndex(index)}
+                                                    onDragStart={onDragStart}
+                                                    onDragMove={onDragMove}
+                                                    onDragEnd={onDragEnd}
+                                                    colors={colors}
+                                                    accent={accent}
+                                                    isDark={isDark}
+                                                    t={t}
+                                                />
+                                            );
+                                        })}
+
+                                        {/* Fila final integrada: Agregar nueva hoja */}
+                                        <TouchableOpacity
+                                            activeOpacity={0.7}
+                                            onPress={() => {
+                                                onAddPage();
+                                                onClose();
                                             }}
-                                            onOpenOptions={() => setActionSheetIndex(index)}
-                                            onDragStart={onDragStart}
-                                            onDragMove={onDragMove}
-                                            onDragEnd={onDragEnd}
-                                            colors={colors}
-                                            accent={accent}
-                                            isDark={isDark}
-                                            t={t}
-                                        />
-                                    );
-                                })}
-
-                                {/* Fila final integrada: Agregar nueva hoja */}
-                                <TouchableOpacity
-                                    activeOpacity={0.7}
-                                    onPress={() => {
-                                        onAddPage();
-                                        onClose();
-                                    }}
-                                    style={[
-                                        styles.addPageRow,
-                                        {
-                                            backgroundColor: isDark ? 'rgba(255, 255, 255, 0.03)' : 'rgba(0, 0, 0, 0.02)',
-                                            borderColor: colors.borderSubtle,
-                                        },
-                                    ]}
-                                >
-                                    <View style={[styles.addIconCircle, { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.06)' }]}>
-                                        <Plus size={16} color={accent.primary as any} strokeWidth={2.4} />
-                                    </View>
-                                    <Text style={[styles.addPageRowText, { color: colors.textPrimary }]}>
-                                        {t('notes.add_page', { defaultValue: 'Agregar nueva hoja' })}
-                                    </Text>
-                                </TouchableOpacity>
+                                            style={[
+                                                styles.addPageRow,
+                                                {
+                                                    backgroundColor: isDark ? 'rgba(255, 255, 255, 0.03)' : 'rgba(0, 0, 0, 0.02)',
+                                                    borderColor: colors.borderSubtle,
+                                                },
+                                            ]}
+                                        >
+                                            <View style={[styles.addIconCircle, { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.06)' }]}>
+                                                <Plus size={16} color={accent.primary as any} strokeWidth={2.4} />
+                                            </View>
+                                            <Text style={[styles.addPageRowText, { color: colors.textPrimary }]}>
+                                                {t('notes.add_page', { defaultValue: 'Agregar nueva hoja' })}
+                                            </Text>
+                                        </TouchableOpacity>
+                                    </>
+                                )}
                             </View>
                         </ScrollView>
                     </VeyraSurface>

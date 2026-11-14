@@ -49,6 +49,8 @@ import {
     Play,
     Link as LinkIcon,
     Video,
+    Maximize2,
+    ZoomIn,
 } from '@tamagui/lucide-icons';
 import * as ImagePicker from 'expo-image-picker';
 import { useTranslation } from 'react-i18next';
@@ -89,6 +91,18 @@ import { MoveToFolderModal } from '../../src/components/notes/MoveToFolderModal'
 import { FolderModal } from '../../src/components/notes/FolderModal';
 import { NoteOptionsMenu } from '../../src/components/notes/NoteOptionsMenu';
 import { NoteFontModal } from '../../src/components/notes/NoteFontModal';
+import { A4HeaderFooterModal } from '../../src/components/notes/A4HeaderFooterModal';
+import {
+    A4HeaderFooterConfig,
+    A4PhysicalSheetMeta,
+    DEFAULT_A4_HEADER_FOOTER_CONFIG,
+    sanitizeA4HeaderFooterConfig,
+    loadNotePageFormatForNote,
+    saveNotePageFormatForNote,
+    loadA4HeaderFooterConfigForNote,
+    saveA4HeaderFooterConfigForNote,
+} from '../../src/utils/a4HeaderFooterUtils';
+import { parseNotePages } from '../../src/utils/pageUtils';
 import { ShareModal } from '../../src/components/collaboration/ShareModal';
 import { CollaboratorsAvatars } from '../../src/components/collaboration/CollaboratorsAvatars';
 import { exportNoteToPdf } from '../../src/utils/pdfExportUtils';
@@ -123,6 +137,9 @@ export default function NoteDetailAndEditScreen() {
     const { width: windowWidth, height: windowHeight } = useWindowDimensions();
     const { colors, typography, radii, accent, isDark, isAmoled } = useVeyraTheme();
     const language = useStore(state => state.language);
+    const currentUserId = useStore(state => state.session?.user?.id);
+    const notePageFormat = useStore(state => state.notePageFormat);
+    const setNotePageFormat = useStore(state => state.setNotePageFormat);
     const isCreating = !id || id === 'create';
     const [isEditMode, setIsEditMode] = useState(isCreating);
     const [isNotesFocused, setIsNotesFocused] = useState(false);
@@ -139,6 +156,83 @@ export default function NoteDetailAndEditScreen() {
     const syncMode = currentNote?.sync_mode || 'rest';
     const isYjsMode = syncMode === 'yjs';
 
+    // Formato de página y encabezado/pie individual por nota (sincronizado con Web vía ydoc.getMap('meta') y JSON)
+    const [currentNotePageFormat, setCurrentNotePageFormat] = useState<'infinite' | 'a4'>(() => {
+        const parsed = parseNotePages(currentNote?.content);
+        if (parsed.pageFormat === 'a4' || parsed.pageFormat === 'infinite') {
+            return parsed.pageFormat;
+        }
+        return notePageFormat ?? 'infinite';
+    });
+    const [a4HeaderFooterConfig, setA4HeaderFooterConfig] = useState<A4HeaderFooterConfig>(() => {
+        const parsed = parseNotePages(currentNote?.content);
+        if (parsed.a4HeaderFooterConfig) {
+            return sanitizeA4HeaderFooterConfig(parsed.a4HeaderFooterConfig);
+        }
+        return sanitizeA4HeaderFooterConfig(DEFAULT_A4_HEADER_FOOTER_CONFIG);
+    });
+    const [isHeaderFooterModalVisible, setIsHeaderFooterModalVisible] = useState(false);
+    const [headerFooterInitialKind, setHeaderFooterInitialKind] = useState<'header' | 'footer'>('header');
+    const [headerFooterInitialPage, setHeaderFooterInitialPage] = useState<number>(1);
+    const [a4Sheets, setA4Sheets] = useState<A4PhysicalSheetMeta[]>([
+        { index: 0, title: 'Hoja 1', snippet: '', wordCount: 0 },
+    ]);
+    const [activeA4SheetIndex, setActiveA4SheetIndex] = useState<number>(0);
+    const [a4ZoomMode, setA4ZoomMode] = useState<'fit' | 'zoom_in' | '100'>('fit');
+    const [a4CurrentZoomPercent, setA4CurrentZoomPercent] = useState<number>(100);
+    const [isA4Zoomed, setIsA4Zoomed] = useState<boolean>(false);
+    const formatBtnScale = useRef(new Animated.Value(1)).current;
+    const formatBtnRotate = useRef(new Animated.Value(0)).current;
+
+    const triggerFormatToggleAnim = () => {
+        formatBtnRotate.setValue(0);
+        Animated.parallel([
+            Animated.sequence([
+                Animated.timing(formatBtnScale, {
+                    toValue: 0.78,
+                    duration: 75,
+                    useNativeDriver: true,
+                }),
+                Animated.spring(formatBtnScale, {
+                    toValue: 1,
+                    friction: 3.5,
+                    tension: 50,
+                    useNativeDriver: true,
+                }),
+            ]),
+            Animated.timing(formatBtnRotate, {
+                toValue: 1,
+                duration: 240,
+                useNativeDriver: true,
+            }),
+        ]).start();
+    };
+
+    useEffect(() => {
+        if (!id || id === 'create') return;
+        let isMounted = true;
+        const parsed = parseNotePages(currentNote?.content);
+        loadNotePageFormatForNote(id).then(storedFmt => {
+            if (!isMounted) return;
+            if (storedFmt) {
+                setCurrentNotePageFormat(storedFmt);
+            } else if (parsed.pageFormat) {
+                setCurrentNotePageFormat(parsed.pageFormat);
+            }
+        });
+        loadA4HeaderFooterConfigForNote(id).then(storedCfg => {
+            if (!isMounted) return;
+            if (parsed.a4HeaderFooterConfig) {
+                setA4HeaderFooterConfig(sanitizeA4HeaderFooterConfig(parsed.a4HeaderFooterConfig));
+            } else if (storedCfg) {
+                setA4HeaderFooterConfig(storedCfg);
+            }
+        });
+        return () => {
+            isMounted = false;
+        };
+    }, [id]);
+
     // Al abrir la nota, actualizar last_opened_ms en SQLite y store para limpiar indicador de no visto
     useEffect(() => {
         if (id && id !== 'create') {
@@ -149,6 +243,7 @@ export default function NoteDetailAndEditScreen() {
     // Estado e instancias dedicadas para el editor colaborativo Yjs (Fase 3.3)
     const yjsEditorRef = useRef<VeyraTiptapEditorRef>(null);
     const yjsProviderRef = useRef<SupabaseYjsProvider | null>(null);
+    const pendingYjsUpdatesRef = useRef<string[]>([]);
 
     // Registrar el editor Yjs activo para reemplazo de imágenes en background tras reconexión
     useEffect(() => {
@@ -427,8 +522,6 @@ export default function NoteDetailAndEditScreen() {
 
     const isOwner = userPermission.isOwner;
     const effectiveCanEdit = canEdit && (isYjsMode ? isYjsPersistenceReady === true : true);
-
-    const currentUserId = useStore(state => state.session?.user?.id);
 
     // Hook para sincronizar preview_text derivado desde el WebView
     const { onPreviewUpdate: baseOnPreviewUpdate } = useYjsPreviewSync({
@@ -754,6 +847,17 @@ export default function NoteDetailAndEditScreen() {
         yjsProviderRef.current = provider;
         provider.connect();
 
+        if (pendingYjsUpdatesRef.current.length > 0) {
+            const queued = [...pendingYjsUpdatesRef.current];
+            pendingYjsUpdatesRef.current = [];
+            console.log(`[Notes Yjs] Drenando ${queued.length} deltas bufferizados tras conectar provider`);
+            for (const upd of queued) {
+                provider.sendUpdate(upd).catch(err => {
+                    console.warn('[Notes Yjs] Error enviando delta bufferizado:', err);
+                });
+            }
+        }
+
         return () => {
             diagLog('provider_unmount', { noteId: id, reason: 'cleanup' });
             activeProviderNoteIdRef.current = null;
@@ -922,12 +1026,15 @@ export default function NoteDetailAndEditScreen() {
     }, [localPersistence, id, isEditMode, effectiveCanEdit]);
 
     const handleYjsUpdate = useCallback((base64Update: string) => {
-        // Si la persistencia local no está verificada, no emitir ni difundir
-        if (isYjsPersistenceReady === false) return;
-        yjsProviderRef.current?.sendUpdate(base64Update).catch(err => {
+        if (!yjsProviderRef.current) {
+            console.log('[Notes Yjs] Bufferizando delta local porque el provider aún no está listo');
+            pendingYjsUpdatesRef.current.push(base64Update);
+            return;
+        }
+        yjsProviderRef.current.sendUpdate(base64Update).catch(err => {
             console.warn('[Notes Yjs] Error enviando actualización Yjs:', err);
         });
-    }, [isYjsPersistenceReady]);
+    }, []);
 
     const handleYjsAwarenessUpdate = useCallback((base64Awareness: string) => {
         yjsProviderRef.current?.sendAwareness(base64Awareness);
@@ -1183,7 +1290,43 @@ export default function NoteDetailAndEditScreen() {
     const handleExportPdf = async () => {
         try {
             setIsExportingPdf(true);
-            await exportNoteToPdf(title, pages, { fontFamily });
+            let pagesToExport = pages;
+
+            if (isYjsMode && yjsEditorRef.current?.getAllPagesHtml) {
+                try {
+                    const yjsPages = await yjsEditorRef.current.getAllPagesHtml();
+                    if (yjsPages && yjsPages.length > 0) {
+                        pagesToExport = yjsPages.map(p => ({
+                            id: p.id,
+                            content: p.content,
+                        }));
+                    }
+                } catch (e) {
+                    console.warn('[PDF Export] Fallback a páginas locales:', e);
+                }
+            } else if (!isYjsMode) {
+                const latestPages = await Promise.all(
+                    pages.map(async (p, idx) => {
+                        try {
+                            const ed = editorRefs.current[idx];
+                            if (ed?.getContentHtml) {
+                                const html = await ed.getContentHtml();
+                                if (html !== undefined) return { ...p, content: html };
+                            }
+                        } catch { }
+                        return p;
+                    })
+                );
+                pagesToExport = latestPages;
+            }
+
+            await exportNoteToPdf(title, pagesToExport, {
+                fontFamily,
+                pageFormat: currentNotePageFormat,
+                a4HeaderFooterConfig,
+                includeHeaderTitle: false,
+                authorName: effectiveUserName,
+            });
         } catch (error) {
             console.error('Error exporting note to PDF:', error);
             Alert.alert(
@@ -1533,6 +1676,9 @@ export default function NoteDetailAndEditScreen() {
                             userName={effectiveUserName}
                             userColor={effectiveUserColor}
                             activePageId={pages[currentPageIndex]?.id || (pages.length > 0 ? pages[0].id : undefined)}
+                            pageFormat={currentNotePageFormat}
+                            a4HeaderFooterConfig={a4HeaderFooterConfig}
+                            noteTitle={title}
                             isEditing={isEditMode && effectiveCanEdit}
                             showSkeleton={showCached}
                             onYjsUpdate={handleYjsUpdate}
@@ -1551,6 +1697,33 @@ export default function NoteDetailAndEditScreen() {
                             onImageDismissed={handleImageDismissed}
                             onYoutubeClicked={handleYoutubeClicked}
                             onYoutubeDismissed={handleYoutubeDismissed}
+                            onPageFormatChanged={(fmt) => {
+                                setCurrentNotePageFormat(fmt);
+                                saveNotePageFormatForNote(id, fmt);
+                            }}
+                            onA4HeaderFooterChanged={(cfg) => {
+                                const clean = sanitizeA4HeaderFooterConfig(cfg);
+                                setA4HeaderFooterConfig(clean);
+                                saveA4HeaderFooterConfigForNote(id, clean);
+                            }}
+                            onA4HeaderFooterTap={(kind, pageNum) => {
+                                setHeaderFooterInitialKind(kind);
+                                setHeaderFooterInitialPage(pageNum);
+                                setIsHeaderFooterModalVisible(true);
+                            }}
+                            onA4SheetsUpdated={(sheets) => {
+                                if (Array.isArray(sheets) && sheets.length > 0) {
+                                    setA4Sheets(sheets);
+                                    setActiveA4SheetIndex(prev => Math.min(prev, sheets.length - 1));
+                                }
+                            }}
+                            onA4ActiveSheetChanged={(idx) => {
+                                setActiveA4SheetIndex(idx);
+                            }}
+                            onA4ZoomChanged={(percent, isZoomed) => {
+                                setA4CurrentZoomPercent(percent);
+                                setIsA4Zoomed(isZoomed);
+                            }}
                         />
                     </Animated.View>
 
@@ -1562,288 +1735,288 @@ export default function NoteDetailAndEditScreen() {
                         const currentImgWidth = imageCoords.attrs?.width || null;
                         const currentImgAlign = imageCoords.attrs?.textAlign || 'center';
                         return (
-                        <Animated.View
-                            style={[
-                                styles.floatingSelectionMenu,
-                                {
-                                    backgroundColor: isDark ? (isAmoled ? 'rgba(18, 18, 18, 0.96)' : 'rgba(28, 28, 30, 0.96)') : 'rgba(255, 255, 255, 0.96)',
-                                    borderColor: isDark ? 'rgba(255, 255, 255, 0.15)' : 'rgba(0, 0, 0, 0.1)',
-                                    top: imageCoords.y > 54 ? imageCoords.y - 48 : imageCoords.y + imageCoords.h + 8,
-                                    left: Math.max(12, Math.min(windowWidth - menuWidth - 12, imageCoords.x - (menuWidth / 2))),
-                                    maxWidth: canEdit ? windowWidth - 24 : menuWidth,
-                                    paddingHorizontal: 0,
-                                    opacity: imageTooltipAnim,
-                                    transform: [
-                                        {
-                                            scale: imageTooltipAnim.interpolate({
-                                                inputRange: [0, 1],
-                                                outputRange: [0.85, 1],
-                                            }),
-                                        },
-                                    ],
-                                },
-                            ]}
-                        >
-                            {canEdit ? (
-                                <ScrollView
-                                    horizontal
-                                    showsHorizontalScrollIndicator={false}
-                                    style={{ flexGrow: 0 }}
-                                    contentContainerStyle={{
-                                        paddingHorizontal: 12,
-                                        gap: 8,
-                                        flexDirection: 'row',
-                                        alignItems: 'center',
-                                    }}
-                                >
-                                    <TouchableOpacity
-                                        style={[
-                                            styles.imageTooltipPillBtn,
-                                            currentImgWidth === 25 && { backgroundColor: accent.primary }
-                                        ]}
-                                        onPress={() => {
-                                            yjsEditorRef.current?.setImageSize(25);
-                                            setImageCoords(prev => prev ? { ...prev, attrs: { ...prev.attrs, width: 25 } } : null);
+                            <Animated.View
+                                style={[
+                                    styles.floatingSelectionMenu,
+                                    {
+                                        backgroundColor: isDark ? (isAmoled ? 'rgba(18, 18, 18, 0.96)' : 'rgba(28, 28, 30, 0.96)') : 'rgba(255, 255, 255, 0.96)',
+                                        borderColor: isDark ? 'rgba(255, 255, 255, 0.15)' : 'rgba(0, 0, 0, 0.1)',
+                                        top: imageCoords.y > 54 ? imageCoords.y - 48 : imageCoords.y + imageCoords.h + 8,
+                                        left: Math.max(12, Math.min(windowWidth - menuWidth - 12, imageCoords.x - (menuWidth / 2))),
+                                        maxWidth: canEdit ? windowWidth - 24 : menuWidth,
+                                        paddingHorizontal: 0,
+                                        opacity: imageTooltipAnim,
+                                        transform: [
+                                            {
+                                                scale: imageTooltipAnim.interpolate({
+                                                    inputRange: [0, 1],
+                                                    outputRange: [0.85, 1],
+                                                }),
+                                            },
+                                        ],
+                                    },
+                                ]}
+                            >
+                                {canEdit ? (
+                                    <ScrollView
+                                        horizontal
+                                        showsHorizontalScrollIndicator={false}
+                                        style={{ flexGrow: 0 }}
+                                        contentContainerStyle={{
+                                            paddingHorizontal: 12,
+                                            gap: 8,
+                                            flexDirection: 'row',
+                                            alignItems: 'center',
                                         }}
-                                        activeOpacity={0.7}
                                     >
-                                        <Text style={[styles.imageTooltipBtnText, { color: currentImgWidth === 25 ? '#FFFFFF' : (isDark ? '#E4E4E7' : '#27272A') }]}>
-                                            25%
-                                        </Text>
-                                    </TouchableOpacity>
-                                    <TouchableOpacity
-                                        style={[
-                                            styles.imageTooltipPillBtn,
-                                            currentImgWidth === 50 && { backgroundColor: accent.primary }
-                                        ]}
-                                        onPress={() => {
-                                            yjsEditorRef.current?.setImageSize(50);
-                                            setImageCoords(prev => prev ? { ...prev, attrs: { ...prev.attrs, width: 50 } } : null);
-                                        }}
-                                        activeOpacity={0.7}
-                                    >
-                                        <Text style={[styles.imageTooltipBtnText, { color: currentImgWidth === 50 ? '#FFFFFF' : (isDark ? '#E4E4E7' : '#27272A') }]}>
-                                            50%
-                                        </Text>
-                                    </TouchableOpacity>
-                                    <TouchableOpacity
-                                        style={[
-                                            styles.imageTooltipPillBtn,
-                                            currentImgWidth === 75 && { backgroundColor: accent.primary }
-                                        ]}
-                                        onPress={() => {
-                                            yjsEditorRef.current?.setImageSize(75);
-                                            setImageCoords(prev => prev ? { ...prev, attrs: { ...prev.attrs, width: 75 } } : null);
-                                        }}
-                                        activeOpacity={0.7}
-                                    >
-                                        <Text style={[styles.imageTooltipBtnText, { color: currentImgWidth === 75 ? '#FFFFFF' : (isDark ? '#E4E4E7' : '#27272A') }]}>
-                                            75%
-                                        </Text>
-                                    </TouchableOpacity>
-                                    <TouchableOpacity
-                                        style={[
-                                            styles.imageTooltipPillBtn,
-                                            currentImgWidth === 100 && { backgroundColor: accent.primary }
-                                        ]}
-                                        onPress={() => {
-                                            yjsEditorRef.current?.setImageSize(100);
-                                            setImageCoords(prev => prev ? { ...prev, attrs: { ...prev.attrs, width: 100 } } : null);
-                                        }}
-                                        activeOpacity={0.7}
-                                    >
-                                        <Text style={[styles.imageTooltipBtnText, { color: currentImgWidth === 100 ? '#FFFFFF' : (isDark ? '#E4E4E7' : '#27272A') }]}>
-                                            100%
-                                        </Text>
-                                    </TouchableOpacity>
-                                    <View style={[styles.floatingMenuDivider, { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.15)' : 'rgba(0, 0, 0, 0.1)' }]} />
+                                        <TouchableOpacity
+                                            style={[
+                                                styles.imageTooltipPillBtn,
+                                                currentImgWidth === 25 && { backgroundColor: accent.primary }
+                                            ]}
+                                            onPress={() => {
+                                                yjsEditorRef.current?.setImageSize(25);
+                                                setImageCoords(prev => prev ? { ...prev, attrs: { ...prev.attrs, width: 25 } } : null);
+                                            }}
+                                            activeOpacity={0.7}
+                                        >
+                                            <Text style={[styles.imageTooltipBtnText, { color: currentImgWidth === 25 ? '#FFFFFF' : (isDark ? '#E4E4E7' : '#27272A') }]}>
+                                                25%
+                                            </Text>
+                                        </TouchableOpacity>
+                                        <TouchableOpacity
+                                            style={[
+                                                styles.imageTooltipPillBtn,
+                                                currentImgWidth === 50 && { backgroundColor: accent.primary }
+                                            ]}
+                                            onPress={() => {
+                                                yjsEditorRef.current?.setImageSize(50);
+                                                setImageCoords(prev => prev ? { ...prev, attrs: { ...prev.attrs, width: 50 } } : null);
+                                            }}
+                                            activeOpacity={0.7}
+                                        >
+                                            <Text style={[styles.imageTooltipBtnText, { color: currentImgWidth === 50 ? '#FFFFFF' : (isDark ? '#E4E4E7' : '#27272A') }]}>
+                                                50%
+                                            </Text>
+                                        </TouchableOpacity>
+                                        <TouchableOpacity
+                                            style={[
+                                                styles.imageTooltipPillBtn,
+                                                currentImgWidth === 75 && { backgroundColor: accent.primary }
+                                            ]}
+                                            onPress={() => {
+                                                yjsEditorRef.current?.setImageSize(75);
+                                                setImageCoords(prev => prev ? { ...prev, attrs: { ...prev.attrs, width: 75 } } : null);
+                                            }}
+                                            activeOpacity={0.7}
+                                        >
+                                            <Text style={[styles.imageTooltipBtnText, { color: currentImgWidth === 75 ? '#FFFFFF' : (isDark ? '#E4E4E7' : '#27272A') }]}>
+                                                75%
+                                            </Text>
+                                        </TouchableOpacity>
+                                        <TouchableOpacity
+                                            style={[
+                                                styles.imageTooltipPillBtn,
+                                                currentImgWidth === 100 && { backgroundColor: accent.primary }
+                                            ]}
+                                            onPress={() => {
+                                                yjsEditorRef.current?.setImageSize(100);
+                                                setImageCoords(prev => prev ? { ...prev, attrs: { ...prev.attrs, width: 100 } } : null);
+                                            }}
+                                            activeOpacity={0.7}
+                                        >
+                                            <Text style={[styles.imageTooltipBtnText, { color: currentImgWidth === 100 ? '#FFFFFF' : (isDark ? '#E4E4E7' : '#27272A') }]}>
+                                                100%
+                                            </Text>
+                                        </TouchableOpacity>
+                                        <View style={[styles.floatingMenuDivider, { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.15)' : 'rgba(0, 0, 0, 0.1)' }]} />
 
-                                    <TouchableOpacity
-                                        style={[
-                                            styles.floatingMenuBtn,
-                                            currentImgAlign === 'left' && { backgroundColor: isDark ? 'rgba(255,255,255,0.14)' : 'rgba(0,0,0,0.08)' }
-                                        ]}
-                                        onPress={() => {
-                                            yjsEditorRef.current?.setImageAlign('left');
-                                            setImageCoords(prev => prev ? { ...prev, attrs: { ...prev.attrs, textAlign: 'left' } } : null);
-                                        }}
-                                        activeOpacity={0.7}
-                                    >
-                                        <AlignLeft size={16} color={currentImgAlign === 'left' ? accent.primary : (isDark ? '#E4E4E7' : '#27272A')} />
-                                    </TouchableOpacity>
-                                    <TouchableOpacity
-                                        style={[
-                                            styles.floatingMenuBtn,
-                                            currentImgAlign === 'center' && { backgroundColor: isDark ? 'rgba(255,255,255,0.14)' : 'rgba(0,0,0,0.08)' }
-                                        ]}
-                                        onPress={() => {
-                                            yjsEditorRef.current?.setImageAlign('center');
-                                            setImageCoords(prev => prev ? { ...prev, attrs: { ...prev.attrs, textAlign: 'center' } } : null);
-                                        }}
-                                        activeOpacity={0.7}
-                                    >
-                                        <AlignCenter size={16} color={currentImgAlign === 'center' ? accent.primary : (isDark ? '#E4E4E7' : '#27272A')} />
-                                    </TouchableOpacity>
-                                    <TouchableOpacity
-                                        style={[
-                                            styles.floatingMenuBtn,
-                                            currentImgAlign === 'right' && { backgroundColor: isDark ? 'rgba(255,255,255,0.14)' : 'rgba(0,0,0,0.08)' }
-                                        ]}
-                                        onPress={() => {
-                                            yjsEditorRef.current?.setImageAlign('right');
-                                            setImageCoords(prev => prev ? { ...prev, attrs: { ...prev.attrs, textAlign: 'right' } } : null);
-                                        }}
-                                        activeOpacity={0.7}
-                                    >
-                                        <AlignRight size={16} color={currentImgAlign === 'right' ? accent.primary : (isDark ? '#E4E4E7' : '#27272A')} />
-                                    </TouchableOpacity>
-                                    <View style={[styles.floatingMenuDivider, { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.15)' : 'rgba(0, 0, 0, 0.1)' }]} />
+                                        <TouchableOpacity
+                                            style={[
+                                                styles.floatingMenuBtn,
+                                                currentImgAlign === 'left' && { backgroundColor: isDark ? 'rgba(255,255,255,0.14)' : 'rgba(0,0,0,0.08)' }
+                                            ]}
+                                            onPress={() => {
+                                                yjsEditorRef.current?.setImageAlign('left');
+                                                setImageCoords(prev => prev ? { ...prev, attrs: { ...prev.attrs, textAlign: 'left' } } : null);
+                                            }}
+                                            activeOpacity={0.7}
+                                        >
+                                            <AlignLeft size={16} color={currentImgAlign === 'left' ? accent.primary : (isDark ? '#E4E4E7' : '#27272A')} />
+                                        </TouchableOpacity>
+                                        <TouchableOpacity
+                                            style={[
+                                                styles.floatingMenuBtn,
+                                                currentImgAlign === 'center' && { backgroundColor: isDark ? 'rgba(255,255,255,0.14)' : 'rgba(0,0,0,0.08)' }
+                                            ]}
+                                            onPress={() => {
+                                                yjsEditorRef.current?.setImageAlign('center');
+                                                setImageCoords(prev => prev ? { ...prev, attrs: { ...prev.attrs, textAlign: 'center' } } : null);
+                                            }}
+                                            activeOpacity={0.7}
+                                        >
+                                            <AlignCenter size={16} color={currentImgAlign === 'center' ? accent.primary : (isDark ? '#E4E4E7' : '#27272A')} />
+                                        </TouchableOpacity>
+                                        <TouchableOpacity
+                                            style={[
+                                                styles.floatingMenuBtn,
+                                                currentImgAlign === 'right' && { backgroundColor: isDark ? 'rgba(255,255,255,0.14)' : 'rgba(0,0,0,0.08)' }
+                                            ]}
+                                            onPress={() => {
+                                                yjsEditorRef.current?.setImageAlign('right');
+                                                setImageCoords(prev => prev ? { ...prev, attrs: { ...prev.attrs, textAlign: 'right' } } : null);
+                                            }}
+                                            activeOpacity={0.7}
+                                        >
+                                            <AlignRight size={16} color={currentImgAlign === 'right' ? accent.primary : (isDark ? '#E4E4E7' : '#27272A')} />
+                                        </TouchableOpacity>
+                                        <View style={[styles.floatingMenuDivider, { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.15)' : 'rgba(0, 0, 0, 0.1)' }]} />
 
-                                    {/* Botón Caption (Pie de foto) */}
-                                    <TouchableOpacity
-                                        style={styles.floatingMenuBtn}
-                                        onPress={() => {
-                                            yjsEditorRef.current?.toggleCaption ? yjsEditorRef.current.toggleCaption() : yjsEditorRef.current?.injectJS?.('window.veyraToggleCaption && window.veyraToggleCaption()');
-                                            setImageCoords(null);
-                                        }}
-                                        activeOpacity={0.7}
-                                    >
-                                        <MessageSquare size={16} color={isDark ? '#E4E4E7' : '#27272A'} />
-                                    </TouchableOpacity>
-                                    <View style={[styles.floatingMenuDivider, { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.15)' : 'rgba(0, 0, 0, 0.1)' }]} />
-
-                                    {/* Botón Replace (Reemplazar imagen) */}
-                                    <TouchableOpacity
-                                        style={styles.floatingMenuBtn}
-                                        onPress={async () => {
-                                            try {
-                                                const result = await ImagePicker.launchImageLibraryAsync({
-                                                    mediaTypes: ['images'],
-                                                    quality: 1,
-                                                });
-                                                if (result.canceled || !result.assets || !result.assets[0]) return;
-                                                const asset = result.assets[0];
-                                                const currentImageUrl = imageCoords.url;
+                                        {/* Botón Caption (Pie de foto) */}
+                                        <TouchableOpacity
+                                            style={styles.floatingMenuBtn}
+                                            onPress={() => {
+                                                yjsEditorRef.current?.toggleCaption ? yjsEditorRef.current.toggleCaption() : yjsEditorRef.current?.injectJS?.('window.veyraToggleCaption && window.veyraToggleCaption()');
                                                 setImageCoords(null);
+                                            }}
+                                            activeOpacity={0.7}
+                                        >
+                                            <MessageSquare size={16} color={isDark ? '#E4E4E7' : '#27272A'} />
+                                        </TouchableOpacity>
+                                        <View style={[styles.floatingMenuDivider, { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.15)' : 'rgba(0, 0, 0, 0.1)' }]} />
 
-                                                const userId = currentUserId || useStore.getState().session?.user?.id || 'anonymous';
-                                                const ext = asset.uri.split('.').pop() || 'webp';
-                                                const fileName = `replaced_${Date.now()}.${ext}`;
-                                                const remotePath = await StorageService.uploadFile(userId, asset.uri, fileName);
-                                                if (remotePath) {
-                                                    const { data: publicUrlData } = supabase.storage
-                                                        .from('attachments')
-                                                        .getPublicUrl(remotePath);
-                                                    const newUrl = publicUrlData?.publicUrl;
-                                                    if (newUrl) {
-                                                        yjsEditorRef.current?.replaceImageSrc(currentImageUrl, newUrl);
-                                                        if (currentImageUrl && currentImageUrl.includes('attachments')) {
-                                                            StorageService.deleteFile(currentImageUrl).catch(e => console.warn('[Mobile] Error eliminando imagen antigua tras replace:', e));
+                                        {/* Botón Replace (Reemplazar imagen) */}
+                                        <TouchableOpacity
+                                            style={styles.floatingMenuBtn}
+                                            onPress={async () => {
+                                                try {
+                                                    const result = await ImagePicker.launchImageLibraryAsync({
+                                                        mediaTypes: ['images'],
+                                                        quality: 1,
+                                                    });
+                                                    if (result.canceled || !result.assets || !result.assets[0]) return;
+                                                    const asset = result.assets[0];
+                                                    const currentImageUrl = imageCoords.url;
+                                                    setImageCoords(null);
+
+                                                    const userId = currentUserId || useStore.getState().session?.user?.id || 'anonymous';
+                                                    const ext = asset.uri.split('.').pop() || 'webp';
+                                                    const fileName = `replaced_${Date.now()}.${ext}`;
+                                                    const remotePath = await StorageService.uploadFile(userId, asset.uri, fileName);
+                                                    if (remotePath) {
+                                                        const { data: publicUrlData } = supabase.storage
+                                                            .from('attachments')
+                                                            .getPublicUrl(remotePath);
+                                                        const newUrl = publicUrlData?.publicUrl;
+                                                        if (newUrl) {
+                                                            yjsEditorRef.current?.replaceImageSrc(currentImageUrl, newUrl);
+                                                            if (currentImageUrl && currentImageUrl.includes('attachments')) {
+                                                                StorageService.deleteFile(currentImageUrl).catch(e => console.warn('[Mobile] Error eliminando imagen antigua tras replace:', e));
+                                                            }
                                                         }
                                                     }
+                                                } catch (err) {
+                                                    console.warn('[Mobile] Error en reemplazo de imagen:', err);
                                                 }
-                                            } catch (err) {
-                                                console.warn('[Mobile] Error en reemplazo de imagen:', err);
-                                            }
-                                        }}
-                                        activeOpacity={0.7}
-                                    >
-                                        <Replace size={16} color={isDark ? '#E4E4E7' : '#27272A'} />
-                                    </TouchableOpacity>
-                                    <View style={[styles.floatingMenuDivider, { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.15)' : 'rgba(0, 0, 0, 0.1)' }]} />
+                                            }}
+                                            activeOpacity={0.7}
+                                        >
+                                            <Replace size={16} color={isDark ? '#E4E4E7' : '#27272A'} />
+                                        </TouchableOpacity>
+                                        <View style={[styles.floatingMenuDivider, { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.15)' : 'rgba(0, 0, 0, 0.1)' }]} />
 
-                                    {/* Botón Download (Descargar y compartir imagen) */}
-                                    <TouchableOpacity
-                                        style={styles.floatingMenuBtn}
-                                        onPress={async () => {
-                                            try {
-                                                const currentImageUrl = imageCoords.url;
+                                        {/* Botón Download (Descargar y compartir imagen) */}
+                                        <TouchableOpacity
+                                            style={styles.floatingMenuBtn}
+                                            onPress={async () => {
+                                                try {
+                                                    const currentImageUrl = imageCoords.url;
+                                                    setImageCoords(null);
+                                                    const dir = FileSystem.cacheDirectory || FileSystem.documentDirectory || '';
+                                                    const fileUri = dir + 'image_' + Date.now() + '.webp';
+                                                    await FileSystem.downloadAsync(currentImageUrl, fileUri);
+                                                    await Sharing.shareAsync(fileUri, { mimeType: 'image/webp' });
+                                                } catch (err) {
+                                                    console.warn('[Mobile] Error descargando imagen:', err);
+                                                }
+                                            }}
+                                            activeOpacity={0.7}
+                                        >
+                                            <Download size={16} color={isDark ? '#E4E4E7' : '#27272A'} />
+                                        </TouchableOpacity>
+                                        <View style={[styles.floatingMenuDivider, { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.15)' : 'rgba(0, 0, 0, 0.1)' }]} />
+
+                                        <TouchableOpacity
+                                            style={styles.floatingMenuBtn}
+                                            onPress={() => {
+                                                const oldUrl = imageCoords.url;
+                                                yjsEditorRef.current?.deleteImage();
                                                 setImageCoords(null);
-                                                const dir = FileSystem.cacheDirectory || FileSystem.documentDirectory || '';
-                                                const fileUri = dir + 'image_' + Date.now() + '.webp';
-                                                await FileSystem.downloadAsync(currentImageUrl, fileUri);
-                                                await Sharing.shareAsync(fileUri, { mimeType: 'image/webp' });
-                                            } catch (err) {
-                                                console.warn('[Mobile] Error descargando imagen:', err);
-                                            }
-                                        }}
-                                        activeOpacity={0.7}
-                                    >
-                                        <Download size={16} color={isDark ? '#E4E4E7' : '#27272A'} />
-                                    </TouchableOpacity>
-                                    <View style={[styles.floatingMenuDivider, { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.15)' : 'rgba(0, 0, 0, 0.1)' }]} />
+                                                if (oldUrl && oldUrl.includes('attachments')) {
+                                                    StorageService.deleteFile(oldUrl).catch(e => console.warn('[Mobile] Error eliminando imagen de storage:', e));
+                                                }
+                                            }}
+                                            activeOpacity={0.7}
+                                        >
+                                            <Trash2 size={16} color="#EF4444" />
+                                        </TouchableOpacity>
+                                        <View style={[styles.floatingMenuDivider, { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.15)' : 'rgba(0, 0, 0, 0.1)' }]} />
 
-                                    <TouchableOpacity
-                                        style={styles.floatingMenuBtn}
-                                        onPress={() => {
-                                            const oldUrl = imageCoords.url;
-                                            yjsEditorRef.current?.deleteImage();
-                                            setImageCoords(null);
-                                            if (oldUrl && oldUrl.includes('attachments')) {
-                                                StorageService.deleteFile(oldUrl).catch(e => console.warn('[Mobile] Error eliminando imagen de storage:', e));
-                                            }
+                                        <TouchableOpacity
+                                            style={styles.floatingMenuBtn}
+                                            onPress={() => {
+                                                setSelectedImageUrl(imageCoords.url);
+                                                setImageCoords(null);
+                                                setTimeout(() => {
+                                                    setIsImageViewerVisible(true);
+                                                }, 80);
+                                            }}
+                                            activeOpacity={0.7}
+                                        >
+                                            <Eye size={16} color={accent.primary} />
+                                        </TouchableOpacity>
+                                        <View style={[styles.floatingMenuDivider, { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.15)' : 'rgba(0, 0, 0, 0.1)' }]} />
+                                        <TouchableOpacity
+                                            style={styles.floatingMenuBtn}
+                                            onPress={() => setImageCoords(null)}
+                                            activeOpacity={0.7}
+                                        >
+                                            <X size={16} color={isDark ? '#A1A1AA' : '#71717A'} />
+                                        </TouchableOpacity>
+                                    </ScrollView>
+                                ) : (
+                                    <View
+                                        style={{
+                                            paddingHorizontal: 8,
+                                            gap: 6,
+                                            flexDirection: 'row',
+                                            alignItems: 'center',
                                         }}
-                                        activeOpacity={0.7}
                                     >
-                                        <Trash2 size={16} color="#EF4444" />
-                                    </TouchableOpacity>
-                                    <View style={[styles.floatingMenuDivider, { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.15)' : 'rgba(0, 0, 0, 0.1)' }]} />
-
-                                    <TouchableOpacity
-                                        style={styles.floatingMenuBtn}
-                                        onPress={() => {
-                                            setSelectedImageUrl(imageCoords.url);
-                                            setImageCoords(null);
-                                            setTimeout(() => {
-                                                setIsImageViewerVisible(true);
-                                            }, 80);
-                                        }}
-                                        activeOpacity={0.7}
-                                    >
-                                        <Eye size={16} color={accent.primary} />
-                                    </TouchableOpacity>
-                                    <View style={[styles.floatingMenuDivider, { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.15)' : 'rgba(0, 0, 0, 0.1)' }]} />
-                                    <TouchableOpacity
-                                        style={styles.floatingMenuBtn}
-                                        onPress={() => setImageCoords(null)}
-                                        activeOpacity={0.7}
-                                    >
-                                        <X size={16} color={isDark ? '#A1A1AA' : '#71717A'} />
-                                    </TouchableOpacity>
-                                </ScrollView>
-                            ) : (
-                                <View
-                                    style={{
-                                        paddingHorizontal: 8,
-                                        gap: 6,
-                                        flexDirection: 'row',
-                                        alignItems: 'center',
-                                    }}
-                                >
-                                    <TouchableOpacity
-                                        style={styles.floatingMenuBtn}
-                                        onPress={() => {
-                                            setSelectedImageUrl(imageCoords.url);
-                                            setImageCoords(null);
-                                            setTimeout(() => {
-                                                setIsImageViewerVisible(true);
-                                            }, 80);
-                                        }}
-                                        activeOpacity={0.7}
-                                    >
-                                        <Eye size={16} color={accent.primary} />
-                                    </TouchableOpacity>
-                                    <View style={[styles.floatingMenuDivider, { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.15)' : 'rgba(0, 0, 0, 0.1)' }]} />
-                                    <TouchableOpacity
-                                        style={styles.floatingMenuBtn}
-                                        onPress={() => setImageCoords(null)}
-                                        activeOpacity={0.7}
-                                    >
-                                        <X size={16} color={isDark ? '#A1A1AA' : '#71717A'} />
-                                    </TouchableOpacity>
-                                </View>
-                            )}
-                        </Animated.View>
+                                        <TouchableOpacity
+                                            style={styles.floatingMenuBtn}
+                                            onPress={() => {
+                                                setSelectedImageUrl(imageCoords.url);
+                                                setImageCoords(null);
+                                                setTimeout(() => {
+                                                    setIsImageViewerVisible(true);
+                                                }, 80);
+                                            }}
+                                            activeOpacity={0.7}
+                                        >
+                                            <Eye size={16} color={accent.primary} />
+                                        </TouchableOpacity>
+                                        <View style={[styles.floatingMenuDivider, { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.15)' : 'rgba(0, 0, 0, 0.1)' }]} />
+                                        <TouchableOpacity
+                                            style={styles.floatingMenuBtn}
+                                            onPress={() => setImageCoords(null)}
+                                            activeOpacity={0.7}
+                                        >
+                                            <X size={16} color={isDark ? '#A1A1AA' : '#71717A'} />
+                                        </TouchableOpacity>
+                                    </View>
+                                )}
+                            </Animated.View>
                         );
                     })()}
 
@@ -2603,25 +2776,51 @@ export default function NoteDetailAndEditScreen() {
                     <View style={{ flex: 1 }}>
                         {isYjsMode ? renderYjsEditor() : (scrollLayout === 'vertical' || pages.length <= 1 ? renderVertical() : renderHorizontal())}
 
-                        {/* Floating Page Switcher Pill — Para notas multipágina o modo edición */}
-                        {(pages.length > 1 || (isEditMode && effectiveCanEdit)) && (
+                        {/* Floating Page Switcher Pill — Visible en todo momento para navegación de hojas */}
+                        {pages.length > 0 && (
                             <View style={[styles.floatingPageBar, { bottom: floatingPillBottom }]}>
-                                {pages.length > 1 && (
-                                    <TouchableOpacity
-                                        activeOpacity={0.7}
-                                        onPress={() => setCurrentPageIndex(p => Math.max(0, p - 1))}
-                                        disabled={currentPageIndex === 0}
-                                        style={[
-                                            styles.pageNavBtn,
-                                            {
-                                                backgroundColor: isDark ? (isAmoled ? 'rgba(18, 18, 18, 0.94)' : 'rgba(28, 31, 38, 0.94)') : 'rgba(255, 255, 255, 0.94)',
-                                                borderColor: colors.borderSubtle,
-                                                opacity: currentPageIndex === 0 ? 0.35 : 1,
-                                            },
-                                        ]}
-                                    >
-                                        <ChevronLeft size={16} color={colors.textPrimary} />
-                                    </TouchableOpacity>
+                                {currentNotePageFormat === 'a4' ? (
+                                    a4Sheets.length > 1 && (
+                                        <TouchableOpacity
+                                            activeOpacity={0.7}
+                                            onPress={() => {
+                                                const prev = Math.max(0, activeA4SheetIndex - 1);
+                                                setActiveA4SheetIndex(prev);
+                                                yjsEditorRef.current?.scrollToA4Sheet?.(prev);
+                                            }}
+                                            disabled={activeA4SheetIndex === 0}
+                                            style={[
+                                                styles.pageNavBtn,
+                                                {
+                                                    backgroundColor: isDark ? (isAmoled ? 'rgba(18, 18, 18, 0.94)' : 'rgba(28, 31, 38, 0.94)') : 'rgba(255, 255, 255, 0.94)',
+                                                    borderColor: colors.borderSubtle,
+                                                    opacity: activeA4SheetIndex === 0 ? 0.35 : 1,
+                                                },
+                                            ]}
+                                        >
+                                            <ChevronLeft size={16} color={colors.textPrimary as any} />
+                                        </TouchableOpacity>
+                                    )
+                                ) : (
+                                    pages.length > 1 && (
+                                        <TouchableOpacity
+                                            activeOpacity={0.7}
+                                            onPress={() => {
+                                                setCurrentPageIndex(p => Math.max(0, p - 1));
+                                            }}
+                                            disabled={currentPageIndex === 0}
+                                            style={[
+                                                styles.pageNavBtn,
+                                                {
+                                                    backgroundColor: isDark ? (isAmoled ? 'rgba(18, 18, 18, 0.94)' : 'rgba(28, 31, 38, 0.94)') : 'rgba(255, 255, 255, 0.94)',
+                                                    borderColor: colors.borderSubtle,
+                                                    opacity: currentPageIndex === 0 ? 0.35 : 1,
+                                                },
+                                            ]}
+                                        >
+                                            <ChevronLeft size={16} color={colors.textPrimary as any} />
+                                        </TouchableOpacity>
+                                    )
                                 )}
 
                                 <TouchableOpacity
@@ -2637,59 +2836,187 @@ export default function NoteDetailAndEditScreen() {
                                 >
                                     <Layers size={13} color={accent.primary as any} />
                                     <Text style={[styles.pageIndicatorText, { color: colors.textPrimary }]}>
-                                        {t('notes.page_indicator', {
-                                            current: currentPageIndex + 1,
-                                            total: pages.length,
-                                            defaultValue: `Pág. ${currentPageIndex + 1} / ${pages.length}`,
-                                        })}
+                                        {currentNotePageFormat === 'a4'
+                                            ? `Hoja ${Math.min(activeA4SheetIndex + 1, Math.max(1, a4Sheets.length))} / ${Math.max(1, a4Sheets.length)}`
+                                            : t('notes.page_indicator', {
+                                                current: currentPageIndex + 1,
+                                                total: pages.length,
+                                                defaultValue: `Pág. ${currentPageIndex + 1} / ${pages.length}`,
+                                            })}
                                     </Text>
                                 </TouchableOpacity>
 
-                                {pages.length > 1 && (
-                                    <TouchableOpacity
-                                        activeOpacity={0.7}
-                                        onPress={() => setCurrentPageIndex(p => Math.min(pages.length - 1, p + 1))}
-                                        disabled={currentPageIndex === pages.length - 1}
-                                        style={[
-                                            styles.pageNavBtn,
-                                            {
-                                                backgroundColor: isDark ? (isAmoled ? 'rgba(18, 18, 18, 0.94)' : 'rgba(28, 31, 38, 0.94)') : 'rgba(255, 255, 255, 0.94)',
-                                                borderColor: colors.borderSubtle,
-                                                opacity: currentPageIndex === pages.length - 1 ? 0.35 : 1,
-                                            },
-                                        ]}
-                                    >
-                                        <ChevronRight size={16} color={colors.textPrimary} />
-                                    </TouchableOpacity>
-                                )}
-
-                                {isEditMode && effectiveCanEdit && (
-                                    <Animated.View
-                                        style={{
-                                            opacity: editModeAnim,
-                                            transform: [
-                                                {
-                                                    scale: editModeAnim.interpolate({
-                                                        inputRange: [0, 1],
-                                                        outputRange: [0.5, 1],
-                                                    }),
-                                                },
-                                            ],
-                                        }}
-                                    >
+                                {currentNotePageFormat === 'a4' ? (
+                                    a4Sheets.length > 1 && (
                                         <TouchableOpacity
-                                            activeOpacity={0.8}
-                                            onPress={handleAddPage}
+                                            activeOpacity={0.7}
+                                            onPress={() => {
+                                                const next = Math.min(a4Sheets.length - 1, activeA4SheetIndex + 1);
+                                                setActiveA4SheetIndex(next);
+                                                yjsEditorRef.current?.scrollToA4Sheet?.(next);
+                                            }}
+                                            disabled={activeA4SheetIndex >= a4Sheets.length - 1}
                                             style={[
-                                                styles.pageAddPill,
+                                                styles.pageNavBtn,
                                                 {
-                                                    backgroundColor: accent.primary,
+                                                    backgroundColor: isDark ? (isAmoled ? 'rgba(18, 18, 18, 0.94)' : 'rgba(28, 31, 38, 0.94)') : 'rgba(255, 255, 255, 0.94)',
+                                                    borderColor: colors.borderSubtle,
+                                                    opacity: activeA4SheetIndex >= a4Sheets.length - 1 ? 0.35 : 1,
                                                 },
                                             ]}
                                         >
-                                            <Plus size={15} color={colors.textInverse} strokeWidth={3} />
+                                            <ChevronRight size={16} color={colors.textPrimary as any} />
                                         </TouchableOpacity>
-                                    </Animated.View>
+                                    )
+                                ) : (
+                                    pages.length > 1 && (
+                                        <TouchableOpacity
+                                            activeOpacity={0.7}
+                                            onPress={() => {
+                                                setCurrentPageIndex(p => Math.min(pages.length - 1, p + 1));
+                                            }}
+                                            disabled={currentPageIndex >= pages.length - 1}
+                                            style={[
+                                                styles.pageNavBtn,
+                                                {
+                                                    backgroundColor: isDark ? (isAmoled ? 'rgba(18, 18, 18, 0.94)' : 'rgba(28, 31, 38, 0.94)') : 'rgba(255, 255, 255, 0.94)',
+                                                    borderColor: colors.borderSubtle,
+                                                    opacity: currentPageIndex >= pages.length - 1 ? 0.35 : 1,
+                                                },
+                                            ]}
+                                        >
+                                            <ChevronRight size={16} color={colors.textPrimary as any} />
+                                        </TouchableOpacity>
+                                    )
+                                )}
+
+                                {/* Botón de Zoom A4: Muestra el zoom actual (100% al inicio); al tocarlo vuelve al 100% */}
+                                {currentNotePageFormat === 'a4' && (
+                                    <TouchableOpacity
+                                        activeOpacity={0.7}
+                                        onPress={() => {
+                                            yjsEditorRef.current?.setA4Zoom?.('fit', windowWidth);
+                                            setIsA4Zoomed(false);
+                                            setA4CurrentZoomPercent(100);
+                                        }}
+                                        style={[
+                                            styles.pageNavBtn,
+                                            {
+                                                backgroundColor: isA4Zoomed
+                                                    ? (isDark ? 'rgba(139, 92, 246, 0.25)' : 'rgba(139, 92, 246, 0.15)')
+                                                    : (isDark ? (isAmoled ? 'rgba(18, 18, 18, 0.94)' : 'rgba(28, 31, 38, 0.94)') : 'rgba(255, 255, 255, 0.94)'),
+                                                borderColor: isA4Zoomed ? accent.primary : colors.borderSubtle,
+                                                paddingHorizontal: 8,
+                                                width: 'auto',
+                                                flexDirection: 'row',
+                                                alignItems: 'center',
+                                                gap: 3.5,
+                                            },
+                                        ]}
+                                        hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+                                    >
+                                        <Maximize2 size={13} color={(isA4Zoomed ? accent.primary : colors.textPrimary) as any} />
+                                        <Text style={{ fontSize: 10.5, fontWeight: '700', color: isA4Zoomed ? accent.primary : colors.textPrimary }}>
+                                            {`${a4CurrentZoomPercent}%`}
+                                        </Text>
+                                    </TouchableOpacity>
+                                )}
+
+                                {/* Botón de cambio de formato (A4 / Infinito) — Animación de transición fancy */}
+                                <Animated.View
+                                    style={{
+                                        transform: [
+                                            { scale: formatBtnScale },
+                                            {
+                                                rotate: formatBtnRotate.interpolate({
+                                                    inputRange: [0, 1],
+                                                    outputRange: ['0deg', '180deg'],
+                                                }),
+                                            },
+                                        ],
+                                    }}
+                                >
+                                    <TouchableOpacity
+                                        activeOpacity={0.7}
+                                        onPress={() => {
+                                            triggerFormatToggleAnim();
+                                            const next = currentNotePageFormat === 'a4' ? 'infinite' : 'a4';
+                                            setCurrentNotePageFormat(next);
+                                            saveNotePageFormatForNote(id, next);
+                                            yjsEditorRef.current?.setPageFormat?.(next, false);
+                                        }}
+                                        style={[
+                                            styles.pageNavBtn,
+                                            {
+                                                backgroundColor: currentNotePageFormat === 'a4'
+                                                    ? (isDark ? 'rgba(139, 92, 246, 0.25)' : 'rgba(139, 92, 246, 0.15)')
+                                                    : (isDark ? (isAmoled ? 'rgba(18, 18, 18, 0.94)' : 'rgba(28, 31, 38, 0.94)') : 'rgba(255, 255, 255, 0.94)'),
+                                                borderColor: currentNotePageFormat === 'a4' ? accent.primary : colors.borderSubtle,
+                                            },
+                                        ]}
+                                        hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+                                    >
+                                        {currentNotePageFormat === 'a4' ? (
+                                            <FileText size={14} color={accent.primary as any} />
+                                        ) : (
+                                            <Layers size={14} color={colors.textPrimary as any} />
+                                        )}
+                                    </TouchableOpacity>
+                                </Animated.View>
+
+                                {/* Opciones avanzadas de edición A4 y Agregar Hoja — Solo en Modo Edición */}
+                                {isEditMode && effectiveCanEdit && (
+                                    <>
+                                        {currentNotePageFormat === 'a4' && (
+                                            <TouchableOpacity
+                                                activeOpacity={0.7}
+                                                onPress={() => {
+                                                    setHeaderFooterInitialKind('header');
+                                                    setHeaderFooterInitialPage(activeA4SheetIndex + 1);
+                                                    setIsHeaderFooterModalVisible(true);
+                                                }}
+                                                style={[
+                                                    styles.pageNavBtn,
+                                                    {
+                                                        backgroundColor: isDark ? (isAmoled ? 'rgba(18, 18, 18, 0.94)' : 'rgba(28, 31, 38, 0.94)') : 'rgba(255, 255, 255, 0.94)',
+                                                        borderColor: colors.borderSubtle,
+                                                    },
+                                                ]}
+                                                hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+                                            >
+                                                <AlignCenter size={14} color={accent.primary as any} />
+                                            </TouchableOpacity>
+                                        )}
+
+                                        {currentNotePageFormat !== 'a4' && (
+                                            <Animated.View
+                                                style={{
+                                                    opacity: editModeAnim,
+                                                    transform: [
+                                                        {
+                                                            scale: editModeAnim.interpolate({
+                                                                inputRange: [0, 1],
+                                                                outputRange: [0.5, 1],
+                                                            }),
+                                                        },
+                                                    ],
+                                                }}
+                                            >
+                                                <TouchableOpacity
+                                                    activeOpacity={0.8}
+                                                    onPress={handleAddPage}
+                                                    style={[
+                                                        styles.pageAddPill,
+                                                        {
+                                                            backgroundColor: accent.primary,
+                                                        },
+                                                    ]}
+                                                >
+                                                    <Plus size={15} color={colors.textInverse} strokeWidth={3} />
+                                                </TouchableOpacity>
+                                            </Animated.View>
+                                        )}
+                                    </>
                                 )}
                             </View>
                         )}
@@ -2881,6 +3208,34 @@ export default function NoteDetailAndEditScreen() {
                         onReorderPages={effectiveCanEdit ? handleReorderPages : undefined}
                         layout={scrollLayout}
                         onChangeLayout={setScrollLayout}
+                        pageFormat={currentNotePageFormat}
+                        a4Sheets={a4Sheets}
+                        activeA4SheetIndex={activeA4SheetIndex}
+                        onSelectA4Sheet={(idx) => {
+                            setActiveA4SheetIndex(idx);
+                            yjsEditorRef.current?.scrollToA4Sheet?.(idx);
+                        }}
+                    />
+
+                    {/* Modal de Encabezado y Pie de página A4 + Mis Plantillas en la nube */}
+                    <A4HeaderFooterModal
+                        visible={isHeaderFooterModalVisible}
+                        onClose={() => setIsHeaderFooterModalVisible(false)}
+                        initialKind={headerFooterInitialKind}
+                        initialPageNumber={headerFooterInitialPage}
+                        config={a4HeaderFooterConfig}
+                        canEdit={effectiveCanEdit}
+                        onChangeConfig={(nextCfg) => {
+                            const sanitized = sanitizeA4HeaderFooterConfig(nextCfg);
+                            setA4HeaderFooterConfig(sanitized);
+                            saveA4HeaderFooterConfigForNote(id, sanitized);
+                            yjsEditorRef.current?.setA4HeaderFooterConfig?.(
+                                sanitized,
+                                false,
+                                title,
+                                effectiveUserName
+                            );
+                        }}
                     />
 
                     {/* Menú Contextual de Opciones (One UI 3 Puntos) */}
@@ -2891,7 +3246,19 @@ export default function NoteDetailAndEditScreen() {
                         isExportingPdf={isExportingPdf}
                         onOpenPagesManager={() => setIsPagesModalVisible(true)}
                         onOpenFontPicker={() => setIsFontModalVisible(true)}
-                        pageCount={pages.length}
+                        pageFormat={currentNotePageFormat}
+                        onTogglePageFormat={() => {
+                            const next = currentNotePageFormat === 'a4' ? 'infinite' : 'a4';
+                            setCurrentNotePageFormat(next);
+                            saveNotePageFormatForNote(id, next);
+                            yjsEditorRef.current?.setPageFormat?.(next, false);
+                        }}
+                        onOpenHeaderFooterModal={() => {
+                            setHeaderFooterInitialKind('header');
+                            setHeaderFooterInitialPage(activeA4SheetIndex + 1);
+                            setIsHeaderFooterModalVisible(true);
+                        }}
+                        pageCount={currentNotePageFormat === 'a4' ? Math.max(1, a4Sheets.length) : pages.length}
                         isPinned={isPinned}
                         onTogglePin={() => setIsPinned(!isPinned)}
                         onMoveFolder={() => setIsMoveModalVisible(true)}

@@ -209,7 +209,7 @@ export default function CreateNoteScreen() {
     const handleExportPdf = async () => {
         try {
             setIsExportingPdf(true);
-            await exportNoteToPdf(title, pages, { fontFamily });
+            await exportNoteToPdf(title, pages, { fontFamily, includeHeaderTitle: false });
         } catch (error) {
             console.error('Error exporting note to PDF:', error);
             Alert.alert(

@@ -1,5 +1,5 @@
 import React, { useRef, useImperativeHandle, forwardRef, useCallback, useEffect } from 'react';
-import { View, StyleSheet, Platform, Alert } from 'react-native';
+import { View, StyleSheet, Platform, Alert, useWindowDimensions } from 'react-native';
 import { WebView, WebViewMessageEvent } from 'react-native-webview';
 import { getTiptapHtml } from './editor-web/htmlTemplate';
 import { diagLog } from './diagLog';
@@ -45,6 +45,7 @@ export interface VeyraTiptapEditorRef {
     deleteTable?: () => void;
     toggleHeaderRow?: () => void;
     setCellColor?: (color: string) => void;
+    setTableAlign?: (align: 'left' | 'center' | 'right') => void;
     openSlashMenu?: () => void;
     unsetFormat: () => void;
     undo: () => void;
@@ -63,9 +64,16 @@ export interface VeyraTiptapEditorRef {
     toggleYoutubeEmbed: () => void;
     injectJS: (code: string) => void;
     setPageId: (pageId: string) => void;
+    setPageFormat?: (format: 'infinite' | 'a4', fromRemoteOrInit?: boolean) => void;
+    setA4HeaderFooterConfig?: (config: any, fromRemoteOrInit?: boolean, noteTitle?: string, authorName?: string) => void;
+    setNoteMetaContext?: (noteTitle: string, authorName: string) => void;
+    scrollToA4Sheet?: (sheetIndex: number) => void;
+    setA4Zoom?: (mode: 'fit' | 'zoom_in' | '100' | 'reset', explicitWidth?: number) => void;
     setCursorVisible: (visible: boolean) => void;
     getPreviewFromWebView: () => Promise<string>;
     getCurrentHtml: () => Promise<string>;
+    getAllPagesHtml?: () => Promise<Array<{ id: string; content: string }>>;
+    getA4ExportHtml?: (title?: string) => Promise<string>;
     setTheme: (theme: 'dark' | 'light' | 'amoled') => void;
     focus: () => void;
     copy: (text?: string) => void;
@@ -96,6 +104,7 @@ export interface EditorToolbarState {
     isTable?: boolean;
     canMergeCells?: boolean;
     canSplitCell?: boolean;
+    tableAlign?: 'left' | 'center' | 'right';
     stats?: {
         words: number;
         characters: number;
@@ -131,6 +140,15 @@ interface VeyraTiptapYjsEditorProps {
     onYoutubeDismissed?: () => void;
     onTextSelected?: (data: { hasText: boolean; rect?: { x: number; y: number; width: number; height: number }; text?: string; from?: number; to?: number; cursorOnly?: boolean }) => void;
     showSkeleton?: boolean;
+    pageFormat?: 'infinite' | 'a4';
+    a4HeaderFooterConfig?: any;
+    noteTitle?: string;
+    onPageFormatChanged?: (format: 'infinite' | 'a4') => void;
+    onA4HeaderFooterChanged?: (config: any) => void;
+    onA4HeaderFooterTap?: (kind: 'header' | 'footer', pageNumber: number) => void;
+    onA4SheetsUpdated?: (sheets: Array<{ index: number; title: string; snippet: string; wordCount: number }>, totalSheets: number) => void;
+    onA4ActiveSheetChanged?: (activeSheetIndex: number) => void;
+    onA4ZoomChanged?: (percent: number, isZoomed: boolean) => void;
 }
 
 export const VeyraTiptapYjsEditor = forwardRef<VeyraTiptapEditorRef, VeyraTiptapYjsEditorProps>(
@@ -143,6 +161,9 @@ export const VeyraTiptapYjsEditor = forwardRef<VeyraTiptapEditorRef, VeyraTiptap
             userName = 'Usuario Móvil',
             userColor = '#8B5CF6',
             activePageId,
+            pageFormat = 'infinite',
+            a4HeaderFooterConfig,
+            noteTitle = '',
             isEditing = false,
             onYjsUpdate,
             onAwarenessUpdate,
@@ -162,15 +183,25 @@ export const VeyraTiptapYjsEditor = forwardRef<VeyraTiptapEditorRef, VeyraTiptap
             onYoutubeClicked,
             onYoutubeDismissed,
             onTextSelected,
+            onPageFormatChanged,
+            onA4HeaderFooterChanged,
+            onA4HeaderFooterTap,
+            onA4SheetsUpdated,
+            onA4ActiveSheetChanged,
+            onA4ZoomChanged,
         },
         ref
     ) => {
+        const { width: windowWidth } = useWindowDimensions();
         const webViewRef = useRef<WebView>(null);
         const initialPageIdRef = useRef(activePageId);
         const initialIsDarkRef = useRef(isDark);
         const initialIsAmoledRef = useRef(isAmoled);
+        const initialPageFormatRef = useRef(pageFormat);
         const previewCallbacksRef = useRef<Array<(preview: string) => void>>([]);
         const htmlCallbacksRef = useRef<Array<(html: string) => void>>([]);
+        const allPagesHtmlCallbacksRef = useRef<Array<(pages: Array<{ id: string; content: string }>) => void>>([]);
+        const a4ExportHtmlCallbacksRef = useRef<Array<(html: string) => void>>([]);
         const toolbarListenersRef = useRef<Array<(items: any[]) => void>>([]);
         const html = React.useMemo(
             () =>
@@ -179,6 +210,7 @@ export const VeyraTiptapYjsEditor = forwardRef<VeyraTiptapEditorRef, VeyraTiptap
                     isAmoled: initialIsAmoledRef.current,
                     accentColor,
                     activePageId: initialPageIdRef.current,
+                    pageFormat: initialPageFormatRef.current,
                 }),
             [accentColor]
         );
@@ -188,6 +220,22 @@ export const VeyraTiptapYjsEditor = forwardRef<VeyraTiptapEditorRef, VeyraTiptap
                 webViewRef.current.injectJavaScript(`${code}; true;`);
             }
         }, []);
+
+        useEffect(() => {
+            if (pageFormat) {
+                executeInWebView(`try { if (window.veyraSetPageFormat) window.veyraSetPageFormat('${pageFormat}', true); } catch (e) {}`);
+            }
+        }, [pageFormat, executeInWebView]);
+
+        useEffect(() => {
+            executeInWebView(`try { if (window.veyraSetNoteMetaContext) window.veyraSetNoteMetaContext(${JSON.stringify(noteTitle || '')}, ${JSON.stringify(userName || '')}); } catch (e) {}`);
+        }, [noteTitle, userName, executeInWebView]);
+
+        useEffect(() => {
+            if (a4HeaderFooterConfig) {
+                executeInWebView(`try { if (window.veyraSetA4HeaderFooterConfig) window.veyraSetA4HeaderFooterConfig(${JSON.stringify(a4HeaderFooterConfig)}, true, ${JSON.stringify(noteTitle || '')}, ${JSON.stringify(userName || '')}); } catch (e) {}`);
+            }
+        }, [a4HeaderFooterConfig, noteTitle, userName, executeInWebView]);
 
         const sendAction = useCallback((action: string, _type?: string, data?: any) => {
             switch (action) {
@@ -291,6 +339,9 @@ export const VeyraTiptapYjsEditor = forwardRef<VeyraTiptapEditorRef, VeyraTiptap
                     break;
                 case 'setCellColor':
                     executeInWebView(`window.veyraSetCellColor && window.veyraSetCellColor(${JSON.stringify(data)})`);
+                    break;
+                case 'setTableAlign':
+                    executeInWebView(`window.veyraSetTableAlign && window.veyraSetTableAlign(${JSON.stringify(data)})`);
                     break;
                 case 'openSlashMenu':
                     executeInWebView('window.veyraOpenSlashMenu && window.veyraOpenSlashMenu()');
@@ -447,6 +498,9 @@ export const VeyraTiptapYjsEditor = forwardRef<VeyraTiptapEditorRef, VeyraTiptap
             setCellColor: (color: string) => {
                 executeInWebView(`window.veyraSetCellColor && window.veyraSetCellColor(${JSON.stringify(color)})`);
             },
+            setTableAlign: (align: 'left' | 'center' | 'right') => {
+                executeInWebView(`window.veyraSetTableAlign && window.veyraSetTableAlign(${JSON.stringify(align)})`);
+            },
             openSlashMenu: () => {
                 executeInWebView('window.veyraOpenSlashMenu && window.veyraOpenSlashMenu()');
             },
@@ -599,6 +653,123 @@ export const VeyraTiptapYjsEditor = forwardRef<VeyraTiptapEditorRef, VeyraTiptap
                     } catch (e) {}
                 `);
             },
+            setPageFormat: (format: 'infinite' | 'a4', fromRemoteOrInit = false) => {
+                executeInWebView(`
+                    try {
+                        if (window.veyraSetPageFormat) {
+                            window.veyraSetPageFormat('${format}', ${Boolean(fromRemoteOrInit)});
+                        }
+                    } catch (e) {}
+                `);
+            },
+            setA4HeaderFooterConfig: (config: any, fromRemoteOrInit = false, customTitle?: string, customAuthor?: string) => {
+                executeInWebView(`
+                    try {
+                        if (window.veyraSetA4HeaderFooterConfig) {
+                            window.veyraSetA4HeaderFooterConfig(${JSON.stringify(config)}, ${Boolean(fromRemoteOrInit)}, ${JSON.stringify(customTitle ?? noteTitle ?? '')}, ${JSON.stringify(customAuthor ?? userName ?? '')});
+                        }
+                    } catch (e) {}
+                `);
+            },
+            setNoteMetaContext: (customTitle: string, customAuthor: string) => {
+                executeInWebView(`
+                    try {
+                        if (window.veyraSetNoteMetaContext) {
+                            window.veyraSetNoteMetaContext(${JSON.stringify(customTitle || '')}, ${JSON.stringify(customAuthor || '')});
+                        }
+                    } catch (e) {}
+                `);
+            },
+            scrollToA4Sheet: (sheetIndex: number) => {
+                executeInWebView(`
+                    try {
+                        if (window.veyraScrollToA4Sheet) {
+                            window.veyraScrollToA4Sheet(${Number(sheetIndex) || 0});
+                        }
+                    } catch (e) {}
+                `);
+            },
+            getAllPagesHtml: (): Promise<Array<{ id: string; content: string }>> => {
+                return new Promise((resolve) => {
+                    let settled = false;
+                    const timer = setTimeout(() => {
+                        if (!settled) {
+                            settled = true;
+                            resolve([]);
+                        }
+                    }, 1200);
+
+                    const cb = (pages: Array<{ id: string; content: string }>) => {
+                        if (!settled) {
+                            settled = true;
+                            clearTimeout(timer);
+                            resolve(pages);
+                        }
+                    };
+
+                    allPagesHtmlCallbacksRef.current.push(cb);
+
+                    executeInWebView(`
+                        try {
+                            if (typeof window.veyraGetAllPagesHtml === 'function') {
+                                const pages = window.veyraGetAllPagesHtml();
+                                window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'ALL_PAGES_HTML_RESULT', pages }));
+                            } else {
+                                const html = (typeof editor !== 'undefined' && editor) ? editor.getHTML() : '';
+                                window.ReactNativeWebView.postMessage(JSON.stringify({
+                                    type: 'ALL_PAGES_HTML_RESULT',
+                                    pages: [{ id: 'default', content: html }]
+                                }));
+                            }
+                        } catch (e) {
+                            window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'ALL_PAGES_HTML_RESULT', pages: [] }));
+                        }
+                    `);
+                });
+            },
+            getA4ExportHtml: (title?: string): Promise<string> => {
+                return new Promise((resolve) => {
+                    let settled = false;
+                    const timer = setTimeout(() => {
+                        if (!settled) {
+                            settled = true;
+                            resolve('');
+                        }
+                    }, 2500);
+
+                    const cb = (h: string) => {
+                        if (!settled) {
+                            settled = true;
+                            clearTimeout(timer);
+                            resolve(h);
+                        }
+                    };
+                    a4ExportHtmlCallbacksRef.current.push(cb);
+
+                    executeInWebView(`
+                        try {
+                            if (typeof window.veyraGetA4ExportHtml === 'function') {
+                                const html = window.veyraGetA4ExportHtml(${JSON.stringify(title || '')});
+                                window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'A4_EXPORT_HTML_RESULT', html }));
+                            } else {
+                                window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'A4_EXPORT_HTML_RESULT', html: '' }));
+                            }
+                        } catch (e) {
+                            window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'A4_EXPORT_HTML_RESULT', html: '' }));
+                        }
+                    `);
+                });
+            },
+            setA4Zoom: (mode: 'fit' | 'zoom_in' | '100' | 'reset', explicitWidth?: number) => {
+                const w = typeof explicitWidth === 'number' && explicitWidth > 0 ? explicitWidth : windowWidth;
+                executeInWebView(`
+                    try {
+                        if (window.veyraSetA4Zoom) {
+                            window.veyraSetA4Zoom('${mode}', ${Number(w)});
+                        }
+                    } catch (e) {}
+                `);
+            },
             focus: () => {
                 executeInWebView(`
                     try {
@@ -626,6 +797,16 @@ export const VeyraTiptapYjsEditor = forwardRef<VeyraTiptapEditorRef, VeyraTiptap
         }));
 
         useEffect(() => {
+            executeInWebView(`
+                try {
+                    if (window.veyraSetScreenWidth) {
+                        window.veyraSetScreenWidth(${Number(windowWidth)});
+                    }
+                } catch (e) {}
+            `);
+        }, [windowWidth, executeInWebView]);
+
+        useEffect(() => {
             executeInWebView(`window.veyraSetCursorVisible && window.veyraSetCursorVisible(${Boolean(isEditing)})`);
             executeInWebView(`window.veyraSetEditing && window.veyraSetEditing(${Boolean(isEditing)})`);
             executeInWebView(`
@@ -645,6 +826,16 @@ export const VeyraTiptapYjsEditor = forwardRef<VeyraTiptapEditorRef, VeyraTiptap
                             const htmlCbs = htmlCallbacksRef.current;
                             htmlCallbacksRef.current = [];
                             htmlCbs.forEach(cb => cb(data.html || ''));
+                            break;
+                        case 'ALL_PAGES_HTML_RESULT':
+                            const allCbs = allPagesHtmlCallbacksRef.current;
+                            allPagesHtmlCallbacksRef.current = [];
+                            allCbs.forEach(cb => cb(data.pages || []));
+                            break;
+                        case 'A4_EXPORT_HTML_RESULT':
+                            const a4Cbs = a4ExportHtmlCallbacksRef.current;
+                            a4ExportHtmlCallbacksRef.current = [];
+                            a4Cbs.forEach(cb => cb(data.html || ''));
                             break;
                         case 'PREVIEW_RESULT':
                             const cbs = previewCallbacksRef.current;
@@ -714,7 +905,7 @@ Responde únicamente con el JSON sin bloques de código markdown alrededor.`;
                                             parsed = JSON.parse(
                                                 parsed.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim()
                                             );
-                                        } catch {}
+                                        } catch { }
                                     }
 
                                     const html = parsed?.html || `<p>${parsed?.text || prompt}</p>`;
@@ -815,6 +1006,7 @@ Responde únicamente con el JSON sin bloques de código markdown alrededor.`;
                                 isTable: Boolean(data.isTable),
                                 canMergeCells: Boolean(data.canMergeCells),
                                 canSplitCell: Boolean(data.canSplitCell),
+                                tableAlign: data.tableAlign || 'left',
                                 stats: data.stats || undefined,
                             };
                             onToolbarStateChange?.(fullState);
@@ -827,6 +1019,7 @@ Responde únicamente con el JSON sin bloques de código markdown alrededor.`;
                                     isTable: true,
                                     canMergeCells: fullState.canMergeCells,
                                     canSplitCell: fullState.canSplitCell,
+                                    tableAlign: data.tableAlign || 'left',
                                 });
                             }
                             if (fullState.isBold) items.push('bold');
@@ -901,12 +1094,38 @@ Responde únicamente con el JSON sin bloques de código markdown alrededor.`;
                         case 'TEXT_SELECTED':
                             onTextSelected?.(data);
                             break;
+                        case 'PAGE_FORMAT_CHANGED':
+                            if (data.pageFormat === 'a4' || data.pageFormat === 'infinite') {
+                                onPageFormatChanged?.(data.pageFormat);
+                            }
+                            break;
+                        case 'A4_HEADER_FOOTER_CHANGED':
+                            if (data.config && typeof data.config === 'object') {
+                                onA4HeaderFooterChanged?.(data.config);
+                            }
+                            break;
+                        case 'A4_HEADER_FOOTER_TAP':
+                            onA4HeaderFooterTap?.(data.kind === 'footer' ? 'footer' : 'header', Number(data.pageNumber) || 1);
+                            break;
+                        case 'A4_SHEETS_UPDATED':
+                            if (Array.isArray(data.sheets)) {
+                                onA4SheetsUpdated?.(data.sheets, Number(data.totalSheets) || data.sheets.length || 1);
+                            }
+                            break;
+                        case 'A4_ACTIVE_SHEET_CHANGED':
+                            onA4ActiveSheetChanged?.(Number(data.activeSheetIndex) || 0);
+                            break;
+                        case 'A4_ZOOM_UPDATED':
+                            if (typeof data.zoomPercent === 'number') {
+                                onA4ZoomChanged?.(data.zoomPercent, Boolean(data.isZoomed));
+                            }
+                            break;
                     }
                 } catch (e) {
                     // Ignorar mensajes no JSON
                 }
             },
-            [userName, userColor, onReady, onYjsUpdate, onAwarenessUpdate, onSyncStep1, onSyncStep2, onToolbarStateChange, onYjsLog, onApplyUpdateAck, onAwarenessPeersChanged, onPreviewUpdate, onActivitySnippet, onActivitySnippetHtml, onContentRendered, onTextSelected, executeInWebView]
+            [userName, userColor, onReady, onYjsUpdate, onAwarenessUpdate, onSyncStep1, onSyncStep2, onToolbarStateChange, onYjsLog, onApplyUpdateAck, onAwarenessPeersChanged, onPreviewUpdate, onActivitySnippet, onActivitySnippetHtml, onContentRendered, onTextSelected, onPageFormatChanged, onA4HeaderFooterChanged, onA4HeaderFooterTap, onA4SheetsUpdated, onA4ActiveSheetChanged, onA4ZoomChanged, executeInWebView]
         );
 
         // Sincronizar cambios de nombre o color hacia el WebView en tiempo real
@@ -971,6 +1190,9 @@ Responde únicamente con el JSON sin bloques de código markdown alrededor.`;
                     hideKeyboardAccessoryView={true}
                     contextMenuHidden={true}
                     showsVerticalScrollIndicator={false}
+                    showsHorizontalScrollIndicator={false}
+                    scalesPageToFit={true}
+                    useWideViewPort={true}
                     onLoadEnd={() => {
                         const themeClass = isAmoled ? 'amoled' : (isDark ? 'dark' : 'light');
                         executeInWebView(`
@@ -1000,8 +1222,8 @@ Responde únicamente con el JSON sin bloques de código markdown alrededor.`;
                     bounces={true}
                     {...({
                         setSupportZoom: true,
-                        maximumZoomScale: 5.0,
-                        minimumZoomScale: 1.0,
+                        maximumZoomScale: 4.0,
+                        minimumZoomScale: 0.25,
                         bouncesZoom: true,
                     } as any)}
                 />

@@ -12,6 +12,8 @@ export interface PaginatedNoteData {
     isPaginated: boolean;
     version?: number;
     layout: PageLayoutMode;
+    pageFormat?: 'infinite' | 'a4';
+    a4HeaderFooterConfig?: any;
     pages: NotePage[] | string[];
 }
 
@@ -29,7 +31,12 @@ export function createPage(content = '', title?: string): NotePage {
  * - Soporta v1: { isPaginated: true, pages: string[], layout }
  * - Soporta HTML/texto tradicional plano: lo envuelve como una única NotePage (100% retrocompatible).
  */
-export function parseNotePages(content?: string | null): { pages: NotePage[]; layout: PageLayoutMode } {
+export function parseNotePages(content?: string | null): {
+    pages: NotePage[];
+    layout: PageLayoutMode;
+    pageFormat?: 'infinite' | 'a4';
+    a4HeaderFooterConfig?: any;
+} {
     if (!content || !content.trim()) {
         return {
             pages: [createPage('')],
@@ -43,6 +50,13 @@ export function parseNotePages(content?: string | null): { pages: NotePage[]; la
             const parsed = JSON.parse(trimmed);
             if (parsed && Array.isArray(parsed.pages) && parsed.pages.length > 0) {
                 const layout: PageLayoutMode = parsed.layout === 'horizontal' ? 'horizontal' : 'vertical';
+                const pageFormat: 'infinite' | 'a4' | undefined =
+                    parsed.pageFormat === 'a4' || parsed.pageFormat === 'infinite'
+                        ? parsed.pageFormat
+                        : undefined;
+                const a4HeaderFooterConfig = parsed.a4HeaderFooterConfig && typeof parsed.a4HeaderFooterConfig === 'object'
+                    ? parsed.a4HeaderFooterConfig
+                    : undefined;
                 const pages: NotePage[] = parsed.pages.map((p: any) => {
                     if (typeof p === 'string') {
                         // v1 legacy format: array de strings
@@ -59,7 +73,7 @@ export function parseNotePages(content?: string | null): { pages: NotePage[]; la
                     return createPage('');
                 });
 
-                return { pages, layout };
+                return { pages, layout, pageFormat, a4HeaderFooterConfig };
             }
         }
     } catch {
@@ -75,13 +89,19 @@ export function parseNotePages(content?: string | null): { pages: NotePage[]; la
 /**
  * Serializa un array de NotePage y su modo de visualización para guardar en la base de datos (Formato v2).
  */
-export function serializeNotePages(pages: NotePage[], layout: PageLayoutMode = 'vertical'): string {
+export function serializeNotePages(
+    pages: NotePage[],
+    layout: PageLayoutMode = 'vertical',
+    options?: { pageFormat?: 'infinite' | 'a4'; a4HeaderFooterConfig?: any }
+): string {
     const sanitizedPages: NotePage[] = pages.length > 0 ? pages : [createPage('')];
 
-    const payload = {
+    const payload: any = {
         isPaginated: true,
         version: 2,
         layout,
+        ...(options?.pageFormat ? { pageFormat: options.pageFormat } : {}),
+        ...(options?.a4HeaderFooterConfig ? { a4HeaderFooterConfig: options.a4HeaderFooterConfig } : {}),
         pages: sanitizedPages.map(page => ({
             id: page.id || Crypto.randomUUID(),
             content: page.content ?? '',

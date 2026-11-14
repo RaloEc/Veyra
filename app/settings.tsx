@@ -126,6 +126,8 @@ export default function SettingsScreen() {
         setWidgetFrostedGlass,
         vibrationEnabled,
         setVibrationEnabled,
+        notePageFormat,
+        setNotePageFormat,
     } = useStore();
 
     const TEXT_SCALE_OPTIONS = [
@@ -733,6 +735,65 @@ export default function SettingsScreen() {
                                         trackColor={{ false: colors.surfaceElevated, true: accent.primary }}
                                         thumbColor="#FFFFFF"
                                     />
+                                </View>
+                            </View>
+
+                            <RowDivider />
+
+                            {/* Formato de Hoja en Notas */}
+                            <View style={styles.themeRowWrap}>
+                                <View style={styles.themeRowHeader}>
+                                    <View style={[styles.rowIconBadge, { backgroundColor: isDark ? 'rgba(139, 92, 246, 0.15)' : 'rgba(139, 92, 246, 0.10)' }]}>
+                                        <FileText size={17} color={accent.primary as any} />
+                                    </View>
+                                    <View style={{ flex: 1 }}>
+                                        <Text style={[styles.rowTitleText, { color: colors.textPrimary }]}>
+                                            {language === 'es' ? 'Formato de hoja en notas' : 'Note page format'}
+                                        </Text>
+                                        <Text style={[styles.rowDescText, { color: colors.textMuted }]}>
+                                            {(notePageFormat ?? 'infinite') === 'a4'
+                                                ? (language === 'es' ? 'Separación visual de hojas A4' : 'A4 sheet visual breaks')
+                                                : (language === 'es' ? 'Lienzo continuo (Infinita)' : 'Continuous canvas (Infinite)')}
+                                        </Text>
+                                    </View>
+                                </View>
+
+                                <View style={[styles.segmentedControl, { backgroundColor: colors.surfaceElevated }]}>
+                                    {(['infinite', 'a4'] as const).map((fmt) => {
+                                        const isSelected = (notePageFormat ?? 'infinite') === fmt;
+                                        const label = fmt === 'infinite'
+                                            ? (language === 'es' ? 'Infinita' : 'Infinite')
+                                            : (language === 'es' ? 'Hoja A4' : 'A4 Sheet');
+                                        return (
+                                            <TouchableOpacity
+                                                key={fmt}
+                                                activeOpacity={0.7}
+                                                onPress={() => setNotePageFormat(fmt)}
+                                                style={[
+                                                    styles.segmentButton,
+                                                    isSelected && {
+                                                        backgroundColor: isDark ? colors.surfaceCard : '#FFFFFF',
+                                                        shadowColor: '#000000',
+                                                        shadowOpacity: 0.08,
+                                                        shadowRadius: 3,
+                                                        elevation: 2,
+                                                    },
+                                                ]}
+                                            >
+                                                <Text
+                                                    style={[
+                                                        styles.segmentText,
+                                                        {
+                                                            color: isSelected ? colors.textPrimary : colors.textMuted,
+                                                            fontWeight: isSelected ? '700' : '500',
+                                                        },
+                                                    ]}
+                                                >
+                                                    {label}
+                                                </Text>
+                                            </TouchableOpacity>
+                                        );
+                                    })}
                                 </View>
                             </View>
 

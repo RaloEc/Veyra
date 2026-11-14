@@ -40,6 +40,11 @@ export const parseInitialDate = (raw?: string | number | null): Date => {
             if (!isNaN(d.getTime())) return d;
         }
     }
+    // Si viene como "YYYY-MM-DD", parsearlo en hora local al mediodía para evitar desfases UTC
+    if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+        const [y, m, day] = trimmed.split('-').map(Number);
+        return new Date(y, m - 1, day, 12, 0, 0);
+    }
     // Si viene como string ISO (ej: "2026-09-26T18:54:00.000Z") o estándar de fecha
     const d = new Date(trimmed);
     if (!isNaN(d.getTime()) && d.getFullYear() >= 2000) {

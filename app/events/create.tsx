@@ -305,7 +305,15 @@ export default function CreateOrEditEventScreen() {
     }, [isEditing, existingEvent?.id]);
 
     // Fechas y horas
-    const parsedOccurrenceDate = useMemo(() => (occurrenceDate ? new Date(occurrenceDate) : null), [occurrenceDate]);
+    const parsedOccurrenceDate = useMemo(() => {
+        if (!occurrenceDate) return null;
+        if (/^\d{4}-\d{2}-\d{2}$/.test(occurrenceDate)) {
+            const [y, m, d] = occurrenceDate.split('-').map(Number);
+            return new Date(y, m - 1, d, 12, 0, 0);
+        }
+        const d = new Date(occurrenceDate);
+        return isNaN(d.getTime()) ? null : d;
+    }, [occurrenceDate]);
     const initialBaseDate = parsedOccurrenceDate || (initialDate ? parseInitialDate(initialDate) : new Date());
     const [eventDate, setEventDate] = useState<Date>(
         parsedOccurrenceDate || (existingEvent ? new Date(existingEvent.start_time_ms) : initialBaseDate)
@@ -373,7 +381,12 @@ export default function CreateOrEditEventScreen() {
         }
         const evStart = new Date(existingEvent.start_time_ms);
         const evEnd = new Date(existingEvent.end_time_ms || existingEvent.start_time_ms);
-        setEventDate(evStart);
+        if (existingEvent.is_all_day && existingEvent.all_day_date && /^\d{4}-\d{2}-\d{2}$/.test(existingEvent.all_day_date)) {
+            const [y, m, d] = existingEvent.all_day_date.split('-').map(Number);
+            setEventDate(new Date(y, m - 1, d, 12, 0, 0));
+        } else {
+            setEventDate(evStart);
+        }
         setStartTime(evStart);
         setEndTime(evEnd);
         if (existingEvent.is_all_day !== undefined) {

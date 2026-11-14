@@ -311,12 +311,20 @@ function BottomTabBarComponent() {
     // Estado del modo Creación (Morph del Dock)
     const [isCreating, setIsCreating] = useState(false);
     const [inputPrompt, setInputPrompt] = useState('');
+    const [inputBoxHeight, setInputBoxHeight] = useState(44);
     const [isRecording, setIsRecording] = useState(false);
     const [recordDuration, setRecordDuration] = useState(0);
     const createMorphProgress = useSharedValue(0);
     const isCreatingShared = useSharedValue(false);
     const createHeightShared = useSharedValue(215);
     const keyboardOffset = useSharedValue(0);
+
+    // Restablecer altura dinámica del input cuando el texto se vacía
+    useEffect(() => {
+        if (!inputPrompt.trim() && inputBoxHeight !== 44) {
+            setInputBoxHeight(44);
+        }
+    }, [inputPrompt, inputBoxHeight]);
 
     // Sincronizar estado booleano de creación con el shared value en UI thread
     useEffect(() => {
@@ -513,7 +521,8 @@ function BottomTabBarComponent() {
     useEffect(() => {
         const hasAttachments = pendingAttachments.length > 0;
         const attachmentsHeight = hasAttachments ? 52 : 0;
-        let targetHeight = 160 + attachmentsHeight;
+        const extraInputHeight = Math.max(0, inputBoxHeight - 44);
+        let targetHeight = 160 + attachmentsHeight + extraInputHeight;
 
         if (proposal) {
             if (proposal.action === 'create_batch' || proposal.action === 'batch_update') {
@@ -552,15 +561,15 @@ function BottomTabBarComponent() {
                 }
             }
         } else if (showAttachMenu) {
-            targetHeight = 244 + attachmentsHeight + (error || successMessage ? 26 : 0);
+            targetHeight = 244 + attachmentsHeight + extraInputHeight + (error || successMessage ? 26 : 0);
         } else if (error || successMessage) {
-            targetHeight = 186 + attachmentsHeight;
+            targetHeight = 186 + attachmentsHeight + extraInputHeight;
         }
         createHeightShared.value = withTiming(targetHeight, {
-            duration: 220,
+            duration: 180,
             easing: Easing.out(Easing.cubic),
         });
-    }, [proposal, expandedSection, showAttachMenu, error, successMessage, maxDockHeight, pendingAttachments.length]);
+    }, [proposal, expandedSection, showAttachMenu, error, successMessage, maxDockHeight, pendingAttachments.length, inputBoxHeight]);
 
     // Desplazamiento reactivo con el teclado en dispositivos móviles
     useEffect(() => {
@@ -990,6 +999,7 @@ function BottomTabBarComponent() {
         setIsCreating(false);
         resetKeyboardOffset(true);
         setInputPrompt('');
+        setInputBoxHeight(44);
         setPendingAttachments([]);
         cancelProposal();
         clearMessages();
@@ -1282,7 +1292,8 @@ function BottomTabBarComponent() {
     const handleOpenDatePicker = () => {
         if (!proposal || !('data' in proposal)) return;
         const data = proposal.data as any;
-        const curDateStr = data.date || new Date().toISOString().split('T')[0];
+        const todayLocal = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}-${String(new Date().getDate()).padStart(2, '0')}`;
+        const curDateStr = data.date || todayLocal;
         const parts = String(curDateStr).split('-').map(Number);
         const y = parts[0] || new Date().getFullYear();
         const m = parts[1] || new Date().getMonth() + 1;
@@ -3466,6 +3477,7 @@ function BottomTabBarComponent() {
                                             backgroundColor: isDark ? 'rgba(255, 255, 255, 0.06)' : 'rgba(0, 0, 0, 0.04)',
                                             borderColor: isRecording ? accent.primary : dockBorder,
                                             borderWidth: isRecording ? 1.8 : 1,
+                                            height: inputBoxHeight,
                                         },
                                     ]}
                                 >
@@ -3490,10 +3502,29 @@ function BottomTabBarComponent() {
                                             }
                                             placeholderTextColor={colors.textMuted}
                                             value={inputPrompt}
-                                            onChangeText={setInputPrompt}
+                                            onChangeText={(text) => {
+                                                setInputPrompt(text);
+                                                if (!text.trim() && inputBoxHeight !== 44) {
+                                                    setInputBoxHeight(44);
+                                                }
+                                            }}
+                                            onContentSizeChange={(e) => {
+                                                if (!inputPrompt.trim()) {
+                                                    if (inputBoxHeight !== 44) setInputBoxHeight(44);
+                                                    return;
+                                                }
+                                                const contentHeight = e.nativeEvent.contentSize.height;
+                                                const padding = Platform.OS === 'ios' ? 14 : 16;
+                                                const calculated = Math.max(44, Math.min(120, Math.round(contentHeight + padding)));
+                                                if (calculated !== inputBoxHeight) {
+                                                    setInputBoxHeight(calculated);
+                                                }
+                                            }}
                                             onSubmitEditing={handleSendPrompt}
                                             returnKeyType="send"
-                                            multiline={false}
+                                            multiline={true}
+                                            scrollEnabled={inputBoxHeight >= 120}
+                                            textAlignVertical={inputBoxHeight > 50 ? 'top' : 'center'}
                                             editable={!isLoading}
                                         />
 
@@ -3520,14 +3551,23 @@ function BottomTabBarComponent() {
                                                     </Text>
                                                 </View>
 
-                                                {/* Texto transcrito o indicador en una sola línea */}
+                                                {/* Texto transcrito o indicador que crece con la orden */}
                                                 <Text
                                                     style={[
                                                         styles.recordingPlaceholderText,
                                                         { color: inputPrompt.trim() ? colors.textPrimary : colors.textMuted },
                                                     ]}
-                                                    numberOfLines={1}
+                                                    numberOfLines={4}
                                                     ellipsizeMode="tail"
+                                                    onLayout={(e) => {
+                                                        if (isRecording) {
+                                                            const h = e.nativeEvent.layout.height;
+                                                            const calculated = Math.max(44, Math.min(120, Math.round(h + 16)));
+                                                            if (calculated !== inputBoxHeight) {
+                                                                setInputBoxHeight(calculated);
+                                                            }
+                                                        }
+                                                    }}
                                                 >
                                                     {inputPrompt.trim()
                                                         ? inputPrompt
@@ -4159,26 +4199,30 @@ const styles = StyleSheet.create({
     },
     createInputBox: {
         flexDirection: 'row',
-        alignItems: 'center',
+        alignItems: 'flex-end',
         borderRadius: 22,
         paddingLeft: 14,
         paddingRight: 5,
+        paddingVertical: 5,
         borderWidth: 1,
-        height: 44,
+        minHeight: 44,
+        maxHeight: 120,
         marginBottom: 8,
     },
     recordingContentRow: {
         flex: 1,
         flexDirection: 'row',
-        alignItems: 'center',
+        alignItems: 'flex-start',
         gap: 8,
         paddingHorizontal: 2,
+        paddingVertical: 2,
     },
     glowOrbContainer: {
         width: 22,
         height: 22,
         alignItems: 'center',
         justifyContent: 'center',
+        marginTop: 1,
     },
     glowOrbOuterHalo: {
         position: 'absolute',
@@ -4207,6 +4251,7 @@ const styles = StyleSheet.create({
         paddingVertical: 1,
         borderRadius: 6,
         borderWidth: 1,
+        marginTop: 1,
     },
     compactTimerText: {
         fontSize: 11.5,
@@ -4217,14 +4262,17 @@ const styles = StyleSheet.create({
         fontWeight: '600',
         flex: 1,
         letterSpacing: -0.2,
+        lineHeight: 18,
     },
     createTextInput: {
         flex: 1,
         fontSize: 14,
-        paddingVertical: 0,
+        lineHeight: 20,
+        paddingVertical: Platform.OS === 'ios' ? 6 : 4,
         paddingHorizontal: 0,
         includeFontPadding: false,
         textAlignVertical: 'center',
+        maxHeight: 110,
     },
     createActionBtn: {
         width: 34,
@@ -4531,9 +4579,10 @@ const styles = StyleSheet.create({
 
     createInputWrapper: {
         flex: 1,
-        height: '100%',
+        minHeight: 34,
         justifyContent: 'center',
         position: 'relative',
+        alignSelf: 'stretch',
     },
     createTextInputHiddenWhileRecording: {
         opacity: 0,
@@ -4671,6 +4720,7 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         justifyContent: 'center',
         marginRight: 6,
+        marginBottom: 1,
     },
     // Estilos de Lote (Batch Items)
     batchContainer: {
