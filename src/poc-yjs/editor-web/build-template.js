@@ -19,18 +19,22 @@ const template = `/**
  */
 import { GOOGLE_FONTS_CSS_IMPORT } from '../../constants/noteFonts';
 
-export function getTiptapHtml(options: { isDark?: boolean; isAmoled?: boolean; accentColor?: string; activePageId?: string; pageFormat?: 'infinite' | 'a4' } = {}) {
+export function getTiptapHtml(options: { isDark?: boolean; isAmoled?: boolean; accentColor?: string; activePageId?: string; pageFormat?: 'infinite' | 'a4'; notePaperMode?: 'auto' | 'light' } = {}) {
     const isDark = options.isDark ?? true;
-    const isAmoled = options.isAmoled ?? false;
+    const isAmoled = Boolean(isDark && (options.isAmoled ?? false));
     const accentColor = options.accentColor ?? '#8B5CF6';
     const activePageId = options.activePageId || null;
     const pageFormat = options.pageFormat || 'infinite';
+    const notePaperMode = options.notePaperMode || 'auto';
+    const isPaperLight = isDark && notePaperMode === 'light' && pageFormat === 'a4';
+    const useDarkInk = !isDark || isPaperLight;
     const initialThemeClass = isAmoled ? 'dark amoled' : (isDark ? 'dark' : 'light');
     const initialBgColor = isAmoled ? '#000000' : (isDark ? '#121212' : '#FFFFFF');
     const pageFormatClass = pageFormat === 'a4' ? 'a4-page-mode' : '';
+    const paperModeClass = isPaperLight ? 'sheet-light-mode' : '';
     const initialViewport = 'width=device-width, initial-scale=1.0, maximum-scale=5.0, minimum-scale=1.0, user-scalable=yes, viewport-fit=cover';
     return \`<!DOCTYPE html>
-<html lang="es" class="\${initialThemeClass} \${pageFormatClass}">
+<html lang="es" class="\${initialThemeClass} \${pageFormatClass} \${paperModeClass}">
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" id="veyra-viewport" content="\${initialViewport}" />
@@ -42,14 +46,14 @@ export function getTiptapHtml(options: { isDark?: boolean; isAmoled?: boolean; a
         \${GOOGLE_FONTS_CSS_IMPORT}
         :root {
             --bg-color: \${initialBgColor};
-            --text-color: \${isDark ? '#F4F4F5' : '#18181B'};
-            --text-bold: \${isDark ? '#FFFFFF' : '#000000'};
-            --text-italic: \${isDark ? '#F4F4F5' : '#18181B'};
-            --heading-1: \${isDark ? '#F4F4F5' : '#09090B'};
-            --heading-2: \${isDark ? '#E4E4E7' : '#18181B'};
-            --placeholder: \${isDark ? '#71717A' : '#A1A1AA'};
-            --text-secondary: \${isDark ? '#A1A1AA' : '#71717A'};
-            --selection: \${isDark ? 'rgba(139, 92, 246, 0.4)' : 'rgba(139, 92, 246, 0.3)'};
+            --text-color: \${useDarkInk ? '#18181B' : '#F4F4F5'};
+            --text-bold: \${useDarkInk ? '#000000' : '#FFFFFF'};
+            --text-italic: \${useDarkInk ? '#18181B' : '#F4F4F5'};
+            --heading-1: \${useDarkInk ? '#09090B' : '#F4F4F5'};
+            --heading-2: \${useDarkInk ? '#18181B' : '#E4E4E7'};
+            --placeholder: \${useDarkInk ? '#A1A1AA' : '#71717A'};
+            --text-secondary: \${useDarkInk ? '#71717A' : '#A1A1AA'};
+            --selection: \${useDarkInk ? 'rgba(139, 92, 246, 0.3)' : 'rgba(139, 92, 246, 0.4)'};
             --accent-color: \${accentColor};
             --accent-primary: var(--accent-color, \${accentColor});
             --text-main: var(--text-color);
@@ -235,6 +239,7 @@ export function getTiptapHtml(options: { isDark?: boolean; isAmoled?: boolean; a
             width: 820px !important;
             min-width: 820px !important;
             max-width: 820px !important;
+            min-height: 1267px !important;
             margin: 0 auto !important;
             padding: 24px 13px 140px 13px !important;
             box-sizing: border-box !important;
@@ -243,6 +248,7 @@ export function getTiptapHtml(options: { isDark?: boolean; isAmoled?: boolean; a
         html.a4-page-mode #editor {
             position: relative !important;
             width: 794px !important;
+            min-height: 1123px !important;
             margin: 0 auto !important;
         }
         html.a4-page-mode .ProseMirror {
@@ -251,6 +257,7 @@ export function getTiptapHtml(options: { isDark?: boolean; isAmoled?: boolean; a
             min-width: 794px !important;
             max-width: 794px !important;
             min-height: 1123px !important;
+            cursor: text;
             padding: 25mm 30mm !important;
             box-sizing: border-box !important;
             border-radius: 4px !important;
@@ -278,20 +285,149 @@ export function getTiptapHtml(options: { isDark?: boolean; isAmoled?: boolean; a
             border: 1px solid rgba(255, 255, 255, 0.12) !important;
             box-shadow: 0 6px 24px rgba(0, 0, 0, 0.6) !important;
         }
+
+        /* Modo Papel Claro en la Hoja (Interfaz oscura con Hoja blanca en A4) - Idéntico a Veyra WEB */
+        html.dark.sheet-light-mode.a4-page-mode,
+        html.amoled.sheet-light-mode.a4-page-mode,
+        html.dark.sheet-light-mode.a4-page-mode body,
+        html.amoled.sheet-light-mode.a4-page-mode body,
+        html.dark.sheet-light-mode.a4-page-mode .ProseMirror,
+        html.amoled.sheet-light-mode.a4-page-mode .ProseMirror {
+            --text-color: #18181B !important;
+            --text-bold: #000000 !important;
+            --text-italic: #18181B !important;
+            --heading-1: #09090B !important;
+            --heading-2: #18181B !important;
+            --placeholder: #A1A1AA !important;
+            --text-secondary: #71717A !important;
+        }
+
+        html.dark.sheet-light-mode.a4-page-mode .ProseMirror,
+        html.amoled.sheet-light-mode.a4-page-mode .ProseMirror {
+            background-color: #FFFFFF !important;
+            border: 1px solid #CBD5E1 !important;
+            color: #18181B !important;
+            box-shadow: 0 8px 30px rgba(0, 0, 0, 0.45) !important;
+        }
+
+        html.dark.sheet-light-mode.a4-page-mode .ProseMirror,
+        html.dark.sheet-light-mode.a4-page-mode .ProseMirror p,
+        html.dark.sheet-light-mode.a4-page-mode .ProseMirror h1,
+        html.dark.sheet-light-mode.a4-page-mode .ProseMirror h2,
+        html.dark.sheet-light-mode.a4-page-mode .ProseMirror h3,
+        html.dark.sheet-light-mode.a4-page-mode .ProseMirror h4,
+        html.dark.sheet-light-mode.a4-page-mode .ProseMirror h5,
+        html.dark.sheet-light-mode.a4-page-mode .ProseMirror h6,
+        html.dark.sheet-light-mode.a4-page-mode .ProseMirror li,
+        html.dark.sheet-light-mode.a4-page-mode .ProseMirror td,
+        html.dark.sheet-light-mode.a4-page-mode .ProseMirror th,
+        html.dark.sheet-light-mode.a4-page-mode .ProseMirror strong,
+        html.dark.sheet-light-mode.a4-page-mode .ProseMirror b,
+        html.dark.sheet-light-mode.a4-page-mode .ProseMirror em,
+        html.dark.sheet-light-mode.a4-page-mode .ProseMirror i,
+        html.amoled.sheet-light-mode.a4-page-mode .ProseMirror strong,
+        html.amoled.sheet-light-mode.a4-page-mode .ProseMirror b,
+        html.amoled.sheet-light-mode.a4-page-mode .ProseMirror em,
+        html.amoled.sheet-light-mode.a4-page-mode .ProseMirror i {
+            color: #18181B !important;
+        }
+
+        html.dark.sheet-light-mode.a4-page-mode .ProseMirror [style*="color:"] strong,
+        html.dark.sheet-light-mode.a4-page-mode .ProseMirror [style*="color:"] b,
+        html.dark.sheet-light-mode.a4-page-mode .ProseMirror [style*="color:"] em,
+        html.dark.sheet-light-mode.a4-page-mode .ProseMirror [style*="color:"] i,
+        html.amoled.sheet-light-mode.a4-page-mode .ProseMirror [style*="color:"] strong,
+        html.amoled.sheet-light-mode.a4-page-mode .ProseMirror [style*="color:"] b,
+        html.amoled.sheet-light-mode.a4-page-mode .ProseMirror [style*="color:"] em,
+        html.amoled.sheet-light-mode.a4-page-mode .ProseMirror [style*="color:"] i {
+            color: inherit !important;
+        }
+
+        /* Evitar que texto negro o carbón se convierta en blanco */
+        html.dark.sheet-light-mode.a4-page-mode .ProseMirror [style*="#18181B" i],
+        html.dark.sheet-light-mode.a4-page-mode .ProseMirror [style*="#000000" i],
+        html.dark.sheet-light-mode.a4-page-mode .ProseMirror [style*="#111113" i],
+        html.dark.sheet-light-mode.a4-page-mode .ProseMirror [style*="#0B0B0C" i],
+        html.dark.sheet-light-mode.a4-page-mode .ProseMirror [style*="#27272A" i],
+        html.dark.sheet-light-mode.a4-page-mode .ProseMirror [style*="#3F3F46" i],
+        html.dark.sheet-light-mode.a4-page-mode .ProseMirror [style*="color: black" i],
+        html.dark.sheet-light-mode.a4-page-mode .ProseMirror [style*="color:black" i],
+        html.dark.sheet-light-mode.a4-page-mode .ProseMirror [style*="rgb(24, 24, 27)" i],
+        html.dark.sheet-light-mode.a4-page-mode .ProseMirror [style*="rgb(24,24,27)" i],
+        html.dark.sheet-light-mode.a4-page-mode .ProseMirror [style*="rgb(0, 0, 0)" i],
+        html.dark.sheet-light-mode.a4-page-mode .ProseMirror [style*="rgb(0,0,0)" i],
+        html.dark.sheet-light-mode.a4-page-mode .ProseMirror [style*="rgb(17, 17, 19)" i],
+        html.dark.sheet-light-mode.a4-page-mode .ProseMirror [style*="rgb(11, 11, 12)" i] {
+            color: #18181B !important;
+        }
+
+        /* Si un texto se guardó en blanco en modo oscuro, convertirlo a oscuro para que sea legible en la hoja blanca */
+        html.dark.sheet-light-mode.a4-page-mode .ProseMirror [style*="#F4F4F5" i],
+        html.dark.sheet-light-mode.a4-page-mode .ProseMirror [style*="#EDEDEF" i],
+        html.dark.sheet-light-mode.a4-page-mode .ProseMirror [style*="#FFFFFF" i],
+        html.dark.sheet-light-mode.a4-page-mode .ProseMirror [style*="#FAFAFA" i],
+        html.dark.sheet-light-mode.a4-page-mode .ProseMirror [style*="color: white" i],
+        html.dark.sheet-light-mode.a4-page-mode .ProseMirror [style*="color:white" i],
+        html.dark.sheet-light-mode.a4-page-mode .ProseMirror [style*="rgb(255" i] {
+            color: #18181B !important;
+        }
+
+        /* Encabezados y pie de página en hoja blanca */
+        html.dark.sheet-light-mode.a4-page-mode .veyra-a4-hf-slot {
+            color: #475569 !important;
+            opacity: 0.9 !important;
+        }
+        html.dark.sheet-light-mode.a4-page-mode .veyra-a4-hf-hint {
+            color: #64748B !important;
+            opacity: 0.45 !important;
+        }
+
+        /* Tablas, citas, bloques de código en hoja blanca */
+        html.dark.sheet-light-mode.a4-page-mode .veyra-table {
+            border-color: #CBD5E1 !important;
+        }
+        html.dark.sheet-light-mode.a4-page-mode .veyra-table td,
+        html.dark.sheet-light-mode.a4-page-mode .veyra-table th {
+            border-color: #CBD5E1 !important;
+        }
+        html.dark.sheet-light-mode.a4-page-mode .veyra-table th {
+            background-color: #F8FAFC !important;
+            color: #18181B !important;
+        }
+        html.dark.sheet-light-mode.a4-page-mode .ProseMirror blockquote {
+            color: #475569 !important;
+            background: rgba(0, 0, 0, 0.03) !important;
+            border-left-color: var(--accent-primary) !important;
+        }
+        html.dark.sheet-light-mode.a4-page-mode .ProseMirror pre {
+            background-color: #F8FAFC !important;
+            border-color: #E2E8F0 !important;
+            color: #0F172A !important;
+        }
+        html.dark.sheet-light-mode.a4-page-mode .ProseMirror :not(pre)>code {
+            background-color: rgba(0, 0, 0, 0.06) !important;
+            color: #0284C7 !important;
+        }
+        html.dark.sheet-light-mode.a4-page-mode .ProseMirror a {
+            color: #1D4ED8 !important;
+        }
         .veyra-a4-hf-band {
+            display: none !important;
             position: absolute;
             left: 0;
             right: 0;
             box-sizing: border-box;
             user-select: none;
             z-index: 18;
-            display: flex;
             flex-direction: column;
             justify-content: center;
             pointer-events: auto;
             cursor: pointer;
             transition: background-color 0.15s ease, opacity 0.32s ease;
             animation: veyraHfBandFade 0.35s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+        }
+        html.a4-page-mode .veyra-a4-hf-band {
+            display: flex !important;
         }
         @keyframes veyraHfBandFade {
             0% { opacity: 0; transform: translateY(-4px); }
@@ -353,6 +489,7 @@ export function getTiptapHtml(options: { isDark?: boolean; isAmoled?: boolean; a
             border-top-color: rgba(255, 255, 255, 0.12);
         }
         #veyra-a4-breaks-overlay {
+            display: none !important;
             position: absolute;
             top: 0;
             left: 0;
@@ -360,6 +497,9 @@ export function getTiptapHtml(options: { isDark?: boolean; isAmoled?: boolean; a
             pointer-events: none;
             z-index: 25;
             transition: opacity 0.32s ease;
+        }
+        html.a4-page-mode #veyra-a4-breaks-overlay {
+            display: block !important;
         }
         .veyra-a4-break-gap {
             position: absolute;
@@ -371,13 +511,12 @@ export function getTiptapHtml(options: { isDark?: boolean; isAmoled?: boolean; a
             z-index: 25;
             display: flex;
             flex-direction: column;
+            justify-content: space-between;
             animation: veyraFadeInGap 0.32s ease both;
         }
         @keyframes veyraFadeInGap {
             0% { opacity: 0; }
             100% { opacity: 1; }
-        }
-            justify-content: space-between;
         }
         .veyra-a4-break-edge-top {
             width: 100%;
@@ -439,22 +578,22 @@ export function getTiptapHtml(options: { isDark?: boolean; isAmoled?: boolean; a
             color: var(--text-color) !important;
         }
 
-        /* Reglas de normalización de modo oscuro: asegura que texto con estilos oscuros residuales sea claro */
-        html.dark .ProseMirror,
-        html.dark .ProseMirror p,
-        html.dark .ProseMirror li {
+        /* Reglas de normalización de modo oscuro: asegura que texto con estilos oscuros residuales sea claro (excepto en hoja blanca) */
+        html.dark:not(.sheet-light-mode) .ProseMirror,
+        html.dark:not(.sheet-light-mode) .ProseMirror p,
+        html.dark:not(.sheet-light-mode) .ProseMirror li {
             color: var(--text-color) !important;
         }
-        html.dark .ProseMirror span[style*="color: #0F172A"],
-        html.dark .ProseMirror span[style*="color:#0F172A"],
-        html.dark .ProseMirror span[style*="color: rgb(15, 23, 42)"],
-        html.dark .ProseMirror span[style*="color: #18181B"],
-        html.dark .ProseMirror span[style*="color:#18181B"],
-        html.dark .ProseMirror span[style*="color: rgb(24, 24, 27)"],
-        html.dark .ProseMirror span[style*="color: #000000"],
-        html.dark .ProseMirror span[style*="color:#000000"],
-        html.dark .ProseMirror span[style*="color: rgb(0, 0, 0)"],
-        html.dark .ProseMirror span[style*="color: black"] {
+        html.dark:not(.sheet-light-mode) .ProseMirror span[style*="color: #0F172A"],
+        html.dark:not(.sheet-light-mode) .ProseMirror span[style*="color:#0F172A"],
+        html.dark:not(.sheet-light-mode) .ProseMirror span[style*="color: rgb(15, 23, 42)"],
+        html.dark:not(.sheet-light-mode) .ProseMirror span[style*="color: #18181B"],
+        html.dark:not(.sheet-light-mode) .ProseMirror span[style*="color:#18181B"],
+        html.dark:not(.sheet-light-mode) .ProseMirror span[style*="color: rgb(24, 24, 27)"],
+        html.dark:not(.sheet-light-mode) .ProseMirror span[style*="color: #000000"],
+        html.dark:not(.sheet-light-mode) .ProseMirror span[style*="color:#000000"],
+        html.dark:not(.sheet-light-mode) .ProseMirror span[style*="color: rgb(0, 0, 0)"],
+        html.dark:not(.sheet-light-mode) .ProseMirror span[style*="color: black"] {
             color: var(--text-color) !important;
         }
         .ProseMirror ::selection {
@@ -1792,7 +1931,8 @@ export function getTiptapHtml(options: { isDark?: boolean; isAmoled?: boolean; a
             pointer-events: none !important;
             box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3) !important;
             z-index: 9999 !important;
-            transition: opacity 0.2s ease-in-out !important;
+            opacity: 1 !important;
+            transition: none !important;
         }
 
         /* Cuando el cursor está cerca del borde derecho de la pantalla, flipear la etiqueta hacia la izquierda para evitar desbordamiento */
@@ -1993,7 +2133,7 @@ export function getTiptapHtml(options: { isDark?: boolean; isAmoled?: boolean; a
         }
     </style>
 </head>
-<body class="\${initialThemeClass}">
+<body class="\${initialThemeClass} \${pageFormatClass} \${paperModeClass}">
     <div id="editor-container">
         <div id="editor"></div>
     </div>

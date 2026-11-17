@@ -109,7 +109,6 @@ export const AccountDeletionService = {
                 lastSyncTime: null,
                 isSyncing: false,
                 syncError: null,
-                streak: 0,
             });
 
             useNotesStore.setState({

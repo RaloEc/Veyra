@@ -21,6 +21,10 @@ import { getCollabContentHash, logCollabEvent, normalizeToEpochMs } from '../uti
 export interface UseCreateNoteOptions {
     isEditMode?: boolean;
     yjsProviderRef?: React.MutableRefObject<any>;
+    pageFormat?: 'infinite' | 'a4';
+    a4HeaderFooterConfig?: any;
+    getPageFormat?: () => 'infinite' | 'a4';
+    getA4HeaderFooterConfig?: () => any;
 }
 
 export function useCreateNote(
@@ -1569,7 +1573,12 @@ export function useCreateNote(
                         fontFamily: currentFontFamily,
                     } = currentValuesRef.current;
                     const currentAttsJson = currentAtts.length > 0 ? JSON.stringify(currentAtts) : '[]';
-                    const serializedContent = serializeNotePages(currentPages, currentLayout);
+                    const effectivePageFormat = options?.getPageFormat ? options.getPageFormat() : (options?.pageFormat || initialParsed.pageFormat);
+                    const effectiveHfConfig = options?.getA4HeaderFooterConfig ? options.getA4HeaderFooterConfig() : (options?.a4HeaderFooterConfig || initialParsed.a4HeaderFooterConfig);
+                    const serializedContent = serializeNotePages(currentPages, currentLayout, {
+                        pageFormat: effectivePageFormat,
+                        a4HeaderFooterConfig: effectiveHfConfig,
+                    });
 
                     // Si la nota está totalmente vacía y no existe en BD, no crear una nota fantasma
                     const hasContent = currentPages.some(p => Boolean(p.content.replace(/<[^>]+>/g, '').trim()) || p.content.includes('<img') || p.content.includes('<input') || p.content.includes('x-todo'));

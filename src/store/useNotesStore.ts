@@ -29,7 +29,7 @@ interface NotesState {
     selectedNotesIds: string[];
     loadNotes: () => Promise<void>;
     loadDeletedNotes: () => Promise<void>;
-    addNote: (title?: string, content?: string, attachments?: string, links?: string, isPinned?: boolean, folderId?: string | null, eventId?: string | null, fontFamily?: string) => Promise<Note | null>;
+    addNote: (title?: string, content?: string, attachments?: string, links?: string, isPinned?: boolean, folderId?: string | null, eventId?: string | null, fontFamily?: string, syncMode?: Note['sync_mode']) => Promise<Note | null>;
     updateNote: (id: string, updates: Partial<Note>) => Promise<void>;
     updateNotesBatch: (ids: string[], updates: Partial<Note>) => Promise<void>;
     moveNotesBatch: (ids: string[], folderId: string | null) => Promise<void>;
@@ -73,10 +73,10 @@ export const useNotesStore = create<NotesState>((set, get) => ({
             try {
                 const notes = await NoteService.getNotes();
                 set({ notes, isNotesDirty: false, isLoading: false });
-                WidgetService.syncNotes(notes).catch(() => {});
+                WidgetService.syncNotes(notes).catch(() => { });
 
                 // Verificar si alguna nota compartida tuvo su acceso revocado
-                get().checkRevokedNotes().catch(() => {});
+                get().checkRevokedNotes().catch(() => { });
 
                 // Iniciar listener en tiempo real de revocaciones para el usuario actual
                 const userId = useStore.getState().session?.user?.id;
@@ -109,7 +109,7 @@ export const useNotesStore = create<NotesState>((set, get) => ({
                                 get().checkRevokedNotes();
                             })
                             .subscribe();
-                    } catch {}
+                    } catch { }
                 }
             } catch (error) {
                 console.error('Failed to load notes', error);
@@ -131,7 +131,7 @@ export const useNotesStore = create<NotesState>((set, get) => ({
         }
     },
 
-    addNote: async (title, content, attachments, links, isPinned, folderId, eventId, fontFamily) => {
+    addNote: async (title, content, attachments, links, isPinned, folderId, eventId, fontFamily, syncMode = 'yjs') => {
         try {
             const userId = useStore.getState().session?.user?.id || undefined;
             const folder = folderId ? getFolderByIdCallback?.(folderId) ?? null : null;
@@ -153,9 +153,10 @@ export const useNotesStore = create<NotesState>((set, get) => ({
                 eventId,
                 fontFamily,
                 noteIsShared,
-                noteSharedOwnerId
+                noteSharedOwnerId,
+                syncMode
             );
-            
+
             // Optimistic prepend
             if (newNote) {
                 set(state => ({
@@ -163,25 +164,31 @@ export const useNotesStore = create<NotesState>((set, get) => ({
                 }));
             }
 
-            if (userId && isFolderShared && newNote) {
-                try {
-                    const ownerId = noteSharedOwnerId || userId;
-                    const remote = SyncService.localNoteToRemote(newNote, ownerId);
-                    await supabase.from('notes').upsert(remote, { onConflict: 'id' });
-
-                    CollaborationService.notifyChange({
-                        targetType: 'note',
-                        targetId: newNote.id,
-                        action: 'added',
-                        itemTitle: newNote.title || 'Nueva nota',
-                    }).catch(() => {});
-                } catch (collabSyncErr) {
-                    console.warn('[useNotesStore] Error auto-syncing note in shared folder:', collabSyncErr);
-                }
+            if (userId && (isFolderShared || useStore.getState().cloudSyncEnabled) && newNote) {
+                const ownerId = noteSharedOwnerId || userId;
+                const remote = SyncService.localNoteToRemote(newNote, ownerId);
+                (async () => {
+                    try {
+                        const { error: upErr } = await supabase.from('notes').upsert(remote, { onConflict: 'id' });
+                        if (upErr) {
+                            console.warn('[useNotesStore] Error immediate-syncing new note:', upErr);
+                        }
+                        if (isFolderShared) {
+                            CollaborationService.notifyChange({
+                                targetType: 'note',
+                                targetId: newNote.id,
+                                action: 'added',
+                                itemTitle: newNote.title || 'Nueva nota',
+                            }).catch(() => { });
+                        }
+                    } catch (collabSyncErr) {
+                        console.warn('[useNotesStore] Error auto-syncing note:', collabSyncErr);
+                    }
+                })();
             }
 
             if (userId && useStore.getState().cloudSyncEnabled) {
-                useStore.getState().triggerSync();
+                useStore.getState().triggerSync(false, false);
             }
             return newNote;
         } catch (error) {
@@ -276,7 +283,7 @@ export const useNotesStore = create<NotesState>((set, get) => ({
                         set(state => ({
                             notes: state.notes.map(n => n.id === previousNote.id ? { ...n, is_shared: 1 } : n)
                         }));
-                    } catch {}
+                    } catch { }
                 }
             }
 
@@ -298,7 +305,7 @@ export const useNotesStore = create<NotesState>((set, get) => ({
                             notes: state.notes.map(n => n.id === previousNote.id ? { ...n, is_shared: 1 } : n)
                         }));
                     }
-                } catch {}
+                } catch { }
             }
 
             if (isShared && previousNote) {
@@ -316,8 +323,36 @@ export const useNotesStore = create<NotesState>((set, get) => ({
 
             await NoteService.updateNote(id, optimisticUpdates);
 
-            if (useStore.getState().session?.user?.id && useStore.getState().cloudSyncEnabled) {
-                useStore.getState().triggerSync(false, true);
+            const currentUserId = useStore.getState().session?.user?.id;
+            if (currentUserId && useStore.getState().cloudSyncEnabled) {
+                const updatedNote = get().notes.find(n => n.id === id);
+                if (updatedNote) {
+                    const remotePatch: Record<string, any> = {
+                        updated_at_ms: now,
+                        last_modified_ms: now,
+                    };
+                    if (optimisticUpdates.title !== undefined) remotePatch.title = optimisticUpdates.title || null;
+                    if (optimisticUpdates.folder_id !== undefined) remotePatch.folder_id = optimisticUpdates.folder_id || null;
+                    if (optimisticUpdates.event_id !== undefined) remotePatch.event_id = optimisticUpdates.event_id || null;
+                    if (optimisticUpdates.is_pinned !== undefined && !isShared) {
+                        remotePatch.is_pinned = (optimisticUpdates.is_pinned === 1 || (optimisticUpdates.is_pinned as any) === true) ? 1 : 0;
+                    }
+                    if (optimisticUpdates.content !== undefined && updatedNote.sync_mode !== 'yjs') {
+                        remotePatch.content = optimisticUpdates.content;
+                    }
+                    (async () => {
+                        try {
+                            const { error: patchErr } = await supabase
+                                .from('notes')
+                                .update(remotePatch)
+                                .eq('id', id);
+                            if (patchErr) {
+                                console.warn('[useNotesStore] Error pushing immediate note metadata update:', patchErr.message);
+                            }
+                        } catch { }
+                    })();
+                }
+                useStore.getState().triggerSync(false, false);
             }
         } catch (error) {
             console.error('Failed to update note', error);
@@ -509,7 +544,7 @@ export const useNotesStore = create<NotesState>((set, get) => ({
         set(state => ({
             notes: state.notes.map(n => n.id === id ? { ...n, collab_role: role } : n)
         }));
-        await NoteService.setNoteCollabRole(id, role).catch(() => {});
+        await NoteService.setNoteCollabRole(id, role).catch(() => { });
     },
 
     checkRevokedNotes: async () => {

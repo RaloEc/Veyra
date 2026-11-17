@@ -16,7 +16,6 @@ export interface SyncStoreHandlers {
     getMainStoreState?: () => any;
     setMainStoreState?: (partial: any) => void;
     loadReminders?: () => Promise<void>;
-    loadStreak?: () => Promise<void>;
     loadTags?: () => Promise<void>;
     loadFolders?: () => Promise<void>;
     loadNotes?: () => Promise<void>;
@@ -197,9 +196,6 @@ export const SyncService = {
             {
                 name: 'Compliance',
                 fn: () => this.syncComplianceEvents(userId),
-                onDone: () => {
-                    syncStoreHandlers.loadStreak?.().catch(() => {});
-                },
                 timeout: 10000,
             },
             {
@@ -294,12 +290,9 @@ export const SyncService = {
             }
         }
 
-        if (isInitialLogin || !store.userProfile) {
+        if (isInitialLogin) {
             // Si es login inicial, restaurar los ajustes desde la nube
             if (remoteProfile) {
-                if (remoteProfile.user_profile) {
-                    store.setUserProfile(remoteProfile.user_profile);
-                }
                 if (remoteProfile.default_control_level) {
                     store.setDefaultControlLevel(remoteProfile.default_control_level);
                 }
@@ -360,7 +353,6 @@ export const SyncService = {
         if (!currentStore) return;
         const authEmail = userData?.email || currentStore.session?.user?.email;
         const isOwner = isWhitelistedPremiumEmail(authEmail);
-        const desiredUserProfile = currentStore.userProfile || 'personal';
         const desiredControlLevel = currentStore.defaultControlLevel;
         const desiredIsPremium = isOwner ? true : (remoteProfile?.is_premium ? true : Boolean(currentStore.isPremium));
         const desiredOnboarding = Boolean(currentStore.onboardingCompleted);
@@ -368,7 +360,6 @@ export const SyncService = {
         const hasProfileDiff =
             !remoteProfile ||
             remoteProfile.email !== (authEmail || remoteProfile.email) ||
-            remoteProfile.user_profile !== desiredUserProfile ||
             remoteProfile.default_control_level !== desiredControlLevel ||
             Boolean(remoteProfile.is_premium) !== desiredIsPremium ||
             Boolean(remoteProfile.onboarding_completed) !== desiredOnboarding;
@@ -377,7 +368,6 @@ export const SyncService = {
             const profilePayload: any = {
                 id: userId,
                 email: authEmail || undefined,
-                user_profile: desiredUserProfile,
                 default_control_level: desiredControlLevel,
                 is_premium: desiredIsPremium,
                 onboarding_completed: desiredOnboarding,
@@ -402,7 +392,6 @@ export const SyncService = {
                     soundSettings: currentStore.soundSettings,
                     defaultControlLevel: currentStore.defaultControlLevel,
                     userName: currentStore.userName,
-                    userProfile: currentStore.userProfile,
                     homeViewMode: currentStore.homeViewMode,
                 };
 
@@ -781,7 +770,14 @@ export const SyncService = {
             // pero los metadatos (title, folder_id, event_id, is_pinned, attachments, deleted)
             // sí se sincronizan sin sobrescribir la columna 'content' en PostgreSQL.
             if (local.sync_mode === 'yjs') {
-                if (!remote || localModMs > (remote.last_modified_ms || 0)) {
+                if (!remote) {
+                    // Si la nota Yjs aún no existe en remoto, crearla vía upsert
+                    if (isSharedItem(local, userId)) {
+                        toUpdateRemoteShared.push(local);
+                    } else {
+                        toUpsertRemoteOwn.push(this.localNoteToRemote(local, userId));
+                    }
+                } else if (localModMs > (remote.last_modified_ms || 0)) {
                     toUpdateRemoteYjsMeta.push(local);
                 } else if ((remote.last_modified_ms || 0) > localModMs) {
                     toUpsertLocal.push(remote);

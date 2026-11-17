@@ -59,7 +59,7 @@ function renderBandHtml(
     includePageNumbers: boolean
 ): string {
     if (!band) {
-        if (kind === 'footer' && includePageNumbers) {
+        if (kind === 'footer' && includePageNumbers && totalPages > 1) {
             return `
             <div style="position:relative;width:100%;height:100%;display:flex;align-items:center;justify-content:flex-end;">
                 <div style="font-size:8.5pt;color:#94A3B8;">Página ${pageNum} de ${totalPages}</div>
@@ -88,13 +88,16 @@ function renderBandHtml(
         return `<img class="sheet-hf-img" src="${escapeHtml(img.src)}" style="position:absolute;left:${xMm.toFixed(2)}mm;top:${yMm.toFixed(2)}mm;width:${wMm.toFixed(2)}mm;height:${hMm.toFixed(2)}mm;object-fit:contain;" alt="" />`;
     }).join('');
 
+    const hasContent = left.trim().length > 0 || center.trim().length > 0 || right.trim().length > 0 || imgsHtml.length > 0;
+    if (!hasContent) return '';
+
     return `
     <div style="position:relative;width:100%;height:100%;">
         ${imgsHtml}
         <div style="position:relative;width:100%;height:100%;display:flex;align-items:center;justify-content:space-between;z-index:2;pointer-events:none;">
-            <div style="text-align:left;font-size:8.5pt;color:#94A3B8;">${left}</div>
-            <div style="text-align:center;font-size:8.5pt;color:#94A3B8;">${center}</div>
-            <div style="text-align:right;font-size:8.5pt;color:#94A3B8;">${right}</div>
+            <div style="text-align:left;font-size:8.5pt;color:#94A3B8;flex:1;">${left}</div>
+            <div style="text-align:center;font-size:8.5pt;color:#94A3B8;flex:1;">${center}</div>
+            <div style="text-align:right;font-size:8.5pt;color:#94A3B8;flex:1;">${right}</div>
         </div>
     </div>`;
 }
@@ -104,8 +107,8 @@ function renderBandHtml(
  * para impresión vectorial idéntico a la versión Web y al editor móvil:
  * - Tamaño estricto A4 (210mm x 297mm) con márgenes estándar 25mm / 30mm.
  * - Tipografía idéntica: Inter (10.5pt / 14px), line-height 1.7, márgenes de párrafos 0.25rem 0 0.5rem 0.
- * - Sin banner artificial de título de nota (elimina la duplicación en la cabecera).
- * - Motor de paginación DOM físico por hojas (.pdf-page-sheet) que parte listas y elementos con precisión.
+ * - Renderizado 100% estático y seguro para expo-print (iOS y Android) sin scripts de cliente.
+ * - Soporte de encabezados y pies de página personalizables con tokens ({page}, {total}, etc.) e imágenes.
  */
 export function buildPdfHtml(
     title: string,
@@ -130,13 +133,10 @@ export function buildPdfHtml(
         year: 'numeric',
     }).format(new Date());
 
-    const rawHojasHtml = pages
-        .map((p, idx) => `
-        <div class="raw-hoja" data-hoja-index="${idx}">
-            ${p.content || ''}
-        </div>
-        `)
-        .join('\n');
+    const cleanPages = (pages && pages.length > 0)
+        ? pages
+        : [{ id: 'default', content: '' }];
+    const totalPages = cleanPages.length;
 
     // Título opcional solo si se solicitó explícitamente y no en modo A4 limpio
     const optionalTitleSection = includeHeaderTitle
@@ -147,6 +147,50 @@ export function buildPdfHtml(
         </div>
         `
         : '';
+
+    const renderedPagesHtml = cleanPages.map((page, idx) => {
+        const pageNum = idx + 1;
+        const isLast = idx === totalPages - 1;
+        const pageContent = (page.content || '').trim();
+
+        const headerBand = resolvePageBand(hfConfig, 'header', pageNum);
+        const footerBand = resolvePageBand(hfConfig, 'footer', pageNum);
+
+        const headerHtml = renderBandHtml(
+            headerBand,
+            'header',
+            pageNum,
+            totalPages,
+            currentDateFormatted,
+            cleanTitle,
+            authorName,
+            includePageNumbers
+        );
+
+        const footerHtml = renderBandHtml(
+            footerBand,
+            'footer',
+            pageNum,
+            totalPages,
+            currentDateFormatted,
+            cleanTitle,
+            authorName,
+            includePageNumbers
+        );
+
+        const pageTitleSection = (idx === 0 && includeHeaderTitle) ? optionalTitleSection : '';
+
+        return `
+        <div class="pdf-page-sheet ${isLast ? 'pdf-page-sheet-last' : ''}" data-sheet-num="${pageNum}">
+            ${headerHtml ? `<div class="sheet-header-band">${headerHtml}</div>` : ''}
+            <div class="sheet-body">
+                ${pageTitleSection}
+                ${pageContent}
+            </div>
+            ${footerHtml ? `<div class="sheet-footer-band">${footerHtml}</div>` : ''}
+        </div>
+        `;
+    }).join('\n');
 
     return `<!DOCTYPE html>
 <html lang="es">
@@ -183,22 +227,9 @@ export function buildPdfHtml(
             -webkit-font-smoothing: antialiased;
         }
 
-        #raw-document {
-            display: none !important;
-        }
-
-        #paged-output {
-            padding: 0;
-            margin: 0;
-            width: 210mm;
-            display: block;
-        }
-
         .pdf-page-sheet {
             width: 210mm;
-            height: 297mm;
             min-height: 297mm;
-            max-height: 297mm;
             padding: 25mm 30mm 25mm 30mm;
             box-sizing: border-box;
             position: relative;
@@ -208,11 +239,9 @@ export function buildPdfHtml(
             color: #1F2937;
             page-break-after: always;
             break-after: page;
-            page-break-inside: avoid;
-            break-inside: avoid;
-            overflow: hidden;
         }
 
+        .pdf-page-sheet.pdf-page-sheet-last,
         .pdf-page-sheet:last-child {
             page-break-after: avoid;
             break-after: avoid;
@@ -235,8 +264,11 @@ export function buildPdfHtml(
         .sheet-body {
             flex: 1;
             min-height: 0;
-            overflow: hidden;
             box-sizing: border-box;
+            position: relative;
+            z-index: 1;
+            word-wrap: break-word;
+            overflow-wrap: break-word;
         }
 
         .sheet-footer-band {
@@ -270,44 +302,52 @@ export function buildPdfHtml(
         }
 
         h1 {
-            font-size: 24px;
+            font-size: 1.5em;
             font-weight: 700;
             color: #0F172A;
-            margin: 1.25rem 0 0.5rem 0;
-            line-height: 1.3;
+            margin: 16px 0 8px 0;
+            line-height: 1.25;
         }
 
         h2 {
-            font-size: 20px;
+            font-size: 1.25em;
             font-weight: 700;
             color: #1E293B;
-            margin: 1rem 0 0.4rem 0;
-            line-height: 1.35;
+            margin: 14px 0 6px 0;
+            line-height: 1.3;
         }
 
         h3 {
-            font-size: 16px;
+            font-size: 1.1em;
             font-weight: 600;
             color: #334155;
-            margin: 0.75rem 0 0.35rem 0;
-            line-height: 1.4;
+            margin: 12px 0 5px 0;
+            line-height: 1.35;
         }
 
         ul, ol {
-            margin: 0.25rem 0 0.5rem 0;
-            padding-left: 24px;
+            margin: 6px 0 10px 0;
+            padding-left: 22px;
         }
 
         li {
-            margin-bottom: 0.25rem;
+            margin-bottom: 3px;
             line-height: 1.7;
+        }
+
+        input[type="checkbox"] {
+            width: 13px;
+            height: 13px;
+            margin-right: 8px;
+            accent-color: #6366F1;
+            vertical-align: middle;
         }
 
         table {
             width: 100%;
             border-collapse: collapse;
-            margin: 0.75rem 0;
-            font-size: 13px;
+            margin: 10px 0;
+            font-size: 0.9em;
             page-break-inside: auto;
         }
 
@@ -317,7 +357,7 @@ export function buildPdfHtml(
 
         th, td {
             border: 1px solid #CBD5E1;
-            padding: 6px 10px;
+            padding: 4px 8px;
             vertical-align: middle;
             line-height: 1.35;
         }
@@ -328,21 +368,23 @@ export function buildPdfHtml(
         }
 
         blockquote {
-            border-left: 3px solid #8B5CF6;
+            border-left: 3px solid #6366F1;
             padding: 6px 14px;
-            margin: 0.75rem 0;
-            color: #4B5563;
+            margin: 10px 0;
+            color: #475569;
             background-color: #F8FAFC;
             border-radius: 0 4px 4px 0;
             font-style: italic;
         }
 
         img {
-            max-width: 100%;
-            height: auto;
+            max-width: 100% !important;
+            height: auto !important;
             border-radius: 4px;
             display: block;
-            margin: 8px auto;
+            margin: 10px auto;
+            page-break-inside: avoid;
+            break-inside: avoid;
         }
 
         code {
@@ -383,189 +425,72 @@ export function buildPdfHtml(
             background: #8B5CF6;
             border-radius: 2px;
         }
+
+        .veyra-bookmark-card {
+            display: flex;
+            align-items: stretch;
+            justify-content: space-between;
+            margin: 12px 0;
+            border-radius: 10px;
+            border: 1px solid #E2E8F0;
+            background: #F8FAFC;
+            text-decoration: none !important;
+            color: inherit !important;
+            overflow: hidden;
+            page-break-inside: avoid;
+        }
+
+        .veyra-bookmark-body {
+            flex: 1;
+            min-width: 0;
+            padding: 10px 14px;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+        }
+
+        .veyra-bookmark-meta {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 11px;
+            color: #64748B;
+            margin-bottom: 4px;
+        }
+
+        .veyra-bookmark-title {
+            font-size: 13px;
+            font-weight: 600;
+            color: #0F172A;
+            line-height: 1.35;
+        }
+
+        .veyra-bookmark-desc {
+            font-size: 11.5px;
+            color: #475569;
+            line-height: 1.4;
+            margin-top: 4px;
+        }
+
+        .veyra-bookmark-cover-wrapper {
+            width: 120px;
+            min-height: 70px;
+            background: #E2E8F0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+        }
+
+        .veyra-bookmark-cover {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
     </style>
 </head>
 <body>
-    <div id="raw-document">
-        ${optionalTitleSection}
-        ${rawHojasHtml}
-    </div>
-
-    <div id="paged-output"></div>
-
-    <script>
-        (function() {
-            var rawDoc = document.getElementById('raw-document');
-            var output = document.getElementById('paged-output');
-            var hfConfig = ${JSON.stringify(hfConfig)};
-            var cleanTitle = ${JSON.stringify(cleanTitle)};
-            var authorName = ${JSON.stringify(authorName)};
-            var dateStr = ${JSON.stringify(currentDateFormatted)};
-            var includePageNumbers = ${includePageNumbers ? 'true' : 'false'};
-
-            function replaceTokens(raw, pageNum, total) {
-                if (!raw) return '';
-                return String(raw)
-                    .replace(/\\{page\\}/gi, String(pageNum))
-                    .replace(/\\{total\\}/gi, String(total))
-                    .replace(/\\{date\\}/gi, dateStr)
-                    .replace(/\\{title\\}/gi, cleanTitle)
-                    .replace(/\\{author\\}/gi, authorName);
-            }
-
-            function resolveBand(kind, pageNumber) {
-                if (!hfConfig) return { left: '', center: '', right: '', images: [] };
-                if (pageNumber === 1 && hfConfig.differentFirstPage) {
-                    return (kind === 'header' ? hfConfig.firstPageHeader : hfConfig.firstPageFooter) || { left: '', center: '', right: '', images: [] };
-                }
-                if (hfConfig.oddEvenDifferent && pageNumber % 2 === 0) {
-                    return (kind === 'header' ? hfConfig.evenHeader : hfConfig.evenFooter) || { left: '', center: '', right: '', images: [] };
-                }
-                return (kind === 'header' ? hfConfig.header : hfConfig.footer) || { left: '', center: '', right: '', images: [] };
-            }
-
-            function renderBand(kind, pageNum, totalPages) {
-                var band = resolveBand(kind, pageNum);
-                var left = replaceTokens(band.left || '', pageNum, totalPages);
-                var center = replaceTokens(band.center || '', pageNum, totalPages);
-                var right = replaceTokens(band.right || '', pageNum, totalPages);
-
-                if (!right && kind === 'footer' && includePageNumbers && totalPages > 1) {
-                    right = 'Página ' + pageNum + ' de ' + totalPages;
-                }
-
-                var images = Array.isArray(band.images) ? band.images : [];
-                var imgsHtml = images.map(function(img) {
-                    if (!img || !img.src) return '';
-                    var xMm = ((Number(img.x) || 0) / 794) * 210;
-                    var yMm = ((Number(img.y) || 0) / 95) * 25;
-                    var wMm = ((Number(img.width) || 80) / 794) * 210;
-                    var hMm = ((Number(img.height) || 36) / 95) * 25;
-                    return '<img class="sheet-hf-img" src="' + img.src + '" style="position:absolute;left:' + xMm.toFixed(2) + 'mm;top:' + yMm.toFixed(2) + 'mm;width:' + wMm.toFixed(2) + 'mm;height:' + hMm.toFixed(2) + 'mm;object-fit:contain;" alt="" />';
-                }).join('');
-
-                var hasContent = left.trim() || center.trim() || right.trim() || imgsHtml.length > 0;
-                if (!hasContent) return '';
-
-                return '<div style="position:relative;width:100%;height:100%;">' +
-                    imgsHtml +
-                    '<div style="position:relative;width:100%;height:100%;display:flex;align-items:center;justify-content:space-between;z-index:2;pointer-events:none;">' +
-                        '<div style="text-align:left;font-size:8.5pt;color:#94A3B8;">' + left + '</div>' +
-                        '<div style="text-align:center;font-size:8.5pt;color:#94A3B8;">' + center + '</div>' +
-                        '<div style="text-align:right;font-size:8.5pt;color:#94A3B8;">' + right + '</div>' +
-                    '</div>' +
-                '</div>';
-            }
-
-            function runPaginator() {
-                if (!rawDoc || !output) return;
-                output.innerHTML = '';
-                var sheetCount = 0;
-                var currentSheet = null;
-                var currentBody = null;
-
-                function createNewSheet() {
-                    sheetCount++;
-                    var sheet = document.createElement('div');
-                    sheet.className = 'pdf-page-sheet';
-                    sheet.setAttribute('data-sheet-num', sheetCount);
-
-                    var header = document.createElement('div');
-                    header.className = 'sheet-header-band';
-                    header.setAttribute('data-page', sheetCount);
-                    sheet.appendChild(header);
-
-                    var body = document.createElement('div');
-                    body.className = 'sheet-body';
-                    sheet.appendChild(body);
-
-                    var footer = document.createElement('div');
-                    footer.className = 'sheet-footer-band';
-                    footer.setAttribute('data-page', sheetCount);
-                    sheet.appendChild(footer);
-
-                    output.appendChild(sheet);
-                    currentSheet = sheet;
-                    currentBody = body;
-                    return sheet;
-                }
-
-                function checkOverflow(container) {
-                    if (container.scrollHeight > container.clientHeight) return true;
-                    var last = container.lastElementChild;
-                    if (!last) return false;
-                    var cRect = container.getBoundingClientRect();
-                    var lRect = last.getBoundingClientRect();
-                    if (cRect.height > 0 && lRect.bottom > (cRect.bottom - 4)) return true;
-                    return false;
-                }
-
-                createNewSheet();
-
-                var rawHojas = Array.from(rawDoc.querySelectorAll('.raw-hoja'));
-                rawHojas.forEach(function(hoja, hojaIdx) {
-                    if (hojaIdx > 0 && currentBody.children.length > 0) {
-                        createNewSheet();
-                    }
-
-                    var elements = Array.from(hoja.children);
-                    elements.forEach(function(el) {
-                        if ((el.tagName === 'UL' || el.tagName === 'OL') && el.children.length > 1) {
-                            var currentList = el.cloneNode(false);
-                            currentBody.appendChild(currentList);
-
-                            Array.from(el.children).forEach(function(li) {
-                                var liClone = li.cloneNode(true);
-                                currentList.appendChild(liClone);
-
-                                if (checkOverflow(currentBody)) {
-                                    if (currentList.children.length > 1 || currentBody.children.length > 1) {
-                                        currentList.removeChild(liClone);
-                                        if (currentList.children.length === 0) {
-                                            currentBody.removeChild(currentList);
-                                        }
-                                        createNewSheet();
-                                        currentList = el.cloneNode(false);
-                                        currentBody.appendChild(currentList);
-                                        currentList.appendChild(liClone);
-                                    }
-                                }
-                            });
-                            return;
-                        }
-
-                        var clone = el.cloneNode(true);
-                        currentBody.appendChild(clone);
-
-                        if (checkOverflow(currentBody)) {
-                            if (currentBody.children.length > 1) {
-                                currentBody.removeChild(clone);
-                                createNewSheet();
-                                currentBody.appendChild(clone);
-                            }
-                        }
-                    });
-                });
-
-                var sheets = Array.from(output.querySelectorAll('.pdf-page-sheet'));
-                var totalSheets = sheets.length;
-
-                sheets.forEach(function(sheet, sIdx) {
-                    var pNum = sIdx + 1;
-                    var hBand = sheet.querySelector('.sheet-header-band');
-                    var fBand = sheet.querySelector('.sheet-footer-band');
-                    if (hBand) hBand.innerHTML = renderBand('header', pNum, totalSheets);
-                    if (fBand) fBand.innerHTML = renderBand('footer', pNum, totalSheets);
-                });
-            }
-
-            runPaginator();
-            if (document.readyState === 'loading') {
-                document.addEventListener('DOMContentLoaded', runPaginator);
-            }
-            window.addEventListener('load', runPaginator);
-        })();
-    </script>
+    ${renderedPagesHtml}
 </body>
 </html>
 `;

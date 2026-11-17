@@ -70,7 +70,7 @@ export async function computeContentSha256(content: string = ''): Promise<string
                 .map((b: number) => b.toString(16).padStart(2, '0'))
                 .join('')
                 .toLowerCase();
-        } catch (_) {}
+        } catch (_) { }
     }
 
     // 2. Node.js crypto
@@ -81,7 +81,7 @@ export async function computeContentSha256(content: string = ''): Promise<string
             if (nodeCrypto && typeof nodeCrypto.createHash === 'function') {
                 return nodeCrypto.createHash('sha256').update(rawBytes).digest('hex').toLowerCase();
             }
-        } catch (_) {}
+        } catch (_) { }
     }
 
     // 3. Expo Crypto
@@ -94,7 +94,7 @@ export async function computeContentSha256(content: string = ''): Promise<string
                 .join('')
                 .toLowerCase();
         }
-    } catch (_) {}
+    } catch (_) { }
 
     throw new Error('Proveedor criptográfico SHA-256 no disponible para calcular hash del contenido.');
 }
@@ -114,6 +114,10 @@ export function buildInitialYDocFromNote(note: Note): Y.Doc {
     meta.set('fontFamily', note.font_family || 'sans');
     meta.set('createdAt', note.created_at_ms || Date.now());
     meta.set('updatedAt', note.updated_at_ms || Date.now());
+    meta.set('pageFormat', parsed.pageFormat || 'infinite');
+    if (parsed.a4HeaderFooterConfig) {
+        meta.set('a4HeaderFooterConfig', JSON.stringify(parsed.a4HeaderFooterConfig));
+    }
 
     // Estructura de hojas estables
     const pageOrder = doc.getArray('pageOrder');
@@ -164,9 +168,6 @@ export async function preparePilotActivationPayload(
 ): Promise<ActivateNoteYjsParams> {
     if (!note || !note.id) {
         throw new Error('Nota inválida para activación');
-    }
-    if (note.sync_mode === 'yjs') {
-        throw new Error(`La nota ${note.id} ya está en modo 'yjs'. No se puede volver a activar.`);
     }
 
     const expectedContentHash = await computeContentSha256(note.content || '');
@@ -240,7 +241,7 @@ export async function executePilotActivation(
         try {
             const { NoteService } = await import('../services/noteService');
             await NoteService.setNoteSyncMode(note.id, 'yjs');
-        } catch (_) {}
+        } catch (_) { }
     }
 
     return result;

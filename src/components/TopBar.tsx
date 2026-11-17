@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo } from 'react';
+import React, { useMemo } from 'react';
 import {
     View,
     Text,
@@ -7,7 +7,7 @@ import {
 } from 'react-native';
 import { useRouter, usePathname } from 'expo-router';
 import { useTranslation } from 'react-i18next';
-import { Flame, MoreVertical, History, Share2 } from '@tamagui/lucide-icons';
+import { MoreVertical, History, Share2 } from '@tamagui/lucide-icons';
 
 import { useStore } from '../store/useStore';
 import { useVeyraTheme } from '../theme/useVeyraTheme';
@@ -21,7 +21,7 @@ interface TopBarProps {
 }
 
 /**
- * TopBar — Barra de navegación superior con saludo contextual, contador de racha
+ * TopBar — Barra de navegación superior con saludo contextual
  * e indicador de progreso de sincronización en tiempo real.
  */
 export const TopBar = React.memo(function TopBar({
@@ -38,12 +38,6 @@ export const TopBar = React.memo(function TopBar({
     const userName = useStore(state => state.userName);
     const session = useStore(state => state.session);
     const language = useStore(state => state.language);
-    const streak = useStore(state => state.streak);
-    const loadStreak = useStore(state => state.loadStreak);
-
-    useEffect(() => {
-        loadStreak();
-    }, []);
 
     // Saludo según la hora del día (para cuando no hay sesión iniciada)
     const timeGreeting = useMemo(() => {
@@ -121,28 +115,8 @@ export const TopBar = React.memo(function TopBar({
                 </Text>
             </TouchableOpacity>
 
-            {/* Derecha: Acciones (Badge de racha + Botón de 3 puntos) */}
+            {/* Derecha: Acciones (Historial, Compartir, Botón de 3 puntos) */}
             <View style={styles.actionsRow}>
-                {streak > 0 && (
-                    <TouchableOpacity
-                        activeOpacity={0.7}
-                        onPress={() => {
-                            if (pathname !== '/stats') router.push('/stats');
-                        }}
-                    >
-                        <VeyraSurface
-                            level={2}
-                            radius="pill"
-                            style={styles.streakBadge}
-                        >
-                            <Flame size={14} color="#F59E0B" />
-                            <Text style={[styles.streakText, { color: colors.textPrimary, fontSize: 12 }]}>
-                                {streak}
-                            </Text>
-                        </VeyraSurface>
-                    </TouchableOpacity>
-                )}
-
                 {onHistoryPress && (
                     <TouchableOpacity
                         activeOpacity={0.7}
@@ -225,16 +199,6 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         gap: 8,
-    },
-    streakBadge: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        paddingVertical: 4,
-        paddingHorizontal: 8,
-        gap: 4,
-    },
-    streakText: {
-        fontWeight: '800',
     },
     actionIconButton: {
         width: 32,

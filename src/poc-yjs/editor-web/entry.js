@@ -1171,7 +1171,6 @@ function initEditor(fragmentName) {
             if (areCursorsVisible) {
                 updateLocalCursor();
             }
-            window.veyraBroadcastAwareness();
             checkMobileSlashMenu();
         },
         onSelectionUpdate: () => {
@@ -1198,7 +1197,6 @@ function initEditor(fragmentName) {
             if (areCursorsVisible) {
                 updateLocalCursor();
             }
-            window.veyraBroadcastAwareness();
             checkMobileSlashMenu();
         },
         editorProps: {
@@ -1614,6 +1612,7 @@ function initEditor(fragmentName) {
         contentRenderedTimer = setTimeout(() => {
             measureAndNotify();
         }, 400);
+        scheduleVeyraA4Pagination();
     });
 
     // También emitir después del primer render si no hay updates (nota sin cambios pendientes)
@@ -1622,6 +1621,12 @@ function initEditor(fragmentName) {
     }, 1500);
 
     window.editor = editor;
+    const isInitA4 = document.documentElement && document.documentElement.classList.contains('a4-page-mode');
+    if (isInitA4) {
+        const pmInit = editorElement.querySelector('.ProseMirror');
+        if (pmInit) pmInit.style.setProperty('min-height', '1123px', 'important');
+        editorElement.style.setProperty('min-height', '1123px', 'important');
+    }
     applyVeyraA4Zoom();
     scheduleVeyraA4Pagination();
     sendToNative({ type: 'EDITOR_READY' });
@@ -1913,24 +1918,27 @@ window.veyraApplyUpdate = function (base64Payload, customOrigin) {
         logToNative('remote-peer', 'apply-update-success', totalBytes);
         sendToNative({ type: 'APPLY_UPDATE_ACK', success: true });
 
-        // Si el fragmento actual es 'default', pero el documento tiene pageOrder definido
-        // y no se ha fijado explícitamente otra página, sincronizar a la primera página de la nota
+        // Si el fragmento actual no está en pageOrder (ej. 'default' o ID temporal previo a la carga del Y.Doc),
+        // sincronizar automáticamente al primer pageId autoritativo de pageOrder sin crear hojas extra (y deduplicar si está corrupto).
         const pageOrder = ydoc.getArray('pageOrder');
-        if (currentFragmentName === 'default' && pageOrder.length > 0 && !(typeof window !== 'undefined' && window.VEYRA_EXPLICIT_PAGE_SET)) {
-            const firstPageId = pageOrder.get(0);
-            if (firstPageId && firstPageId !== currentFragmentName) {
-                initEditor(firstPageId);
-                return;
+        if (pageOrder.length > 0) {
+            const rawArr = pageOrder.toArray().map(String);
+            const uniqueArr = Array.from(new Set(rawArr));
+            if (uniqueArr.length !== rawArr.length) {
+                try {
+                    ydoc.transact(() => {
+                        while (pageOrder.length > 0) pageOrder.delete(0, 1);
+                        pageOrder.insert(0, uniqueArr);
+                    }, 'dedup-page-order');
+                } catch (_) {}
             }
-        }
-
-        // Actualizar cursor local sobre la nueva estructura y forzar refresco de cursores remotos
-        updateLocalCursor();
-        if (editor && editor.view && !editor.isDestroyed) {
-            try {
-                const tr = editor.state.tr.setMeta(yCursorPluginKey, { awarenessUpdated: true });
-                editor.view.dispatch(tr);
-            } catch (_) { }
+            if (!uniqueArr.includes(currentFragmentName)) {
+                const firstPageId = uniqueArr[0];
+                if (firstPageId && firstPageId !== currentFragmentName) {
+                    initEditor(firstPageId);
+                    return;
+                }
+            }
         }
 
         const pageIdActivo = currentFragmentName;
@@ -2471,9 +2479,27 @@ window.veyraSetAlign = function (align) {
 };
 
 window.veyraInsertImage = function (url) {
-    if (editor && url) {
-        editor.chain().focus().setImage({ src: url }).run();
+    if (!editor || !url) return;
+    try {
+        if (!editor.isEditable) {
+            editor.setEditable(true);
+        }
+        if (lastSelectionSnapshot) {
+            try {
+                editor.chain().focus().setTextSelection(lastSelectionSnapshot).run();
+            } catch (_) { }
+        }
+        const inserted = editor.chain().focus().setImage({ src: url }).run();
+        if (!inserted) {
+            editor.chain().focus('end').insertContent({ type: 'image', attrs: { src: url } }).run();
+        }
+        lastSelectionSnapshot = {
+            from: editor.state.selection.from,
+            to: editor.state.selection.to
+        };
         notifyToolbarStateChanged();
+    } catch (e) {
+        console.error('Error en veyraInsertImage:', e);
     }
 };
 
@@ -3371,6 +3397,25 @@ window.veyraGetHTML = function () {
     return editor ? editor.getHTML() : '';
 };
 
+function syncVeyraSheetTypographyVars() {
+    const root = document.documentElement;
+    if (!root) return;
+    const isAmoled = root.classList.contains('amoled');
+    const isDark = root.classList.contains('dark') || isAmoled;
+    const isLightSheet = isDark && root.classList.contains('sheet-light-mode') && root.classList.contains('a4-page-mode');
+    const useDarkInk = !isDark || isLightSheet;
+
+    root.style.setProperty('--bg-color', isAmoled ? '#000000' : (isDark ? '#121212' : '#FFFFFF'));
+    root.style.setProperty('--text-color', useDarkInk ? '#18181B' : '#F4F4F5');
+    root.style.setProperty('--text-bold', useDarkInk ? '#000000' : '#FFFFFF');
+    root.style.setProperty('--text-italic', useDarkInk ? '#18181B' : '#F4F4F5');
+    root.style.setProperty('--heading-1', useDarkInk ? '#09090B' : '#F4F4F5');
+    root.style.setProperty('--heading-2', useDarkInk ? '#18181B' : '#E4E4E7');
+    root.style.setProperty('--placeholder', useDarkInk ? '#A1A1AA' : '#71717A');
+    root.style.setProperty('--text-secondary', useDarkInk ? '#71717A' : '#A1A1AA');
+    root.style.setProperty('--selection', useDarkInk ? 'rgba(139, 92, 246, 0.3)' : 'rgba(139, 92, 246, 0.4)');
+}
+
 window.veyraSetTheme = function (theme) {
     const isAmoled = theme === 'amoled';
     const isDark = theme === 'dark' || isAmoled;
@@ -3384,15 +3429,7 @@ window.veyraSetTheme = function (theme) {
         } else {
             root.classList.add('light');
         }
-        root.style.setProperty('--bg-color', isAmoled ? '#000000' : (isDark ? '#121212' : '#FFFFFF'));
-        root.style.setProperty('--text-color', isDark ? '#F4F4F5' : '#18181B');
-        root.style.setProperty('--text-bold', isDark ? '#FFFFFF' : '#000000');
-        root.style.setProperty('--text-italic', isDark ? '#F4F4F5' : '#18181B');
-        root.style.setProperty('--heading-1', isDark ? '#F4F4F5' : '#09090B');
-        root.style.setProperty('--heading-2', isDark ? '#E4E4E7' : '#18181B');
-        root.style.setProperty('--placeholder', isDark ? '#71717A' : '#A1A1AA');
-        root.style.setProperty('--text-secondary', isDark ? '#A1A1AA' : '#71717A');
-        root.style.setProperty('--selection', isDark ? 'rgba(139, 92, 246, 0.4)' : 'rgba(139, 92, 246, 0.3)');
+        syncVeyraSheetTypographyVars();
     }
     if (document.body) {
         document.body.classList.remove('light', 'dark', 'amoled');
@@ -3403,6 +3440,32 @@ window.veyraSetTheme = function (theme) {
         } else {
             document.body.classList.add('light');
         }
+    }
+};
+
+window.veyraCurrentPaperMode = 'auto';
+window.veyraSetNotePaperMode = function (mode) {
+    window.veyraCurrentPaperMode = mode || 'auto';
+    const root = document.documentElement;
+    const isA4 = root && root.classList.contains('a4-page-mode');
+    const isLight = mode === 'light' && isA4;
+    if (root) {
+        if (isLight) {
+            root.classList.add('sheet-light-mode');
+        } else {
+            root.classList.remove('sheet-light-mode');
+        }
+        syncVeyraSheetTypographyVars();
+    }
+    if (document.body) {
+        if (isLight) {
+            document.body.classList.add('sheet-light-mode');
+        } else {
+            document.body.classList.remove('sheet-light-mode');
+        }
+    }
+    if (typeof scheduleVeyraA4Pagination === 'function') {
+        scheduleVeyraA4Pagination();
     }
 };
 
@@ -3529,13 +3592,22 @@ function replaceVeyraHfTokens(raw, pageNumber, totalPages) {
 
 function resolveVeyraPageBand(cfg, kind, pageNumber) {
     if (!cfg || typeof cfg !== 'object') return { left: '', center: '', right: '', images: [] };
-    if (pageNumber === 1 && cfg.differentFirstPage) {
-        return (kind === 'header' ? cfg.firstPageHeader : cfg.firstPageFooter) || { left: '', center: '', right: '', images: [] };
+    if (pageNumber === 1 && (cfg.differentFirstPage)) {
+        const band = kind === 'header'
+            ? (cfg.firstPageHeader || cfg.firstPageHeaderSlots)
+            : (cfg.firstPageFooter || cfg.firstPageFooterSlots);
+        return band || { left: '', center: '', right: '', images: [] };
     }
-    if (cfg.oddEvenDifferent && pageNumber % 2 === 0) {
-        return (kind === 'header' ? cfg.evenHeader : cfg.evenFooter) || { left: '', center: '', right: '', images: [] };
+    if ((cfg.oddEvenDifferent || cfg.differentOddEven) && pageNumber % 2 === 0) {
+        const band = kind === 'header'
+            ? (cfg.evenHeader || cfg.evenPageHeaderSlots)
+            : (cfg.evenFooter || cfg.evenPageFooterSlots);
+        return band || { left: '', center: '', right: '', images: [] };
     }
-    return (kind === 'header' ? cfg.header : cfg.footer) || { left: '', center: '', right: '', images: [] };
+    const band = kind === 'header'
+        ? (cfg.header || cfg.headerSlots)
+        : (cfg.footer || cfg.footerSlots);
+    return band || { left: '', center: '', right: '', images: [] };
 }
 
 function getEffectiveZoneHeightPx(config, zone) {
@@ -3707,15 +3779,39 @@ function runVeyraA4Pagination() {
 
     if (!isA4 || !editorEl) {
         if (styleEl) styleEl.textContent = '';
-        if (overlayEl && veyraA4LastBreaks !== '') {
+        if (overlayEl) {
             overlayEl.innerHTML = '';
-            veyraA4LastBreaks = '';
+            overlayEl.style.display = 'none';
         }
+        veyraA4LastBreaks = '';
         return;
     }
 
     const pm = editorEl.querySelector('.ProseMirror');
-    if (!pm || pm.children.length === 0) return;
+    if (!pm) return;
+    if (pm.children.length === 0) {
+        pm.style.setProperty('min-height', '1123px', 'important');
+        editorEl.style.setProperty('min-height', '1123px', 'important');
+        if (overlayEl) {
+            overlayEl.style.display = 'block';
+            const hfCfgStr = JSON.stringify(veyraA4HeaderFooterConfig);
+            const nextOverlayKey = `0|1|794|95|${veyraNoteTitle}|${veyraAuthorName}|${hfCfgStr}`;
+            if (veyraA4LastBreaks !== nextOverlayKey) {
+                veyraA4LastBreaks = nextOverlayKey;
+                const bandsParts = [
+                    renderVeyraBandHtml('header', 0, 1, 1123, 1159, 95, 113, 794),
+                    renderVeyraBandHtml('footer', 0, 1, 1123, 1159, 95, 113, 794)
+                ];
+                overlayEl.innerHTML = bandsParts.join('');
+            }
+        }
+        sendToNative({
+            type: 'A4_SHEETS_UPDATED',
+            sheets: [{ index: 0, title: 'Hoja 1', snippet: '', wordCount: 0 }],
+            totalSheets: 1,
+        });
+        return;
+    }
 
     veyraA4IsCalculating = true;
     try {
@@ -3743,7 +3839,9 @@ function runVeyraA4Pagination() {
         const pmWidth = 794; // Ancho exacto A4 (210mm)
 
         const prevPmH = pm.offsetHeight;
-        pm.style.minHeight = `${Math.max(A4_HEIGHT_PX, prevPmH)}px`;
+        const initialA4H = `${Math.max(A4_HEIGHT_PX, prevPmH)}px`;
+        pm.style.setProperty('min-height', initialA4H, 'important');
+        editorEl.style.setProperty('min-height', initialA4H, 'important');
         const basePaddingRule =
             marginTopPx !== 95 || marginBottomPx !== 95
                 ? `html.a4-page-mode .ProseMirror { padding-top: ${marginTopPx}px !important; padding-bottom: ${marginBottomPx}px !important; }`
@@ -3889,8 +3987,9 @@ function runVeyraA4Pagination() {
             }
         }
 
-        const totalMinHeight = (currentPage + 1) * A4_HEIGHT_PX + currentPage * PAGE_GAP_PX;
-        pm.style.minHeight = `${totalMinHeight}px`;
+        const totalMinHeight = Math.max(A4_HEIGHT_PX, (currentPage + 1) * A4_HEIGHT_PX + currentPage * PAGE_GAP_PX);
+        pm.style.setProperty('min-height', `${totalMinHeight}px`, 'important');
+        editorEl.style.setProperty('min-height', `${totalMinHeight}px`, 'important');
 
         veyraA4SettledW = editorEl.offsetWidth;
         veyraA4SettledH = editorEl.offsetHeight;
@@ -3910,6 +4009,7 @@ function runVeyraA4Pagination() {
             });
             editorEl.appendChild(overlayEl);
         }
+        overlayEl.style.display = 'block';
 
         const totalSheets = currentPage + 1;
         const hfCfgStr = JSON.stringify(veyraA4HeaderFooterConfig);
@@ -4007,8 +4107,16 @@ window.veyraSetPageFormat = function (format, fromRemoteOrInit) {
 
         if (isA4) {
             root.classList.add('a4-page-mode');
+            if (document.body) document.body.classList.add('a4-page-mode');
+            const pm = document.querySelector('.ProseMirror');
+            if (pm) pm.style.setProperty('min-height', '1123px', 'important');
+            const ed = document.getElementById('editor');
+            if (ed) ed.style.setProperty('min-height', '1123px', 'important');
+            if (window.veyraCurrentPaperMode === 'light') {
+                root.classList.add('sheet-light-mode');
+                if (document.body) document.body.classList.add('sheet-light-mode');
+            }
             if (!veyraA4Ro && typeof ResizeObserver !== 'undefined') {
-                const ed = document.getElementById('editor');
                 if (ed) {
                     veyraA4Ro = new ResizeObserver(() => {
                         if (ed.offsetWidth === veyraA4SettledW && ed.offsetHeight === veyraA4SettledH) return;
@@ -4019,8 +4127,19 @@ window.veyraSetPageFormat = function (format, fromRemoteOrInit) {
             }
         } else {
             root.classList.remove('a4-page-mode');
+            if (document.body) document.body.classList.remove('a4-page-mode');
+            root.classList.remove('sheet-light-mode');
+            if (document.body) document.body.classList.remove('sheet-light-mode');
+            const overlayEl = document.getElementById('veyra-a4-breaks-overlay');
+            if (overlayEl) {
+                overlayEl.innerHTML = '';
+                overlayEl.style.display = 'none';
+            }
+            veyraA4LastBreaks = '';
             const pm = document.querySelector('.ProseMirror');
-            if (pm) pm.style.minHeight = '';
+            if (pm) pm.style.removeProperty('min-height');
+            const ed = document.getElementById('editor');
+            if (ed) ed.style.removeProperty('min-height');
         }
         applyVeyraA4Zoom();
         scheduleVeyraA4Pagination();
@@ -4077,14 +4196,38 @@ window.veyraSetA4HeaderFooterConfig = function (configInput, fromRemoteOrInit, n
     try {
         const parsed = typeof configInput === 'string' ? JSON.parse(configInput) : configInput;
         if (parsed && typeof parsed === 'object') {
+            const h = parsed.header || parsed.headerSlots || veyraA4HeaderFooterConfig.header;
+            const f = parsed.footer || parsed.footerSlots || veyraA4HeaderFooterConfig.footer;
+            const fph = parsed.firstPageHeader || parsed.firstPageHeaderSlots || veyraA4HeaderFooterConfig.firstPageHeader;
+            const fpf = parsed.firstPageFooter || parsed.firstPageFooterSlots || veyraA4HeaderFooterConfig.firstPageFooter;
+            const eh = parsed.evenHeader || parsed.evenPageHeaderSlots || veyraA4HeaderFooterConfig.evenHeader;
+            const ef = parsed.evenFooter || parsed.evenPageFooterSlots || veyraA4HeaderFooterConfig.evenFooter;
+            const diffFirst = Boolean(parsed.differentFirstPage ?? veyraA4HeaderFooterConfig.differentFirstPage);
+            const diffOddEven = Boolean(parsed.oddEvenDifferent ?? parsed.differentOddEven ?? veyraA4HeaderFooterConfig.oddEvenDifferent);
+
             veyraA4HeaderFooterConfig = {
                 ...veyraA4HeaderFooterConfig,
                 ...parsed,
+                header: h,
+                footer: f,
+                firstPageHeader: fph,
+                firstPageFooter: fpf,
+                evenHeader: eh,
+                evenFooter: ef,
+                differentFirstPage: diffFirst,
+                oddEvenDifferent: diffOddEven,
+                // Claves web para compatibilidad directa
+                headerSlots: h,
+                footerSlots: f,
+                firstPageHeaderSlots: fph,
+                firstPageFooterSlots: fpf,
+                evenPageHeaderSlots: eh,
+                evenPageFooterSlots: ef,
+                differentOddEven: diffOddEven,
             };
         }
         if (typeof noteTitle === 'string') veyraNoteTitle = noteTitle;
         if (typeof authorName === 'string') veyraAuthorName = authorName;
-        veyraA4LastBreaks = '';
         scheduleVeyraA4Pagination();
 
         if (!fromRemoteOrInit && ydoc) {
@@ -4104,13 +4247,20 @@ window.veyraSetNoteMetaContext = function (noteTitle, authorName) {
     if (typeof noteTitle === 'string' && veyraNoteTitle !== noteTitle) {
         veyraNoteTitle = noteTitle;
         changed = true;
+        try {
+            if (ydoc) {
+                const metaMap = ydoc.getMap('meta');
+                if (metaMap.get('title') !== noteTitle) {
+                    metaMap.set('title', noteTitle);
+                }
+            }
+        } catch (_) { }
     }
     if (typeof authorName === 'string' && veyraAuthorName !== authorName) {
         veyraAuthorName = authorName;
         changed = true;
     }
     if (changed) {
-        veyraA4LastBreaks = '';
         scheduleVeyraA4Pagination();
     }
 };
@@ -4129,28 +4279,59 @@ window.veyraScrollToA4Sheet = function (sheetIndex) {
     } catch (_) { }
 };
 
-// Observar ydoc.getMap('meta') para sincronizar formato A4 y encabezados/pie entre Web y Móvil
+// Observar ydoc.getMap('meta') para sincronizar formato A4, encabezados/pie y título entre Web y Móvil
 try {
     const veyraMetaMap = ydoc.getMap('meta');
-    const syncMetaFromYDoc = () => {
+    const syncMetaFromYDoc = (event) => {
         try {
-            const yFmt = veyraMetaMap.get('pageFormat');
-            if (yFmt === 'a4' || yFmt === 'infinite') {
-                window.veyraSetPageFormat(yFmt, true);
-                sendToNative({ type: 'PAGE_FORMAT_CHANGED', pageFormat: yFmt });
+            const changedKeys = event ? event.keysChanged : null;
+
+            // 1. Título colaborativo
+            if (!changedKeys || changedKeys.has('title')) {
+                const yTitle = veyraMetaMap.get('title');
+                if (typeof yTitle === 'string' && yTitle !== veyraNoteTitle) {
+                    veyraNoteTitle = yTitle;
+                    sendToNative({ type: 'TITLE_CHANGED', title: yTitle });
+                }
             }
-            const yHfRaw = veyraMetaMap.get('a4HeaderFooterConfig');
-            if (typeof yHfRaw === 'string' && yHfRaw.trim().startsWith('{')) {
-                const parsedHf = JSON.parse(yHfRaw);
+
+            // 2. Formato de página (A4 / Infinito)
+            if (!changedKeys || changedKeys.has('pageFormat')) {
+                const yFmt = veyraMetaMap.get('pageFormat');
+                if (yFmt === 'a4' || yFmt === 'infinite') {
+                    const isCurrentlyA4 = document.documentElement.classList.contains('a4-page-mode');
+                    const wantsA4 = yFmt === 'a4';
+                    if (isCurrentlyA4 !== wantsA4) {
+                        window.veyraSetPageFormat(yFmt, true);
+                        sendToNative({ type: 'PAGE_FORMAT_CHANGED', pageFormat: yFmt });
+                    }
+                }
+            }
+
+            // 3. Configuración de encabezado y pie A4
+            if (!changedKeys || changedKeys.has('a4HeaderFooterConfig')) {
+                const yHfRaw = veyraMetaMap.get('a4HeaderFooterConfig');
+                let parsedHf = null;
+                if (typeof yHfRaw === 'string' && yHfRaw.trim().startsWith('{')) {
+                    try {
+                        parsedHf = JSON.parse(yHfRaw);
+                    } catch (_) { }
+                } else if (yHfRaw && typeof yHfRaw === 'object') {
+                    parsedHf = yHfRaw;
+                }
                 if (parsedHf && typeof parsedHf === 'object') {
-                    window.veyraSetA4HeaderFooterConfig(parsedHf, true);
-                    sendToNative({ type: 'A4_HEADER_FOOTER_CHANGED', config: parsedHf });
+                    const currentSerialized = JSON.stringify(veyraA4HeaderFooterConfig);
+                    const incomingSerialized = JSON.stringify(parsedHf);
+                    if (currentSerialized !== incomingSerialized) {
+                        window.veyraSetA4HeaderFooterConfig(parsedHf, true);
+                        sendToNative({ type: 'A4_HEADER_FOOTER_CHANGED', config: parsedHf });
+                    }
                 }
             }
         } catch (_) { }
     };
-    veyraMetaMap.observe(() => {
-        syncMetaFromYDoc();
+    veyraMetaMap.observe((event) => {
+        syncMetaFromYDoc(event);
     });
 } catch (_) { }
 
@@ -4251,14 +4432,33 @@ function derivePreviewTextFromYDoc(doc) {
         }
 
         if (allParagraphs.length === 0) {
-            const fallbackNames = ['default', 'page_1'];
+            const fallbackNames = ['default', 'page_1', currentFragmentName];
+            if (doc.share && typeof doc.share.forEach === 'function') {
+                doc.share.forEach((_v, k) => {
+                    if (typeof k === 'string' && k.startsWith('page_') && !fallbackNames.includes(k)) {
+                        fallbackNames.push(k);
+                    }
+                });
+            }
             for (const name of fallbackNames) {
-                if (!pageIds.includes(name)) {
+                if (name && !pageIds.includes(name)) {
                     const fragment = doc.getXmlFragment(name);
                     if (fragment && fragment.length > 0) {
                         extractTextFromNode(fragment, []);
                         if (allParagraphs.length > 0) break;
                     }
+                }
+            }
+        }
+
+        if (allParagraphs.length === 0) {
+            const allCheckedPages = [...new Set([...pageIds, currentFragmentName])];
+            for (const pid of allCheckedPages) {
+                if (!pid) continue;
+                const frag = doc.getXmlFragment(pid);
+                if (frag && frag.length > 0 && /<(image|img)\b/i.test(frag.toString())) {
+                    allParagraphs.push('📷 Imagen');
+                    break;
                 }
             }
         }
@@ -4293,126 +4493,337 @@ window.veyraRequestPreview = function () {
 };
 
 window.veyraGetA4ExportHtml = function (customTitle) {
+    if (!editor || !editor.schema) return '';
     const editorEl = document.getElementById('editor');
-    const pm = editorEl ? editorEl.querySelector('.ProseMirror') : null;
-    if (!editorEl || !pm) {
-        return editor ? editor.getHTML() : '';
+    if (!editorEl) return '';
+
+    // 1. Obtener el HTML limpio de todas las páginas de la nota
+    const allPages = typeof window.veyraGetAllPagesHtml === 'function' ? window.veyraGetAllPagesHtml() : [];
+    const pagesToProcess = (allPages && allPages.length > 0 && allPages.some(p => p.content && p.content.trim().length > 0))
+        ? allPages
+        : [{ id: 'default', content: (editor ? editor.getHTML() : '') }];
+
+    if (pagesToProcess.every(p => !p.content || p.content.trim() === '' || p.content === '<p></p>')) {
+        return '';
     }
 
-    const A4_HEIGHT_PX = 1123;
-    const PAGE_GAP_PX = 36;
-    const STRIDE = A4_HEIGHT_PX + PAGE_GAP_PX;
-    const baseMarginVPx = 95;
-    const marginTopPx = Math.max(48, getEffectiveZoneHeightPx(veyraA4HeaderFooterConfig, 'header') || baseMarginVPx);
-    const marginBottomPx = Math.max(48, getEffectiveZoneHeightPx(veyraA4HeaderFooterConfig, 'footer') || baseMarginVPx);
-    const marginHPx = 113;
-    const zoom = veyraA4CurrentZoom || 1;
+    // 2. Crear un contenedor de staging en el DOM del WebView para medir con tipografía y dimensiones A4 reales
+    const staging = document.createElement('div');
+    staging.id = 'veyra-pdf-staging';
+    staging.style.position = 'fixed';
+    staging.style.top = '0';
+    staging.style.left = '-9999px';
+    staging.style.width = '210mm';
+    staging.style.background = '#FFFFFF';
+    staging.style.zIndex = '-99999';
+    staging.style.visibility = 'hidden';
+    staging.style.pointerEvents = 'none';
+
+    const styleEl = document.createElement('style');
+    styleEl.textContent = `
+        #veyra-pdf-staging,
+        #veyra-pdf-staging * {
+            box-sizing: border-box !important;
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
+        }
+        #veyra-pdf-staging {
+            font-family: 'Inter', 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif !important;
+            font-size: 10.5pt !important;
+            line-height: 1.7 !important;
+            color: #1F2937 !important;
+            background: #FFFFFF !important;
+            -webkit-font-smoothing: antialiased;
+        }
+        .pdf-page-sheet {
+            width: 210mm !important;
+            height: 297mm !important;
+            min-height: 297mm !important;
+            max-height: 297mm !important;
+            padding: 25mm 30mm 25mm 30mm !important;
+            background: #FFFFFF !important;
+            color: #1F2937 !important;
+            box-sizing: border-box !important;
+            position: relative !important;
+            display: flex !important;
+            flex-direction: column !important;
+            overflow: hidden !important;
+            page-break-after: always !important;
+            break-after: page !important;
+            page-break-inside: avoid !important;
+            break-inside: avoid !important;
+        }
+        .pdf-page-sheet:last-child {
+            page-break-after: avoid !important;
+            break-after: avoid !important;
+        }
+        .sheet-body {
+            flex: 1 !important;
+            min-height: 0 !important;
+            overflow: hidden !important;
+            box-sizing: border-box !important;
+            padding-bottom: 6px !important;
+        }
+        .sheet-footer {
+            height: 22px !important;
+            margin-top: 8px !important;
+            padding-top: 6px !important;
+            font-size: 8.5pt !important;
+            color: #94A3B8 !important;
+            border-top: 1px solid #F1F5F9 !important;
+            display: flex !important;
+            justify-content: space-between !important;
+            align-items: center !important;
+            flex-shrink: 0 !important;
+            box-sizing: border-box !important;
+        }
+        p {
+            font-size: 10.5pt !important;
+            line-height: 1.7 !important;
+            margin: 0.25rem 0 0.5rem 0 !important;
+            width: 100% !important;
+            word-wrap: break-word !important;
+            color: #1F2937 !important;
+        }
+        h1 {
+            font-size: 1.5em !important;
+            font-weight: 700 !important;
+            color: #0F172A !important;
+            margin: 16px 0 8px 0 !important;
+            line-height: 1.25 !important;
+        }
+        h2 {
+            font-size: 1.25em !important;
+            font-weight: 700 !important;
+            color: #1E293B !important;
+            margin: 14px 0 6px 0 !important;
+            line-height: 1.3 !important;
+        }
+        h3 {
+            font-size: 1.1em !important;
+            font-weight: 600 !important;
+            color: #334155 !important;
+            margin: 12px 0 5px 0 !important;
+            line-height: 1.35 !important;
+        }
+        ul, ol {
+            margin: 6px 0 10px 0 !important;
+            padding-left: 22px !important;
+        }
+        li {
+            margin-bottom: 3px !important;
+            line-height: 1.7 !important;
+        }
+        input[type="checkbox"] {
+            width: 13px !important;
+            height: 13px !important;
+            margin-top: 3px !important;
+            accent-color: #6366F1 !important;
+        }
+        img {
+            max-width: 100% !important;
+            height: auto !important;
+            border-radius: 4px !important;
+            margin: 10px auto !important;
+            display: block !important;
+        }
+        table {
+            width: 100% !important;
+            border-collapse: collapse !important;
+            margin: 10px 0 !important;
+            font-size: 0.9em !important;
+            page-break-inside: auto !important;
+        }
+        tr {
+            page-break-inside: avoid !important;
+        }
+        th, td {
+            border: 1px solid #94A3B8 !important;
+            padding: 4px 8px !important;
+            vertical-align: middle !important;
+            line-height: 1.35 !important;
+        }
+        th {
+            background-color: #F8FAFC !important;
+            font-weight: 600 !important;
+        }
+        blockquote {
+            border-left: 3px solid #6366F1 !important;
+            margin: 10px 0 !important;
+            padding: 6px 14px !important;
+            color: #475569 !important;
+            background-color: #F8FAFC !important;
+            border-radius: 0 4px 4px 0 !important;
+            font-style: italic !important;
+        }
+        code {
+            background-color: #F1F5F9 !important;
+            color: #9333EA !important;
+            padding: 1px 4px !important;
+            border-radius: 3px !important;
+            font-family: monospace !important;
+            font-size: 0.9em !important;
+        }
+        pre {
+            background-color: #0F172A !important;
+            color: #F8FAFC !important;
+            padding: 10px 14px !important;
+            border-radius: 6px !important;
+            font-size: 0.85em !important;
+            line-height: 1.45 !important;
+            margin: 10px 0 !important;
+            overflow: hidden !important;
+        }
+        pre code {
+            background: transparent !important;
+            color: inherit !important;
+            padding: 0 !important;
+        }
+    `;
+    staging.appendChild(styleEl);
+
+    const rawContainer = document.createElement('div');
+    rawContainer.innerHTML = pagesToProcess.map(function (p, idx) {
+        return '<div class="raw-hoja" data-hoja-index="' + idx + '">' + (p.content || '<p></p>') + '</div>';
+    }).join('\n');
+    staging.appendChild(rawContainer);
+
+    const outputContainer = document.createElement('div');
+    staging.appendChild(outputContainer);
+
+    document.body.appendChild(staging);
 
     try {
-        runVeyraA4Pagination();
-    } catch (_) { }
-
-    const finalPmRect = pm.getBoundingClientRect();
-    const pmChildren = Array.from(pm.children);
-    const totalSheets = Math.max(1, Math.ceil((pm.scrollHeight || pm.offsetHeight) / STRIDE));
-
-    const sheetsHtmlParts = [];
-
-    for (let s = 0; s < totalSheets; s++) {
-        const sTop = s * STRIDE;
-        const sBottom = s * STRIDE + A4_HEIGHT_PX;
-        const sheetContentEls = [];
-
-        for (let cIdx = 0; cIdx < pmChildren.length; cIdx++) {
-            const ch = pmChildren[cIdx];
-            const r = ch.getBoundingClientRect();
-            const relTop = (r.top - finalPmRect.top) / zoom;
-            const relBottom = (r.bottom - finalPmRect.top) / zoom;
-
-            if (relBottom <= sTop + 4 || relTop >= sBottom - 4) continue;
-
-            const tag = ch.tagName.toLowerCase();
-            if (tag === 'ul' || tag === 'ol') {
-                const lis = Array.from(ch.children).filter(li => li.tagName && li.tagName.toLowerCase() === 'li');
-                const sheetLis = lis.filter(li => {
-                    const liR = li.getBoundingClientRect();
-                    const liTop = (liR.top - finalPmRect.top) / zoom;
-                    const liBottom = (liR.bottom - finalPmRect.top) / zoom;
-                    return liBottom > sTop + 2 && liTop < sBottom - 2;
-                });
-                if (sheetLis.length > 0) {
-                    const listClone = ch.cloneNode(false);
-                    sheetLis.forEach(li => {
-                        const liClone = li.cloneNode(true);
-                        liClone.style.marginTop = '';
-                        liClone.style.paddingTop = '';
-                        listClone.appendChild(liClone);
-                    });
-                    sheetContentEls.push(listClone.outerHTML);
+        // Normalizar imágenes idéntico a Veyra Web
+        Array.from(rawContainer.querySelectorAll('img')).forEach(function (img) {
+            const widthAttr = img.getAttribute('width');
+            const dataWidth = img.getAttribute('data-width');
+            const w = dataWidth || widthAttr;
+            if (w && !isNaN(Number(w))) {
+                const num = Number(w);
+                if (num > 0 && num <= 100 && (!img.style.width || !img.style.width.includes('%'))) {
+                    img.style.width = num + '%';
                 }
-                continue;
             }
-
-            if (ch.classList.contains('tableWrapper') || ch.querySelector('table')) {
-                const table = ch.querySelector('table') || ch;
-                const rows = Array.from(table.querySelectorAll('tr'));
-                const sheetRows = rows.filter(tr => {
-                    const trR = tr.getBoundingClientRect();
-                    const trTop = (trR.top - finalPmRect.top) / zoom;
-                    const trBottom = (trR.bottom - finalPmRect.top) / zoom;
-                    return trBottom > sTop + 2 && trTop < sBottom - 2;
-                });
-                if (sheetRows.length > 0) {
-                    const tableClone = table.cloneNode(false);
-                    const tbody = document.createElement('tbody');
-                    sheetRows.forEach(tr => {
-                        const trClone = tr.cloneNode(true);
-                        Array.from(trClone.children).forEach(cell => {
-                            cell.style.marginTop = '';
-                            cell.style.paddingTop = '';
-                        });
-                        tbody.appendChild(trClone);
-                    });
-                    tableClone.appendChild(tbody);
-                    sheetContentEls.push(tableClone.outerHTML);
-                }
-                continue;
+            const textAlign = img.getAttribute('data-text-align') || img.style.textAlign;
+            if (textAlign === 'left') {
+                img.style.marginLeft = '0';
+                img.style.marginRight = 'auto';
+            } else if (textAlign === 'right') {
+                img.style.marginLeft = 'auto';
+                img.style.marginRight = '0';
+            } else {
+                img.style.marginLeft = 'auto';
+                img.style.marginRight = 'auto';
             }
+        });
 
-            const clone = ch.cloneNode(true);
-            clone.style.marginTop = '';
-            clone.style.paddingTop = '';
-            sheetContentEls.push(clone.outerHTML);
+        const cleanDocTitle = escapeVeyraHtml(customTitle || veyraNoteTitle || 'Documento');
+        let sheetCount = 0;
+        let currentSheet = null;
+        let currentBody = null;
+
+        function createNewSheet() {
+            sheetCount++;
+            const sheet = document.createElement('div');
+            sheet.className = 'pdf-page-sheet';
+            sheet.setAttribute('data-sheet-num', sheetCount);
+
+            const body = document.createElement('div');
+            body.className = 'sheet-body';
+            sheet.appendChild(body);
+
+            const footer = document.createElement('div');
+            footer.className = 'sheet-footer';
+            sheet.appendChild(footer);
+
+            outputContainer.appendChild(sheet);
+            currentSheet = sheet;
+            currentBody = body;
+            return sheet;
         }
 
-        const headerHtml = renderVeyraBandHtmlForPrint('header', s, totalSheets, marginTopPx, marginHPx);
-        const footerHtml = renderVeyraBandHtmlForPrint('footer', s, totalSheets, marginBottomPx, marginHPx);
+        function checkOverflow(container) {
+            if (container.scrollHeight > container.clientHeight) return true;
+            const last = container.lastElementChild;
+            if (!last) return false;
+            const cRect = container.getBoundingClientRect();
+            const lRect = last.getBoundingClientRect();
+            if (cRect.height > 0 && lRect.bottom > (cRect.bottom - 4)) return true;
+            return false;
+        }
 
-        sheetsHtmlParts.push(`
-            <div class="print-a4-sheet">
-                <div class="print-a4-header" style="height:${marginTopPx}px;padding:0 ${marginHPx}px;">
-                    ${headerHtml}
-                </div>
-                <div class="print-a4-body" style="top:${marginTopPx}px;bottom:${marginBottomPx}px;left:${marginHPx}px;right:${marginHPx}px;">
-                    ${sheetContentEls.join('\n')}
-                </div>
-                <div class="print-a4-footer" style="height:${marginBottomPx}px;padding:0 ${marginHPx}px;">
-                    ${footerHtml}
-                </div>
-            </div>
-        `);
-    }
+        createNewSheet();
 
-    const cleanTitle = escapeVeyraHtml(customTitle || veyraNoteTitle || 'Documento');
+        const rawHojas = Array.from(rawContainer.querySelectorAll('.raw-hoja'));
+        rawHojas.forEach(function (hoja, hojaIdx) {
+            if (hojaIdx > 0 && currentBody && currentBody.children.length > 0) {
+                createNewSheet();
+            }
 
-    return `<!DOCTYPE html>
+            const elements = Array.from(hoja.children);
+            elements.forEach(function (el) {
+                if ((el.tagName === 'UL' || el.tagName === 'OL') && el.children.length > 1) {
+                    let currentList = el.cloneNode(false);
+                    currentBody.appendChild(currentList);
+
+                    Array.from(el.children).forEach(function (li) {
+                        const liClone = li.cloneNode(true);
+                        currentList.appendChild(liClone);
+
+                        if (checkOverflow(currentBody)) {
+                            if (currentList.children.length > 1 || currentBody.children.length > 1) {
+                                currentList.removeChild(liClone);
+                                if (currentList.children.length === 0) {
+                                    currentBody.removeChild(currentList);
+                                }
+                                createNewSheet();
+                                currentList = el.cloneNode(false);
+                                currentBody.appendChild(currentList);
+                                currentList.appendChild(liClone);
+                            }
+                        }
+                    });
+                    return;
+                }
+
+                const clone = el.cloneNode(true);
+                currentBody.appendChild(clone);
+
+                if (checkOverflow(currentBody)) {
+                    if (currentBody.children.length > 1) {
+                        currentBody.removeChild(clone);
+                        createNewSheet();
+                        currentBody.appendChild(clone);
+                    }
+                }
+            });
+        });
+
+        // Configuración de número de páginas en el pie idéntico a Web
+        const allSheets = Array.from(outputContainer.querySelectorAll('.pdf-page-sheet'));
+        const total = allSheets.length;
+
+        allSheets.forEach(function (sheet, idx) {
+            const pageNum = idx + 1;
+            const footer = sheet.querySelector('.sheet-footer');
+            if (footer) {
+                const rightText = total > 1 ? ('Página ' + pageNum + ' de ' + total) : '';
+                footer.innerHTML = '<div></div><div>' + rightText + '</div>';
+            }
+        });
+
+        const paginatedSheetsHtml = outputContainer.innerHTML;
+
+        return `<!DOCTYPE html>
 <html lang="es">
 <head>
     <meta charset="utf-8" />
-    <title>${cleanTitle}</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>${cleanDocTitle}</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500;1,600;1,700&display=swap" rel="stylesheet" />
     <style>
         @page {
             size: 210mm 297mm;
@@ -4424,91 +4835,172 @@ window.veyraGetA4ExportHtml = function (customTitle) {
             print-color-adjust: exact !important;
         }
         html, body {
-            margin: 0;
-            padding: 0;
-            background: #FFFFFF;
-            font-family: 'Inter', system-ui, -apple-system, sans-serif;
-            font-size: 14px;
-            line-height: 1.7;
+            margin: 0 !important;
+            padding: 0 !important;
+            background: #FFFFFF !important;
             color: #1F2937;
+            font-family: 'Inter', 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+            font-size: 10.5pt;
+            line-height: 1.7;
+            -webkit-font-smoothing: antialiased;
         }
-        .print-a4-sheet {
-            width: 210mm;
-            height: 297mm;
-            min-height: 297mm;
-            max-height: 297mm;
-            box-sizing: border-box;
-            position: relative;
-            background: #FFFFFF;
-            page-break-after: always;
-            break-after: page;
-            page-break-inside: avoid;
-            break-inside: avoid;
-            overflow: hidden;
+        .pdf-page-sheet {
+            width: 210mm !important;
+            height: 297mm !important;
+            min-height: 297mm !important;
+            max-height: 297mm !important;
+            padding: 25mm 30mm 25mm 30mm !important;
+            background: #FFFFFF !important;
+            color: #1F2937 !important;
+            box-sizing: border-box !important;
+            position: relative !important;
+            display: flex !important;
+            flex-direction: column !important;
+            overflow: hidden !important;
+            page-break-inside: avoid !important;
+            break-inside: avoid !important;
         }
-        .print-a4-sheet:last-child {
-            page-break-after: avoid;
-            break-after: avoid;
+        .pdf-page-sheet:not(:last-child) {
+            page-break-after: always !important;
+            break-after: page !important;
         }
-        .print-a4-header {
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            box-sizing: border-box;
-            display: flex;
-            flex-direction: column;
-            justify-content: center;
-            z-index: 10;
+        .pdf-page-sheet:last-child {
+            page-break-after: avoid !important;
+            break-after: avoid !important;
         }
-        .print-a4-body {
-            position: absolute;
-            box-sizing: border-box;
-            overflow: hidden;
+        .sheet-body {
+            flex: 1 !important;
+            min-height: 0 !important;
+            overflow: hidden !important;
+            box-sizing: border-box !important;
+            padding-bottom: 6px !important;
         }
-        .print-a4-footer {
-            position: absolute;
-            bottom: 0;
-            left: 0;
-            right: 0;
-            box-sizing: border-box;
-            display: flex;
-            flex-direction: column;
-            justify-content: center;
-            z-index: 10;
+        .sheet-footer {
+            height: 22px !important;
+            margin-top: 8px !important;
+            padding-top: 6px !important;
+            font-size: 8.5pt !important;
+            color: #94A3B8 !important;
+            border-top: 1px solid #F1F5F9 !important;
+            display: flex !important;
+            justify-content: space-between !important;
+            align-items: center !important;
+            flex-shrink: 0 !important;
+            box-sizing: border-box !important;
         }
         p {
-            font-size: 14px;
+            font-size: 10.5pt;
             line-height: 1.7;
-            margin-top: 0.25rem;
-            margin-bottom: 0.5rem;
+            margin: 0.25rem 0 0.5rem 0;
             width: 100%;
             word-wrap: break-word;
             color: #1F2937;
         }
-        h1 { font-size: 24px; font-weight: 700; margin: 1.25rem 0 0.5rem 0; line-height: 1.3; color: #0F172A; }
-        h2 { font-size: 20px; font-weight: 700; margin: 1rem 0 0.4rem 0; line-height: 1.35; color: #1E293B; }
-        h3 { font-size: 16px; font-weight: 600; margin: 0.75rem 0 0.35rem 0; line-height: 1.4; color: #334155; }
-        ul, ol { margin: 0.25rem 0 0.5rem 0; padding-left: 24px; }
-        li { margin-bottom: 0.25rem; line-height: 1.7; }
-        img { max-width: 100%; height: auto; border-radius: 4px; display: block; margin: 8px auto; }
-        table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: 13px; }
-        td, th { border: 1px solid #CBD5E1; padding: 6px 10px; }
-        th { background: #F8FAFC; font-weight: 600; }
-        blockquote { border-left: 3px solid #8B5CF6; padding-left: 12px; margin: 0.75rem 0; color: #4B5563; font-style: italic; }
-        code { font-family: monospace; font-size: 12px; background: #F3F4F6; padding: 2px 4px; border-radius: 3px; }
-        pre { background: #1E293B; color: #F8FAFC; padding: 10px 14px; border-radius: 6px; font-size: 12px; line-height: 1.45; margin: 10px 0; overflow: hidden; }
-        pre code { background: transparent; color: inherit; padding: 0; }
-        hr { border: none; border-top: 1px solid rgba(148, 163, 184, 0.45); margin: 1.5rem 0; height: 0; }
-        .print-hf-img { position: absolute; object-fit: contain; pointer-events: none; }
-        .print-hf-row { position: relative; z-index: 2; display: grid; grid-template-columns: 1fr 1fr 1fr; align-items: center; width: 100%; height: 100%; }
-        .print-hf-slot { font-size: 9.5px; color: #64748B; line-height: 1.25; white-space: pre-wrap; overflow: hidden; text-overflow: ellipsis; }
+        h1 {
+            font-size: 1.5em;
+            font-weight: 700;
+            color: #0F172A;
+            margin: 16px 0 8px 0;
+            line-height: 1.25;
+        }
+        h2 {
+            font-size: 1.25em;
+            font-weight: 700;
+            color: #1E293B;
+            margin: 14px 0 6px 0;
+            line-height: 1.3;
+        }
+        h3 {
+            font-size: 1.1em;
+            font-weight: 600;
+            color: #334155;
+            margin: 12px 0 5px 0;
+            line-height: 1.35;
+        }
+        ul, ol {
+            margin: 6px 0 10px 0;
+            padding-left: 22px;
+        }
+        li {
+            margin-bottom: 3px;
+            line-height: 1.7;
+        }
+        input[type="checkbox"] {
+            width: 13px;
+            height: 13px;
+            margin-top: 3px;
+            accent-color: #6366F1;
+        }
+        img {
+            max-width: 100% !important;
+            height: auto !important;
+            border-radius: 4px;
+            margin: 10px auto;
+            display: block;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 10px 0;
+            font-size: 0.9em;
+            page-break-inside: auto;
+        }
+        tr {
+            page-break-inside: avoid;
+        }
+        th, td {
+            border: 1px solid #94A3B8;
+            padding: 4px 8px;
+            vertical-align: middle;
+            line-height: 1.35;
+        }
+        th {
+            background-color: #F8FAFC;
+            font-weight: 600;
+        }
+        blockquote {
+            border-left: 3px solid #6366F1;
+            margin: 10px 0;
+            padding: 6px 14px;
+            color: #475569;
+            background-color: #F8FAFC;
+            border-radius: 0 4px 4px 0;
+            font-style: italic;
+        }
+        code {
+            background-color: #F1F5F9;
+            color: #9333EA;
+            padding: 1px 4px;
+            border-radius: 3px;
+            font-family: monospace;
+            font-size: 0.9em;
+        }
+        pre {
+            background-color: #0F172A;
+            color: #F8FAFC;
+            padding: 10px 14px;
+            border-radius: 6px;
+            font-size: 0.85em;
+            line-height: 1.45;
+            margin: 10px 0;
+            overflow: hidden;
+        }
+        pre code {
+            background: transparent;
+            color: inherit;
+            padding: 0;
+        }
     </style>
 </head>
 <body>
-    ${sheetsHtmlParts.join('\n')}
+    ${paginatedSheetsHtml}
 </body>
 </html>`;
+    } finally {
+        if (staging.parentNode) {
+            staging.parentNode.removeChild(staging);
+        }
+    }
 };
 
 window.veyraGetAllPagesHtml = function () {

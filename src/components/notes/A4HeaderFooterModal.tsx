@@ -28,6 +28,8 @@ import {
     AlignLeft,
     AlignCenter,
     AlignRight,
+    Cloud,
+    RefreshCw,
 } from '@tamagui/lucide-icons';
 import * as ImagePicker from 'expo-image-picker';
 import { useVeyraTheme } from '../../theme/useVeyraTheme';
@@ -44,6 +46,7 @@ import {
     saveNewA4Template,
     deleteSavedA4Template,
     uploadHeaderFooterLogoMobile,
+    sanitizeA4HeaderFooterConfig,
 } from '../../utils/a4HeaderFooterUtils';
 
 export interface A4HeaderFooterModalProps {
@@ -71,16 +74,27 @@ export function A4HeaderFooterModal({
     const [activeCol, setActiveCol] = useState<'left' | 'center' | 'right'>('left');
     const [activeTab, setActiveTab] = useState<'edit' | 'templates' | 'options'>('edit');
     const [savedTemplates, setSavedTemplates] = useState<A4HeaderFooterSavedTemplate[]>([]);
+    const [isSyncingTemplates, setIsSyncingTemplates] = useState(false);
     const [newTemplateName, setNewTemplateName] = useState('');
     const [isSavingTemplate, setIsSavingTemplate] = useState(false);
     const [isUploadingLogo, setIsUploadingLogo] = useState(false);
 
+    const refreshTemplates = async () => {
+        setIsSyncingTemplates(true);
+        try {
+            const list = await syncSavedA4TemplatesFromCloud();
+            setSavedTemplates(list);
+        } catch {
+            // ignore
+        } finally {
+            setIsSyncingTemplates(false);
+        }
+    };
+
     useEffect(() => {
         if (visible) {
             setActiveKind(initialKind);
-            syncSavedA4TemplatesFromCloud().then(list => {
-                setSavedTemplates(list);
-            });
+            refreshTemplates();
         }
     }, [visible, initialKind]);
 
@@ -100,10 +114,12 @@ export function A4HeaderFooterModal({
 
     const updateBand = (nextBand: A4BandConfig) => {
         if (!canEdit) return;
-        onChangeConfig({
-            ...config,
-            [currentBandKey]: nextBand,
-        });
+        onChangeConfig(
+            sanitizeA4HeaderFooterConfig({
+                ...config,
+                [currentBandKey]: nextBand,
+            })
+        );
     };
 
     const handleChangeSlotText = (col: 'left' | 'center' | 'right', text: string) => {
@@ -195,6 +211,12 @@ export function A4HeaderFooterModal({
             );
             setSavedTemplates(list);
             setNewTemplateName('');
+            Alert.alert(
+                'Guardado en la nube',
+                'Tu plantilla de encabezado y pie se ha guardado en la nube y ahora puedes usarla en móvil y en la web.'
+            );
+        } catch (err) {
+            Alert.alert('Error', 'No se pudo guardar la plantilla en la nube.');
         } finally {
             setIsSavingTemplate(false);
         }
@@ -238,11 +260,17 @@ export function A4HeaderFooterModal({
                     {/* Cabecera */}
                     <View style={[styles.headerRow, { borderBottomColor: colors.borderSubtle }]}>
                         <View style={{ flex: 1 }}>
-                            <Text style={[styles.title, { color: colors.textPrimary }]}>
-                                Encabezado y Pie de página A4
-                            </Text>
+                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                                <Text style={[styles.title, { color: colors.textPrimary }]}>
+                                    Encabezado y Pie A4
+                                </Text>
+                                <View style={[styles.cloudBadge, { backgroundColor: isDark ? 'rgba(139,92,246,0.18)' : 'rgba(139,92,246,0.1)' }]}>
+                                    <Cloud size={11} color={accent.primary as any} />
+                                    <Text style={[styles.cloudBadgeText, { color: accent.primary }]}>Nube</Text>
+                                </View>
+                            </View>
                             <Text style={[styles.subtitle, { color: colors.textSecondary }]}>
-                                Configuración individual de esta nota
+                                Compatible y sincronizado con Veyra Web
                             </Text>
                         </View>
                         <VeyraIconButton
@@ -289,7 +317,11 @@ export function A4HeaderFooterModal({
                     <View style={[styles.subTabsRow, { borderBottomColor: colors.borderSubtle }]}>
                         {(['edit', 'templates', 'options'] as const).map(tab => {
                             const isSelected = activeTab === tab;
-                            const label = tab === 'edit' ? 'Contenido y Logo' : tab === 'templates' ? `Plantillas (${savedTemplates.length})` : 'Opciones';
+                            const label = tab === 'edit'
+                                ? 'Contenido y Logo'
+                                : tab === 'templates'
+                                    ? `Plantillas en la nube (${savedTemplates.length})`
+                                    : 'Opciones';
                             return (
                                 <TouchableOpacity
                                     key={tab}
@@ -407,7 +439,7 @@ export function A4HeaderFooterModal({
                                                 ) : (
                                                     <>
                                                         <Plus size={13} color="#FFFFFF" />
-                                                        <Text style={styles.addLogoBtnText}>Subir imagen/logo</Text>
+                                                        <Text style={styles.addLogoBtnText}>Subir logo/imagen</Text>
                                                     </>
                                                 )}
                                             </TouchableOpacity>
@@ -476,7 +508,7 @@ export function A4HeaderFooterModal({
 
                         {activeTab === 'templates' && (
                             <>
-                                {/* Guardar configuración actual como plantilla */}
+                                {/* Guardar configuración actual como plantilla en la nube */}
                                 {canEdit && (
                                     <View
                                         style={[
@@ -487,10 +519,16 @@ export function A4HeaderFooterModal({
                                             },
                                         ]}
                                     >
-                                        <Text style={[styles.fieldLabel, { color: colors.textPrimary }]}>
-                                            Guardar encabezado y pie actual en la nube
+                                        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                                            <Text style={[styles.fieldLabel, { color: colors.textPrimary }]}>
+                                                Guardar diseño actual en la nube
+                                            </Text>
+                                            <Cloud size={14} color={accent.primary as any} />
+                                        </View>
+                                        <Text style={{ fontSize: 11, color: colors.textSecondary, marginTop: 2 }}>
+                                            Quedará disponible para todas tus notas y sincronizado con Veyra Web.
                                         </Text>
-                                        <View style={{ flexDirection: 'row', gap: 8, marginTop: 6 }}>
+                                        <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
                                             <TextInput
                                                 value={newTemplateName}
                                                 onChangeText={setNewTemplateName}
@@ -511,63 +549,132 @@ export function A4HeaderFooterModal({
                                                 disabled={isSavingTemplate}
                                                 style={[styles.saveTplBtn, { backgroundColor: accent.primary }]}
                                             >
-                                                <Bookmark size={14} color="#FFFFFF" />
-                                                <Text style={{ color: '#FFFFFF', fontSize: 12, fontWeight: '700' }}>
-                                                    Guardar
-                                                </Text>
+                                                {isSavingTemplate ? (
+                                                    <ActivityIndicator size="small" color="#FFFFFF" />
+                                                ) : (
+                                                    <>
+                                                        <Bookmark size={14} color="#FFFFFF" />
+                                                        <Text style={{ color: '#FFFFFF', fontSize: 12, fontWeight: '700' }}>
+                                                            Guardar
+                                                        </Text>
+                                                    </>
+                                                )}
                                             </TouchableOpacity>
                                         </View>
                                     </View>
                                 )}
 
-                                {/* Mis plantillas sincronizadas */}
+                                {/* Mis plantillas sincronizadas en la nube */}
                                 <View style={{ gap: 8 }}>
-                                    <Text style={[styles.fieldLabel, { color: colors.textSecondary }]}>
-                                        Mis plantillas guardadas ({savedTemplates.length})
-                                    </Text>
+                                    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                                            <Cloud size={14} color={accent.primary as any} />
+                                            <Text style={[styles.fieldLabel, { color: colors.textSecondary }]}>
+                                                Mis plantillas en la nube ({savedTemplates.length})
+                                            </Text>
+                                        </View>
+                                        <TouchableOpacity
+                                            onPress={refreshTemplates}
+                                            disabled={isSyncingTemplates}
+                                            style={{ flexDirection: 'row', alignItems: 'center', gap: 4, padding: 4 }}
+                                        >
+                                            {isSyncingTemplates ? (
+                                                <ActivityIndicator size="small" color={accent.primary} />
+                                            ) : (
+                                                <>
+                                                    <RefreshCw size={12} color={accent.primary as any} />
+                                                    <Text style={{ fontSize: 11, color: accent.primary, fontWeight: '600' }}>
+                                                        Sincronizar
+                                                    </Text>
+                                                </>
+                                            )}
+                                        </TouchableOpacity>
+                                    </View>
+
                                     {savedTemplates.length === 0 ? (
-                                        <Text style={{ fontSize: 12, color: colors.textMuted, fontStyle: 'italic' }}>
-                                            Aún no tienes plantillas guardadas. Las que guardes en Web o aquí aparecerán sincronizadas automáticamente.
+                                        <Text style={{ fontSize: 12, color: colors.textMuted, fontStyle: 'italic', paddingVertical: 4 }}>
+                                            Aún no tienes plantillas guardadas. Las que guardes en la Web o aquí aparecerán sincronizadas automáticamente.
                                         </Text>
                                     ) : (
-                                        savedTemplates.map(tpl => (
-                                            <View
-                                                key={tpl.id}
-                                                style={[
-                                                    styles.presetCard,
-                                                    {
-                                                        backgroundColor: isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.025)',
-                                                        borderColor: colors.borderSubtle,
-                                                    },
-                                                ]}
-                                            >
-                                                <TouchableOpacity
-                                                    style={{ flex: 1 }}
-                                                    onPress={() => {
-                                                        onChangeConfig(tpl.config);
-                                                        setActiveTab('edit');
-                                                    }}
+                                        savedTemplates.map(tpl => {
+                                            const cfg = tpl.config || {};
+                                            const hBand = cfg.header || cfg.headerSlots || { left: '', center: '', right: '', images: [] };
+                                            const fBand = cfg.footer || cfg.footerSlots || { left: '', center: '', right: '', images: [] };
+                                            const headerImgs = Array.isArray(hBand.images) ? hBand.images : [];
+                                            const footerImgs = Array.isArray(fBand.images) ? fBand.images : [];
+                                            const allImgs = [...headerImgs, ...footerImgs];
+
+                                            const previewLeft = hBand.left || fBand.left || '';
+                                            const previewCenter = hBand.center || fBand.center || '';
+                                            const previewRight = hBand.right || fBand.right || '';
+                                            const summaryText = [previewLeft, previewCenter, previewRight].filter(Boolean).join(' • ') || 'Con logo / diseño personalizado';
+
+                                            return (
+                                                <View
+                                                    key={tpl.id}
+                                                    style={[
+                                                        styles.cloudTemplateCard,
+                                                        {
+                                                            backgroundColor: isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.025)',
+                                                            borderColor: colors.borderSubtle,
+                                                        },
+                                                    ]}
                                                 >
-                                                    <Text style={{ color: colors.textPrimary, fontSize: 13, fontWeight: '700' }}>
-                                                        {tpl.name}
-                                                    </Text>
-                                                    <Text style={{ color: colors.textSecondary, fontSize: 11, marginTop: 2 }} numberOfLines={1}>
-                                                        {[tpl.config.header.left, tpl.config.header.center, tpl.config.header.right].filter(Boolean).join(' • ') || 'Con logo / pie personalizado'}
-                                                    </Text>
-                                                </TouchableOpacity>
-                                                <TouchableOpacity
-                                                    onPress={() => handleDeleteTemplate(tpl.id)}
-                                                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                                                    style={{ padding: 6 }}
-                                                >
-                                                    <Trash2 size={15} color="#EF4444" />
-                                                </TouchableOpacity>
-                                            </View>
-                                        ))
+                                                    <TouchableOpacity
+                                                        style={{ flex: 1 }}
+                                                        activeOpacity={0.7}
+                                                        onPress={() => {
+                                                            onChangeConfig(tpl.config);
+                                                            setActiveTab('edit');
+                                                        }}
+                                                    >
+                                                        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+                                                            <Text style={{ color: colors.textPrimary, fontSize: 13, fontWeight: '700' }}>
+                                                                {tpl.name}
+                                                            </Text>
+                                                            <View style={styles.cloudMiniTag}>
+                                                                <Cloud size={10} color={accent.primary as any} />
+                                                                <Text style={{ fontSize: 9.5, color: accent.primary, fontWeight: '600' }}>Nube</Text>
+                                                            </View>
+                                                        </View>
+
+                                                        {allImgs.length > 0 && (
+                                                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginVertical: 4 }}>
+                                                                {allImgs.slice(0, 3).map(img => (
+                                                                    <Image
+                                                                        key={img.id}
+                                                                        source={{ uri: img.src }}
+                                                                        style={styles.cardMiniThumb}
+                                                                        resizeMode="contain"
+                                                                    />
+                                                                ))}
+                                                                {allImgs.length > 3 && (
+                                                                    <Text style={{ fontSize: 10, color: colors.textMuted }}>
+                                                                        +{allImgs.length - 3}
+                                                                    </Text>
+                                                                )}
+                                                            </View>
+                                                        )}
+
+                                                        <Text style={{ color: colors.textSecondary, fontSize: 11 }} numberOfLines={1}>
+                                                            {summaryText}
+                                                        </Text>
+                                                    </TouchableOpacity>
+
+                                                    <TouchableOpacity
+                                                        onPress={() => handleDeleteTemplate(tpl.id)}
+                                                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                                                        style={{ padding: 6, marginLeft: 8 }}
+                                                    >
+                                                        <Trash2 size={15} color="#EF4444" />
+                                                    </TouchableOpacity>
+                                                </View>
+                                            );
+                                        })
                                     )}
                                 </View>
 
-                                {/* Diseños rápidos */}
+                                {/* Diseños rápidos predefinidos (estilo Word) */}
                                 <View style={{ gap: 8, marginTop: 6 }}>
                                     <Text style={[styles.fieldLabel, { color: colors.textSecondary }]}>
                                         Diseños rápidos ({activeKind === 'header' ? 'Encabezado' : 'Pie de página'})
@@ -618,7 +725,7 @@ export function A4HeaderFooterModal({
                                     </View>
                                     <Switch
                                         value={config.differentFirstPage}
-                                        onValueChange={val => onChangeConfig({ ...config, differentFirstPage: val })}
+                                        onValueChange={val => onChangeConfig(sanitizeA4HeaderFooterConfig({ ...config, differentFirstPage: val }))}
                                         trackColor={{ false: '#52525B', true: accent.primary }}
                                     />
                                 </View>
@@ -634,9 +741,45 @@ export function A4HeaderFooterModal({
                                     </View>
                                     <Switch
                                         value={config.oddEvenDifferent}
-                                        onValueChange={val => onChangeConfig({ ...config, oddEvenDifferent: val })}
+                                        onValueChange={val => onChangeConfig(sanitizeA4HeaderFooterConfig({ ...config, oddEvenDifferent: val, differentOddEven: val }))}
                                         trackColor={{ false: '#52525B', true: accent.primary }}
                                     />
+                                </View>
+
+                                <View style={{ gap: 8, marginTop: 8, paddingTop: 12, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.borderSubtle }}>
+                                    <Text style={[styles.fieldLabel, { color: colors.textPrimary }]}>
+                                        Distancia desde el borde (Word default: 1,25 cm)
+                                    </Text>
+                                    <View style={{ flexDirection: 'row', gap: 12 }}>
+                                        <View style={{ flex: 1, gap: 4 }}>
+                                            <Text style={{ fontSize: 11, color: colors.textSecondary }}>Encabezado (cm)</Text>
+                                            <TextInput
+                                                keyboardType="decimal-pad"
+                                                value={String(config.headerTopCm ?? 1.25)}
+                                                onChangeText={txt => {
+                                                    const val = parseFloat(txt.replace(',', '.'));
+                                                    if (!isNaN(val) && val >= 0) {
+                                                        onChangeConfig(sanitizeA4HeaderFooterConfig({ ...config, headerTopCm: val, headerDistanceCm: val }));
+                                                    }
+                                                }}
+                                                style={[styles.input, { color: colors.textPrimary, borderColor: colors.borderSubtle }]}
+                                            />
+                                        </View>
+                                        <View style={{ flex: 1, gap: 4 }}>
+                                            <Text style={{ fontSize: 11, color: colors.textSecondary }}>Pie de página (cm)</Text>
+                                            <TextInput
+                                                keyboardType="decimal-pad"
+                                                value={String(config.footerBottomCm ?? 1.25)}
+                                                onChangeText={txt => {
+                                                    const val = parseFloat(txt.replace(',', '.'));
+                                                    if (!isNaN(val) && val >= 0) {
+                                                        onChangeConfig(sanitizeA4HeaderFooterConfig({ ...config, footerBottomCm: val, footerDistanceCm: val }));
+                                                    }
+                                                }}
+                                                style={[styles.input, { color: colors.textPrimary, borderColor: colors.borderSubtle }]}
+                                            />
+                                        </View>
+                                    </View>
                                 </View>
                             </View>
                         )}
@@ -689,6 +832,18 @@ const styles = StyleSheet.create({
     subtitle: {
         fontSize: 11.5,
         marginTop: 2,
+    },
+    cloudBadge: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 3,
+        paddingHorizontal: 6,
+        paddingVertical: 2,
+        borderRadius: 6,
+    },
+    cloudBadgeText: {
+        fontSize: 10,
+        fontWeight: '700',
     },
     segmentRow: {
         flexDirection: 'row',
@@ -809,6 +964,25 @@ const styles = StyleSheet.create({
         borderRadius: 10,
         borderWidth: 1,
     },
+    cloudTemplateCard: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        padding: 12,
+        borderRadius: 10,
+        borderWidth: 1,
+    },
+    cloudMiniTag: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 3,
+    },
+    cardMiniThumb: {
+        width: 42,
+        height: 22,
+        borderRadius: 3,
+        backgroundColor: 'rgba(0,0,0,0.03)',
+    },
     switchRow: {
         flexDirection: 'row',
         alignItems: 'center',
@@ -831,4 +1005,3 @@ const styles = StyleSheet.create({
         borderRadius: 10,
     },
 });
-

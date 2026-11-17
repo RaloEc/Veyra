@@ -1030,7 +1030,6 @@ export default function HomeScreen() {
         setDetailReminder,
         language,
         toggleSubtask,
-        loadStreak,
         triggerSync,
         allTags,
         itemTagsMap,

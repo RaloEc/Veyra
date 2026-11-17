@@ -68,12 +68,10 @@ interface AppState {
     amoledEnabled: boolean;
     setAmoledEnabled: (enabled: boolean) => void;
     onboardingCompleted: boolean;
-    userProfile: 'student' | 'work' | 'personal' | 'custom' | null;
     userName: string | null;
     userEmail: string | null;
     userAvatar?: string | null;
     completeOnboarding: () => void;
-    setUserProfile: (profile: 'student' | 'work' | 'personal' | 'custom') => void;
     setUserName: (name: string) => void;
     setUserEmail: (email: string) => void;
     setUserAvatar: (avatar: string | null) => void;
@@ -101,8 +99,6 @@ interface AppState {
     lastSyncTime: number | null;
     syncError: string | null;
     triggerSync: (isInitialLogin?: boolean, isBackground?: boolean) => Promise<void>;
-    streak: number;
-    loadStreak: () => Promise<void>;
     accentTheme: AccentTheme;
     setAccentTheme: (theme: AccentTheme, isFromRemote?: boolean) => void;
     homeViewMode: 'list' | 'calendar';
@@ -123,6 +119,8 @@ interface AppState {
     setVibrationEnabled: (enabled: boolean) => void;
     notePageFormat: 'infinite' | 'a4';
     setNotePageFormat: (format: 'infinite' | 'a4') => void;
+    notePaperMode: 'auto' | 'light';
+    setNotePaperMode: (mode: 'auto' | 'light') => void;
 }
 
 let currentSyncStartTime = 0;
@@ -723,12 +721,10 @@ export const useStore = create<AppState>()(
             },
 
             onboardingCompleted: false,
-            userProfile: null,
             userName: null,
             userEmail: null as string | null,
             userAvatar: null,
             completeOnboarding: () => set({ onboardingCompleted: true }),
-            setUserProfile: (profile) => set({ userProfile: profile }),
             setUserName: (name) => set({ userName: name }),
             setUserEmail: (email) => {
                 const authenticatedEmail = get().session?.user?.email;
@@ -887,7 +883,6 @@ export const useStore = create<AppState>()(
                         get().loadReminders().catch(() => { }),
                         get().loadTags().catch(() => { }),
                         get().loadHistory().catch(() => { }),
-                        get().loadStreak().catch(() => { }),
                         ...externalStoreReloaders.map(fn => fn().catch(() => { })),
                     ]).catch(() => { });
 
@@ -897,15 +892,6 @@ export const useStore = create<AppState>()(
                             get().triggerSync(false, false).catch(() => { });
                         }, 600);
                     }
-                }
-            },
-            streak: 0,
-            loadStreak: async () => {
-                try {
-                    const streak = await ComplianceService.getCurrentStreak();
-                    set({ streak });
-                } catch (e) {
-                    console.warn('Error loading streak in store:', e);
                 }
             },
             homeViewMode: 'list',
@@ -942,6 +928,21 @@ export const useStore = create<AppState>()(
             setNotePageFormat: (notePageFormat) => {
                 set({ notePageFormat });
             },
+            notePaperMode: 'auto',
+            setNotePaperMode: (notePaperMode) => {
+                set({ notePaperMode });
+                const session = get().session;
+                if (session?.user?.id) {
+                    supabase.auth.updateUser({
+                        data: {
+                            settings: {
+                                ...(session.user?.user_metadata?.settings || {}),
+                                notePaperMode,
+                            },
+                        },
+                    }).catch(() => {});
+                }
+            },
         }),
         {
             name: 'app-storage',
@@ -961,7 +962,6 @@ export const useStore = create<AppState>()(
                 theme: state.theme,
                 amoledEnabled: state.amoledEnabled ?? false,
                 onboardingCompleted: state.onboardingCompleted,
-                userProfile: state.userProfile,
                 userName: state.userName,
                 userEmail: state.userEmail,
                 defaultControlLevel: state.defaultControlLevel,
@@ -978,6 +978,7 @@ export const useStore = create<AppState>()(
                 widgetFrostedGlass: state.widgetFrostedGlass ?? false,
                 vibrationEnabled: state.vibrationEnabled ?? true,
                 notePageFormat: state.notePageFormat ?? 'infinite',
+                notePaperMode: state.notePaperMode ?? 'auto',
             }),
             onRehydrateStorage: () => (state) => {
                 currentSyncStartTime = 0;
@@ -1005,7 +1006,6 @@ registerSyncStoreHandlers({
     getMainStoreState: () => useStore.getState(),
     setMainStoreState: (partial) => useStore.setState(partial),
     loadReminders: () => useStore.getState().loadReminders(),
-    loadStreak: () => useStore.getState().loadStreak(),
     loadTags: () => useStore.getState().loadTags(),
 });
 

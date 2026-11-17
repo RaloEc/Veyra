@@ -25,6 +25,8 @@ import {
     Zap,
     AlignLeft,
     FileText,
+    Sun,
+    Moon,
 } from '@tamagui/lucide-icons';
 import { useVeyraTheme } from '../../theme/useVeyraTheme';
 import { VeyraSurface } from '../ui/VeyraSurface';
@@ -41,6 +43,8 @@ export interface NoteOptionsMenuProps {
     onOpenHeaderFooterModal?: () => void;
     pageFormat?: 'infinite' | 'a4';
     onTogglePageFormat?: () => void;
+    notePaperMode?: 'auto' | 'light';
+    onToggleNotePaperMode?: () => void;
     pageCount: number;
     isPinned: boolean;
     onTogglePin: () => void;
@@ -67,6 +71,8 @@ export function NoteOptionsMenu({
     onOpenHeaderFooterModal,
     pageFormat = 'infinite',
     onTogglePageFormat,
+    notePaperMode = 'auto',
+    onToggleNotePaperMode,
     pageCount,
     isPinned,
     onTogglePin,
@@ -321,6 +327,39 @@ export function NoteOptionsMenu({
                                 <Text style={[styles.menuLabel, { color: colors.textPrimary }]}>
                                     Encabezado y pie de página
                                 </Text>
+                            </TouchableOpacity>
+                        )}
+
+                        {/* Color de hoja A4 en Modo Oscuro */}
+                        {pageFormat === 'a4' && isDark && onToggleNotePaperMode && (
+                            <TouchableOpacity
+                                activeOpacity={0.65}
+                                onPress={() => {
+                                    onClose();
+                                    onToggleNotePaperMode();
+                                }}
+                                style={styles.menuRow}
+                            >
+                                <View style={styles.iconSlot}>
+                                    {notePaperMode === 'light' ? (
+                                        <Moon size={16} color="#38BDF8" strokeWidth={2.2} />
+                                    ) : (
+                                        <Sun size={16} color="#F59E0B" strokeWidth={2.2} />
+                                    )}
+                                </View>
+                                <View style={{ flex: 1, paddingRight: 4 }}>
+                                    <Text style={[styles.menuLabel, { color: colors.textPrimary }]}>
+                                        {notePaperMode === 'light' ? 'Papel oscuro (Auto)' : 'Papel blanco (Impresión)'}
+                                    </Text>
+                                    <Text style={{ fontSize: 11, color: colors.textMuted }}>
+                                        {notePaperMode === 'light' ? 'Lienzo oscuro sincronizado' : 'Lienzo blanco con interfaz oscura'}
+                                    </Text>
+                                </View>
+                                <View style={[styles.badgePill, { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.05)' }]}>
+                                    <Text style={[styles.badgeText, { color: notePaperMode === 'light' ? '#38BDF8' : colors.textSecondary }]}>
+                                        {notePaperMode === 'light' ? 'Blanco' : 'Auto'}
+                                    </Text>
+                                </View>
                             </TouchableOpacity>
                         )}
 

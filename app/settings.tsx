@@ -128,6 +128,8 @@ export default function SettingsScreen() {
         setVibrationEnabled,
         notePageFormat,
         setNotePageFormat,
+        notePaperMode,
+        setNotePaperMode,
     } = useStore();
 
     const TEXT_SCALE_OPTIONS = [
@@ -796,6 +798,68 @@ export default function SettingsScreen() {
                                     })}
                                 </View>
                             </View>
+
+                            {/* Papel en modo oscuro (A4) */}
+                            {isDark && (
+                                <>
+                                    <RowDivider />
+                                    <View style={styles.themeRowWrap}>
+                                        <View style={styles.themeRowHeader}>
+                                            <View style={[styles.rowIconBadge, { backgroundColor: isDark ? 'rgba(56, 189, 248, 0.15)' : 'rgba(56, 189, 248, 0.10)' }]}>
+                                                <Sun size={17} color="#38BDF8" />
+                                            </View>
+                                            <View style={{ flex: 1 }}>
+                                                <Text style={[styles.rowTitleText, { color: colors.textPrimary }]}>
+                                                    {language === 'es' ? 'Papel en modo oscuro (A4)' : 'Paper in dark mode (A4)'}
+                                                </Text>
+                                                <Text style={[styles.rowDescText, { color: colors.textMuted }]}>
+                                                    {(notePaperMode ?? 'auto') === 'light'
+                                                        ? (language === 'es' ? 'Lienzo blanco con interfaz oscura' : 'White sheet with dark interface')
+                                                        : (language === 'es' ? 'Lienzo oscuro sincronizado con el tema' : 'Dark sheet matching theme')}
+                                                </Text>
+                                            </View>
+                                        </View>
+
+                                        <View style={[styles.segmentedControl, { backgroundColor: colors.surfaceElevated }]}>
+                                            {(['auto', 'light'] as const).map((mode) => {
+                                                const isSelected = (notePaperMode ?? 'auto') === mode;
+                                                const label = mode === 'auto'
+                                                    ? (language === 'es' ? 'Oscuro (Auto)' : 'Dark (Auto)')
+                                                    : (language === 'es' ? 'Blanco (Impresión)' : 'White (Print)');
+                                                return (
+                                                    <TouchableOpacity
+                                                        key={mode}
+                                                        activeOpacity={0.7}
+                                                        onPress={() => setNotePaperMode(mode)}
+                                                        style={[
+                                                            styles.segmentButton,
+                                                            isSelected && {
+                                                                backgroundColor: colors.surfaceCard,
+                                                                shadowColor: '#000000',
+                                                                shadowOpacity: 0.08,
+                                                                shadowRadius: 3,
+                                                                elevation: 2,
+                                                            },
+                                                        ]}
+                                                    >
+                                                        <Text
+                                                            style={[
+                                                                styles.segmentText,
+                                                                {
+                                                                    color: isSelected ? colors.textPrimary : colors.textMuted,
+                                                                    fontWeight: isSelected ? '700' : '500',
+                                                                },
+                                                            ]}
+                                                        >
+                                                            {label}
+                                                        </Text>
+                                                    </TouchableOpacity>
+                                                );
+                                            })}
+                                        </View>
+                                    </View>
+                                </>
+                            )}
 
                             <RowDivider />
                             {/* Paleta de Acento */}

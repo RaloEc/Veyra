@@ -75,6 +75,7 @@ export interface VeyraTiptapEditorRef {
     getAllPagesHtml?: () => Promise<Array<{ id: string; content: string }>>;
     getA4ExportHtml?: (title?: string) => Promise<string>;
     setTheme: (theme: 'dark' | 'light' | 'amoled') => void;
+    setNotePaperMode?: (mode: 'auto' | 'light') => void;
     focus: () => void;
     copy: (text?: string) => void;
     restoreSelection: () => void;
@@ -141,8 +142,10 @@ interface VeyraTiptapYjsEditorProps {
     onTextSelected?: (data: { hasText: boolean; rect?: { x: number; y: number; width: number; height: number }; text?: string; from?: number; to?: number; cursorOnly?: boolean }) => void;
     showSkeleton?: boolean;
     pageFormat?: 'infinite' | 'a4';
+    notePaperMode?: 'auto' | 'light';
     a4HeaderFooterConfig?: any;
     noteTitle?: string;
+    onTitleChanged?: (title: string) => void;
     onPageFormatChanged?: (format: 'infinite' | 'a4') => void;
     onA4HeaderFooterChanged?: (config: any) => void;
     onA4HeaderFooterTap?: (kind: 'header' | 'footer', pageNumber: number) => void;
@@ -162,6 +165,7 @@ export const VeyraTiptapYjsEditor = forwardRef<VeyraTiptapEditorRef, VeyraTiptap
             userColor = '#8B5CF6',
             activePageId,
             pageFormat = 'infinite',
+            notePaperMode = 'auto',
             a4HeaderFooterConfig,
             noteTitle = '',
             isEditing = false,
@@ -183,6 +187,7 @@ export const VeyraTiptapYjsEditor = forwardRef<VeyraTiptapEditorRef, VeyraTiptap
             onYoutubeClicked,
             onYoutubeDismissed,
             onTextSelected,
+            onTitleChanged,
             onPageFormatChanged,
             onA4HeaderFooterChanged,
             onA4HeaderFooterTap,
@@ -197,7 +202,14 @@ export const VeyraTiptapYjsEditor = forwardRef<VeyraTiptapEditorRef, VeyraTiptap
         const initialPageIdRef = useRef(activePageId);
         const initialIsDarkRef = useRef(isDark);
         const initialIsAmoledRef = useRef(isAmoled);
+        const isEditingRef = useRef(isEditing);
+        const userIdRef = useRef(userId);
+        initialIsDarkRef.current = isDark;
+        initialIsAmoledRef.current = isAmoled;
+        isEditingRef.current = isEditing;
+        userIdRef.current = userId;
         const initialPageFormatRef = useRef(pageFormat);
+        const initialNotePaperModeRef = useRef(notePaperMode);
         const previewCallbacksRef = useRef<Array<(preview: string) => void>>([]);
         const htmlCallbacksRef = useRef<Array<(html: string) => void>>([]);
         const allPagesHtmlCallbacksRef = useRef<Array<(pages: Array<{ id: string; content: string }>) => void>>([]);
@@ -211,6 +223,7 @@ export const VeyraTiptapYjsEditor = forwardRef<VeyraTiptapEditorRef, VeyraTiptap
                     accentColor,
                     activePageId: initialPageIdRef.current,
                     pageFormat: initialPageFormatRef.current,
+                    notePaperMode: initialNotePaperModeRef.current,
                 }),
             [accentColor]
         );
@@ -220,6 +233,11 @@ export const VeyraTiptapYjsEditor = forwardRef<VeyraTiptapEditorRef, VeyraTiptap
                 webViewRef.current.injectJavaScript(`${code}; true;`);
             }
         }, []);
+
+        const noteTitleRef = useRef(noteTitle);
+        noteTitleRef.current = noteTitle;
+        const userNameRef = useRef(userName);
+        userNameRef.current = userName;
 
         useEffect(() => {
             if (pageFormat) {
@@ -233,9 +251,9 @@ export const VeyraTiptapYjsEditor = forwardRef<VeyraTiptapEditorRef, VeyraTiptap
 
         useEffect(() => {
             if (a4HeaderFooterConfig) {
-                executeInWebView(`try { if (window.veyraSetA4HeaderFooterConfig) window.veyraSetA4HeaderFooterConfig(${JSON.stringify(a4HeaderFooterConfig)}, true, ${JSON.stringify(noteTitle || '')}, ${JSON.stringify(userName || '')}); } catch (e) {}`);
+                executeInWebView(`try { if (window.veyraSetA4HeaderFooterConfig) window.veyraSetA4HeaderFooterConfig(${JSON.stringify(a4HeaderFooterConfig)}, true, ${JSON.stringify(noteTitleRef.current || '')}, ${JSON.stringify(userNameRef.current || '')}); } catch (e) {}`);
             }
-        }, [a4HeaderFooterConfig, noteTitle, userName, executeInWebView]);
+        }, [a4HeaderFooterConfig, executeInWebView]);
 
         const sendAction = useCallback((action: string, _type?: string, data?: any) => {
             switch (action) {
@@ -646,9 +664,41 @@ export const VeyraTiptapYjsEditor = forwardRef<VeyraTiptapEditorRef, VeyraTiptap
                         } else {
                             const isAm = '${theme}' === 'amoled';
                             const isDk = '${theme}' === 'dark' || isAm;
-                            document.documentElement.className = isAm ? 'dark amoled' : (isDk ? 'dark' : 'light');
-                            document.body.className = isAm ? 'dark amoled' : (isDk ? 'dark' : 'light');
-                            document.documentElement.style.setProperty('--bg-color', isAm ? '#000000' : (isDk ? '#121212' : '#FFFFFF'));
+                            document.documentElement.classList.remove('light', 'dark', 'amoled');
+                            document.body.classList.remove('light', 'dark', 'amoled');
+                            if (isAm) {
+                                document.documentElement.classList.add('dark', 'amoled');
+                                document.body.classList.add('dark', 'amoled');
+                            } else if (isDk) {
+                                document.documentElement.classList.add('dark');
+                                document.body.classList.add('dark');
+                            } else {
+                                document.documentElement.classList.add('light');
+                                document.body.classList.add('light');
+                            }
+                            const targetBg = isAm ? '#000000' : (isDk ? '#121212' : '#FFFFFF');
+                            document.documentElement.style.setProperty('--bg-color', targetBg, 'important');
+                            document.body.style.setProperty('--bg-color', targetBg, 'important');
+                            document.documentElement.style.backgroundColor = targetBg;
+                            document.body.style.backgroundColor = targetBg;
+                        }
+                    } catch (e) {}
+                `);
+            },
+            setNotePaperMode: (mode: 'auto' | 'light') => {
+                const shouldBeLight = isDark && mode === 'light' && pageFormat === 'a4';
+                executeInWebView(`
+                    try {
+                        if (window.veyraSetNotePaperMode) {
+                            window.veyraSetNotePaperMode('${shouldBeLight ? 'light' : 'auto'}');
+                        } else {
+                            if (${shouldBeLight}) {
+                                document.documentElement.classList.add('sheet-light-mode');
+                                document.body.classList.add('sheet-light-mode');
+                            } else {
+                                document.documentElement.classList.remove('sheet-light-mode');
+                                document.body.classList.remove('sheet-light-mode');
+                            }
                         }
                     } catch (e) {}
                 `);
@@ -658,6 +708,15 @@ export const VeyraTiptapYjsEditor = forwardRef<VeyraTiptapEditorRef, VeyraTiptap
                     try {
                         if (window.veyraSetPageFormat) {
                             window.veyraSetPageFormat('${format}', ${Boolean(fromRemoteOrInit)});
+                        } else {
+                            const isA4 = '${format}' === 'a4';
+                            if (isA4) {
+                                document.documentElement.classList.add('a4-page-mode');
+                                if (document.body) document.body.classList.add('a4-page-mode');
+                            } else {
+                                document.documentElement.classList.remove('a4-page-mode');
+                                if (document.body) document.body.classList.remove('a4-page-mode');
+                            }
                         }
                     } catch (e) {}
                 `);
@@ -735,7 +794,7 @@ export const VeyraTiptapYjsEditor = forwardRef<VeyraTiptapEditorRef, VeyraTiptap
                             settled = true;
                             resolve('');
                         }
-                    }, 2500);
+                    }, 4500);
 
                     const cb = (h: string) => {
                         if (!settled) {
@@ -921,24 +980,40 @@ Responde únicamente con el JSON sin bloques de código markdown alrededor.`;
                             })();
                             break;
                         }
-                        case 'EDITOR_READY':
-                            executeInWebView(`window.veyraSetUser(${JSON.stringify(userName)}, ${JSON.stringify(userColor)}, ${Boolean(isEditing)}, ${JSON.stringify(userId || null)})`);
-                            executeInWebView(`window.veyraSetCursorVisible && window.veyraSetCursorVisible(${Boolean(isEditing)})`);
-                            executeInWebView(`window.veyraSetEditing && window.veyraSetEditing(${Boolean(isEditing)})`);
+                        case 'EDITOR_READY': {
+                            const curDark = Boolean(initialIsDarkRef.current);
+                            const curAmoled = Boolean(curDark && initialIsAmoledRef.current);
+                            const curEditing = Boolean(isEditingRef.current);
+                            const curUserId = userIdRef.current || null;
+                            const readyTheme = curAmoled ? 'amoled' : (curDark ? 'dark' : 'light');
+                            executeInWebView(`window.veyraSetUser(${JSON.stringify(userName)}, ${JSON.stringify(userColor)}, ${curEditing}, ${JSON.stringify(curUserId)})`);
+                            executeInWebView(`window.veyraSetCursorVisible && window.veyraSetCursorVisible(${curEditing})`);
+                            executeInWebView(`window.veyraSetEditing && window.veyraSetEditing(${curEditing})`);
                             executeInWebView(`
                                 try {
                                     if (window.veyraSetTheme) {
-                                        window.veyraSetTheme('${isDark ? 'dark' : 'light'}');
+                                        window.veyraSetTheme('${readyTheme}');
                                     } else {
-                                        document.documentElement.className = '${isDark ? 'dark' : 'light'}';
-                                        document.body.className = '${isDark ? 'dark' : 'light'}';
+                                        document.documentElement.classList.remove('light', 'dark', 'amoled');
+                                        document.body.classList.remove('light', 'dark', 'amoled');
+                                        if (${curAmoled}) {
+                                            document.documentElement.classList.add('dark', 'amoled');
+                                            document.body.classList.add('dark', 'amoled');
+                                        } else if (${curDark}) {
+                                            document.documentElement.classList.add('dark');
+                                            document.body.classList.add('dark');
+                                        } else {
+                                            document.documentElement.classList.add('light');
+                                            document.body.classList.add('light');
+                                        }
                                     }
                                     var el = document.querySelector('.ProseMirror');
-                                    if (el) el.setAttribute('contenteditable', '${Boolean(isEditing)}');
+                                    if (el) el.setAttribute('contenteditable', '${curEditing}');
                                 } catch (e) {}
                             `);
                             onReady?.();
                             break;
+                        }
                         case 'YJS_UPDATE':
                             onYjsUpdate?.(data.update);
                             break;
@@ -1094,6 +1169,11 @@ Responde únicamente con el JSON sin bloques de código markdown alrededor.`;
                         case 'TEXT_SELECTED':
                             onTextSelected?.(data);
                             break;
+                        case 'TITLE_CHANGED':
+                            if (typeof data.title === 'string') {
+                                onTitleChanged?.(data.title);
+                            }
+                            break;
                         case 'PAGE_FORMAT_CHANGED':
                             if (data.pageFormat === 'a4' || data.pageFormat === 'infinite') {
                                 onPageFormatChanged?.(data.pageFormat);
@@ -1147,27 +1227,59 @@ Responde únicamente con el JSON sin bloques de código markdown alrededor.`;
 
         // Sincronizar dinámicamente cambio de modo oscuro / claro / amoled sin recargar el WebView
         useEffect(() => {
-            const themeClass = isAmoled ? 'amoled' : (isDark ? 'dark' : 'light');
+            const effectiveAmoled = Boolean(isDark && isAmoled);
+            const themeClass = effectiveAmoled ? 'amoled' : (isDark ? 'dark' : 'light');
             executeInWebView(`
                 try {
                     if (window.veyraSetTheme) {
                         window.veyraSetTheme('${themeClass}');
+                    } else {
+                        const isAm = ${effectiveAmoled ? 'true' : 'false'};
+                        const isDk = ${isDark ? 'true' : 'false'};
+                        document.documentElement.classList.remove('light', 'dark', 'amoled');
+                        document.body.classList.remove('light', 'dark', 'amoled');
+                        if (isAm) {
+                            document.documentElement.classList.add('dark', 'amoled');
+                            document.body.classList.add('dark', 'amoled');
+                        } else if (isDk) {
+                            document.documentElement.classList.add('dark');
+                            document.body.classList.add('dark');
+                        } else {
+                            document.documentElement.classList.add('light');
+                            document.body.classList.add('light');
+                        }
+                        const targetBg = isAm ? '#000000' : (isDk ? '#121212' : '#FFFFFF');
+                        document.documentElement.style.setProperty('--bg-color', targetBg, 'important');
+                        document.body.style.setProperty('--bg-color', targetBg, 'important');
+                        document.documentElement.style.backgroundColor = targetBg;
+                        document.body.style.backgroundColor = targetBg;
                     }
-                    const isAm = ${isAmoled ? 'true' : 'false'};
-                    const isDk = ${isDark ? 'true' : 'false'} || isAm;
-                    document.documentElement.className = isAm ? 'dark amoled' : (isDk ? 'dark' : 'light');
-                    document.body.className = isAm ? 'dark amoled' : (isDk ? 'dark' : 'light');
-                    const targetBg = isAm ? '#000000' : (isDk ? '#121212' : '#FFFFFF');
-                    document.documentElement.style.setProperty('--bg-color', targetBg, 'important');
-                    document.body.style.setProperty('--bg-color', targetBg, 'important');
-                    document.documentElement.style.backgroundColor = targetBg;
-                    document.body.style.backgroundColor = targetBg;
                 } catch (e) {}
             `);
         }, [isDark, isAmoled, executeInWebView]);
 
+        // Sincronizar dinámicamente cambio de modo de papel (hoja blanca en modo oscuro solo en A4)
+        useEffect(() => {
+            const shouldBeLight = isDark && notePaperMode === 'light' && pageFormat === 'a4';
+            executeInWebView(`
+                try {
+                    if (window.veyraSetNotePaperMode) {
+                        window.veyraSetNotePaperMode('${shouldBeLight ? 'light' : 'auto'}');
+                    } else {
+                        if (${shouldBeLight}) {
+                            document.documentElement.classList.add('sheet-light-mode');
+                            document.body.classList.add('sheet-light-mode');
+                        } else {
+                            document.documentElement.classList.remove('sheet-light-mode');
+                            document.body.classList.remove('sheet-light-mode');
+                        }
+                    }
+                } catch (e) {}
+            `);
+        }, [notePaperMode, pageFormat, isDark, executeInWebView]);
+
         return (
-            <View style={[styles.container, isAmoled && { backgroundColor: '#000000' }]}>
+            <View style={[styles.container, Boolean(isDark && isAmoled) && { backgroundColor: '#000000' }]}>
                 <WebView
                     ref={webViewRef}
                     source={{ html, baseUrl: 'https://veyra.app' }}
@@ -1194,27 +1306,51 @@ Responde únicamente con el JSON sin bloques de código markdown alrededor.`;
                     scalesPageToFit={true}
                     useWideViewPort={true}
                     onLoadEnd={() => {
-                        const themeClass = isAmoled ? 'amoled' : (isDark ? 'dark' : 'light');
+                        const effectiveAmoled = Boolean(isDark && isAmoled);
+                        const themeClass = effectiveAmoled ? 'amoled' : (isDark ? 'dark' : 'light');
                         executeInWebView(`
                             try {
                                 if (window.veyraSetTheme) {
                                     window.veyraSetTheme('${themeClass}');
+                                } else {
+                                    const isAm = ${effectiveAmoled ? 'true' : 'false'};
+                                    const isDk = ${isDark ? 'true' : 'false'};
+                                    document.documentElement.classList.remove('light', 'dark', 'amoled');
+                                    document.body.classList.remove('light', 'dark', 'amoled');
+                                    if (isAm) {
+                                        document.documentElement.classList.add('dark', 'amoled');
+                                        document.body.classList.add('dark', 'amoled');
+                                    } else if (isDk) {
+                                        document.documentElement.classList.add('dark');
+                                        document.body.classList.add('dark');
+                                    } else {
+                                        document.documentElement.classList.add('light');
+                                        document.body.classList.add('light');
+                                    }
+                                    const targetBg = isAm ? '#000000' : (isDk ? '#121212' : '#FFFFFF');
+                                    document.documentElement.style.setProperty('--bg-color', targetBg, 'important');
+                                    document.body.style.setProperty('--bg-color', targetBg, 'important');
+                                    document.documentElement.style.backgroundColor = targetBg;
+                                    document.body.style.backgroundColor = targetBg;
                                 }
-                                const isAm = ${isAmoled ? 'true' : 'false'};
-                                const isDk = ${isDark ? 'true' : 'false'} || isAm;
-                                document.documentElement.className = isAm ? 'dark amoled' : (isDk ? 'dark' : 'light');
-                                document.body.className = isAm ? 'dark amoled' : (isDk ? 'dark' : 'light');
-                                const targetBg = isAm ? '#000000' : (isDk ? '#121212' : '#FFFFFF');
-                                document.documentElement.style.setProperty('--bg-color', targetBg, 'important');
-                                document.body.style.setProperty('--bg-color', targetBg, 'important');
-                                document.documentElement.style.backgroundColor = targetBg;
-                                document.body.style.backgroundColor = targetBg;
+                                if (window.veyraSetPageFormat) {
+                                    window.veyraSetPageFormat('${pageFormat}', true);
+                                } else {
+                                    const isA4 = '${pageFormat}' === 'a4';
+                                    if (isA4) {
+                                        document.documentElement.classList.add('a4-page-mode');
+                                        if (document.body) document.body.classList.add('a4-page-mode');
+                                    } else {
+                                        document.documentElement.classList.remove('a4-page-mode');
+                                        if (document.body) document.body.classList.remove('a4-page-mode');
+                                    }
+                                }
                             } catch (e) {}
                         `);
                     }}
                     onMessage={handleMessage}
-                    style={{ backgroundColor: isAmoled ? '#000000' : 'transparent', width: '100%', height: '100%' }}
-                    containerStyle={[styles.webViewContainer, isAmoled && { backgroundColor: '#000000' }]}
+                    style={{ backgroundColor: Boolean(isDark && isAmoled) ? '#000000' : 'transparent', width: '100%', height: '100%' }}
+                    containerStyle={[styles.webViewContainer, Boolean(isDark && isAmoled) && { backgroundColor: '#000000' }]}
                     androidLayerType={Platform.OS === 'android' ? 'hardware' : undefined}
                     scrollEnabled={true}
                     setBuiltInZoomControls={true}

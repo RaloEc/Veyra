@@ -622,21 +622,33 @@ function BottomTabBarComponent() {
         }
     }, [keyboardOffset]);
 
+    const hasLeftScreenRef = useRef(false);
+
     useFocusEffect(
         useCallback(() => {
             isFocusedRef.current = true;
 
-            // Al volver de cualquier otra pantalla (ej. de una nota, evento, recordatorio o modal):
-            // Si NO estamos activamente en modo creación o carpeta dentro del dock, SIEMPRE
-            // restablecer el desplazamiento del teclado a 0 de inmediato.
-            if (!isCreatingShared.value && !isFolderMorphOpenShared.value) {
-                resetKeyboardOffset(true);
-            } else {
-                const isVisible = typeof Keyboard.isVisible === 'function' ? Keyboard.isVisible() : false;
-                if (!isVisible) {
-                    resetKeyboardOffset(true);
-                }
+            // Al volver de cualquier otra pantalla (ej. de crear/editar una nota, evento o detalle):
+            // Si venimos de haber salido a otra ruta, aseguramos que el dock esté en su estado
+            // neutro normal cerrado para que no se quede bloqueado al regresar.
+            if (hasLeftScreenRef.current) {
+                hasLeftScreenRef.current = false;
+                setIsCreating(false);
+                isCreatingShared.value = false;
+                createMorphProgress.value = 0;
+                backdropOpacity.value = 0;
+                fabRotateProgress.value = 0;
+                cancelProposal();
+                clearMessages();
+                setShowAttachMenu(false);
+                setExpandedSection('none');
+                setInputPrompt('');
+                setInputBoxHeight(44);
+                setPendingAttachments([]);
             }
+
+            // Restablecer el desplazamiento del teclado a 0 de inmediato
+            resetKeyboardOffset(true);
 
             // Temporizadores de seguridad (100ms y 250ms) para garantizar que en Android, si la transición
             // cerró el teclado nativo en paralelo, el dock quede exactamente en su base (0).
@@ -654,12 +666,18 @@ function BottomTabBarComponent() {
 
             return () => {
                 isFocusedRef.current = false;
+                hasLeftScreenRef.current = true;
                 clearTimeout(timer1);
                 clearTimeout(timer2);
                 // Al salir de la pantalla (blur) hacia otra pantalla, resetear siempre
                 resetKeyboardOffset(true);
+                setIsCreating(false);
+                isCreatingShared.value = false;
+                createMorphProgress.value = 0;
+                backdropOpacity.value = 0;
+                fabRotateProgress.value = 0;
             };
-        }, [resetKeyboardOffset, isCreatingShared, isFolderMorphOpenShared])
+        }, [resetKeyboardOffset, cancelProposal, clearMessages])
     );
 
     // Sincronizar tabs activos
@@ -1865,6 +1883,15 @@ function BottomTabBarComponent() {
         const cardH = Math.round(createHeightShared.value);
         Keyboard.dismiss();
 
+        // Limpiar propuestas y entradas de texto pendientes
+        cancelProposal();
+        clearMessages();
+        setInputPrompt('');
+        setInputBoxHeight(44);
+        setPendingAttachments([]);
+        setShowAttachMenu(false);
+        setExpandedSection('none');
+
         // Navegar directamente pasando el origen morph y la altura actual de la tarjeta
         router.push({
             pathname: route as any,
@@ -1875,18 +1902,27 @@ function BottomTabBarComponent() {
             },
         });
 
-        // Resetear el estado de creación en segundo plano después de que la pantalla
-        // de destino haya montado y cubierto la vista (sin animación destructiva visible)
-        setTimeout(() => {
+        // Para notas, la pantalla de destino no realiza animación morph desde el dock,
+        // por lo que cerramos inmediatamente el dock para que no se quede bloqueado al regresar.
+        if (route.startsWith('/notes')) {
             setIsCreating(false);
             isCreatingShared.value = false;
             resetKeyboardOffset(true);
             createMorphProgress.value = 0;
             backdropOpacity.value = 0;
             fabRotateProgress.value = 0;
-            setShowAttachMenu(false);
-            setExpandedSection('none');
-        }, 450);
+        } else {
+            // Resetear el estado de creación en segundo plano después de que la pantalla
+            // de destino haya montado y cubierto la vista (sin animación destructiva visible)
+            setTimeout(() => {
+                setIsCreating(false);
+                isCreatingShared.value = false;
+                resetKeyboardOffset(true);
+                createMorphProgress.value = 0;
+                backdropOpacity.value = 0;
+                fabRotateProgress.value = 0;
+            }, 300);
+        }
     };
 
     const handleTabReminders = () => {

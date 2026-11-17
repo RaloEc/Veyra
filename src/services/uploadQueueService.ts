@@ -4,6 +4,7 @@ import { withDB, PendingImageUpload } from '../db';
 import { supabase } from '../lib/supabase';
 import { StorageService } from './storageService';
 import { useStore } from '../store/useStore';
+import { base64ToBytes } from '../poc-yjs/yjsLocalPersistence';
 
 type ReplaceImageCallback = (oldLocalUri: string, newRemoteUrl: string) => void;
 
@@ -100,15 +101,11 @@ export async function processPendingUploads(): Promise<void> {
                         const base64 = await FileSystem.readAsStringAsync(item.local_uri, {
                             encoding: FileSystem.EncodingType.Base64,
                         });
-                        const binaryString = atob(base64);
-                        const bytes = new Uint8Array(binaryString.length);
-                        for (let i = 0; i < binaryString.length; i++) {
-                            bytes[i] = binaryString.charCodeAt(i);
-                        }
+                        const bytes = base64ToBytes(base64);
                         const directPath = `${userId}/${fileName}`;
                         const { error: uploadErr } = await supabase.storage
                             .from('attachments')
-                            .upload(directPath, bytes.buffer, {
+                            .upload(directPath, bytes, {
                                 contentType: 'image/jpeg',
                                 upsert: true,
                                 cacheControl: '31536000',

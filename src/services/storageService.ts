@@ -2,6 +2,7 @@ import { supabase } from '../lib/supabase';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Crypto from 'expo-crypto';
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
+import { base64ToBytes } from '../poc-yjs/yjsLocalPersistence';
 
 const BUCKET = 'attachments';
 const LOCAL_CACHE_DIR = `${FileSystem.documentDirectory}cloud_cache/`;
@@ -127,16 +128,12 @@ export const StorageService = {
                 encoding: FileSystem.EncodingType.Base64,
             });
 
-            // Convertir base64 a ArrayBuffer para Supabase
-            const binaryString = atob(base64);
-            const bytes = new Uint8Array(binaryString.length);
-            for (let i = 0; i < binaryString.length; i++) {
-                bytes[i] = binaryString.charCodeAt(i);
-            }
+            // Convertir base64 a ArrayBuffer/Uint8Array seguro para Hermes y Supabase
+            const bytes = base64ToBytes(base64);
 
             const uploadPromise = supabase.storage
                 .from(BUCKET)
-                .upload(remotePath, bytes.buffer, {
+                .upload(remotePath, bytes, {
                     contentType: mimeType,
                     upsert: false,
                     cacheControl: '31536000', // Cache 1 año (reduce egress)

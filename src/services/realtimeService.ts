@@ -162,7 +162,6 @@ class RealtimeServiceManager {
                         if (s.theme) useStore.getState().setTheme(s.theme);
                         if (s.defaultControlLevel) useStore.getState().setDefaultControlLevel(s.defaultControlLevel);
                         if (s.userName) useStore.getState().setUserName(s.userName);
-                        if (s.userProfile) useStore.getState().setUserProfile(s.userProfile);
                         if (s.notePageFormat) useStore.getState().setNotePageFormat(s.notePageFormat);
                     }
                 }

@@ -3,7 +3,7 @@ import { Note, NoteSyncMode } from '../types/db';
 import * as Crypto from 'expo-crypto';
 import { WidgetService } from './widgetService';
 import { SearchService } from './searchService';
-import { computeNotePreviewText } from '../utils/pageUtils';
+import { computeNotePreviewText, createPage, serializeNotePages } from '../utils/pageUtils';
 
 function triggerNotesWidgetSync() {
     WidgetService.syncNotes().catch(() => {});
@@ -30,11 +30,12 @@ export const NoteService = {
         fontFamily?: string,
         isShared: number = 0,
         sharedOwnerId?: string | null,
-        syncMode: NoteSyncMode = 'rest'
+        syncMode: NoteSyncMode = 'yjs'
     ): Promise<Note> {
         return withDB(async (db) => {
             const id = Crypto.randomUUID();
             const now = Date.now();
+            const effectiveContent = (content && content.trim()) ? content : serializeNotePages([createPage('')]);
             const previewText = content ? computeNotePreviewText(content) : null;
 
             const newNote: Note = {
@@ -43,7 +44,7 @@ export const NoteService = {
                 folder_id: folderId || null,
                 event_id: eventId || null,
                 title,
-                content,
+                content: effectiveContent,
                 preview_text: previewText,
                 created_at_ms: now,
                 updated_at_ms: now,

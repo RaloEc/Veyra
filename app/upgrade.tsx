@@ -12,7 +12,6 @@ import {
     Check,
     Zap,
     Cloud,
-    BarChart,
     Image as ImageIcon,
     Flame,
     Minus,
@@ -56,14 +55,6 @@ export default function UpgradeScreen() {
             free: t('upgrade.features.levels.free'),
             pro: t('upgrade.features.levels.pro'),
             iconColor: '#F59E0B',
-        },
-        {
-            icon: BarChart,
-            title: t('upgrade.features.stats.title'),
-            description: t('upgrade.features.stats.desc'),
-            free: t('upgrade.features.stats.free'),
-            pro: t('upgrade.features.stats.pro'),
-            iconColor: '#10B981',
         },
     ];
 

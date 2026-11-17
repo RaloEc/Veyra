@@ -29,7 +29,6 @@ import {
     LogOut,
     Lock,
     Crown,
-    TrendingUp,
     Sparkles,
     Settings,
     Shield,
@@ -38,7 +37,7 @@ import {
 } from '@tamagui/lucide-icons';
 
 import { useStore } from '../src/store/useStore';
-import { ComplianceService } from '../src/services/complianceService';
+import { getDB } from '../src/db';
 import { AccountDeletionService } from '../src/services/accountDeletionService';
 import { useVeyraTheme } from '../src/theme/useVeyraTheme';
 import { VeyraSurface } from '../src/components/ui/VeyraSurface';
@@ -91,7 +90,6 @@ export default function ProfileScreen() {
     const [miniOverview, setMiniOverview] = useState({
         totalCompleted: 0,
         totalNotes: 0,
-        completionRate: 0,
     });
 
     const [toast, setToast] = useState<{
@@ -154,12 +152,15 @@ export default function ProfileScreen() {
         let isMounted = true;
         async function loadQuickData() {
             try {
-                const fullStats = await ComplianceService.getFullStats();
-                if (isMounted && fullStats) {
+                const db = await getDB();
+                const [completedRes, notesRes] = await Promise.all([
+                    db.getFirstAsync<{ count: number }>('SELECT COUNT(*) as count FROM reminders WHERE completed = 1'),
+                    db.getFirstAsync<{ count: number }>('SELECT COUNT(*) as count FROM notes WHERE deleted_at IS NULL'),
+                ]);
+                if (isMounted) {
                     setMiniOverview({
-                        totalCompleted: fullStats.totalCompleted || 0,
-                        totalNotes: fullStats.notesStats?.totalNotes || 0,
-                        completionRate: Math.round(fullStats.completionRate || 0),
+                        totalCompleted: completedRes?.count || 0,
+                        totalNotes: notesRes?.count || 0,
                     });
                 }
             } catch (e) {
@@ -432,7 +433,7 @@ export default function ProfileScreen() {
                     </VeyraSurface>
                 )}
 
-                {/* ─── Resumen Personal (Sin duplicar Estadísticas) ────── */}
+                {/* ─── Resumen Personal ────── */}
                 <VeyraSectionHeader title={t('profile.activity_summary', 'Resumen')} />
 
                 <VeyraSurface level={1} radius="lg" style={styles.summaryCard}>
@@ -457,40 +458,7 @@ export default function ProfileScreen() {
                                 {t('notes.title', 'Notas')}
                             </Text>
                         </View>
-
-                        <View style={[styles.verticalDivider, { backgroundColor: colors.borderSubtle }]} />
-
-                        <View style={styles.summaryMetricItem}>
-                            <Text style={[styles.summaryMetricValue, { color: '#F59E0B' }]}>
-                                {miniOverview.completionRate}%
-                            </Text>
-                            <Text style={[styles.summaryMetricLabel, { color: colors.textMuted, fontSize: typography.micro.fontSize }]}>
-                                {t('profile.rate', 'Efectividad')}
-                            </Text>
-                        </View>
                     </View>
-
-                    <View style={[styles.divider, { backgroundColor: colors.borderSubtle, marginVertical: 10 }]} />
-
-                    {/* Atajo directo a la pantalla completa de Estadísticas */}
-                    <TouchableOpacity
-                        activeOpacity={0.7}
-                        onPress={() => router.push('/stats')}
-                        style={styles.statsLinkRow}
-                    >
-                        <View style={[styles.statsLinkIcon, { backgroundColor: `${accent.primary}18` }]}>
-                            <TrendingUp size={16} color={accent.primary as any} />
-                        </View>
-                        <View style={{ flex: 1, gap: 1 }}>
-                            <Text style={[styles.statsLinkTitle, { color: colors.textPrimary, fontSize: typography.bodyMedium.fontSize }]}>
-                                {t('profile.view_full_stats', 'Ver Estadísticas Completas')}
-                            </Text>
-                            <Text style={[styles.statsLinkSub, { color: colors.textSecondary, fontSize: typography.caption.fontSize }]}>
-                                {t('profile.view_full_stats_desc', 'Gráficos de cumplimiento, horas productivas y hábitos')}
-                            </Text>
-                        </View>
-                        <ChevronRight size={18} color={colors.textMuted} />
-                    </TouchableOpacity>
                 </VeyraSurface>
 
                 {/* ─── Formulario de Datos Personales ─────────────────── */}
@@ -1063,25 +1031,6 @@ const styles = StyleSheet.create({
     verticalDivider: {
         width: 1,
         height: 28,
-    },
-    statsLinkRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 12,
-        paddingVertical: 4,
-    },
-    statsLinkIcon: {
-        width: 32,
-        height: 32,
-        borderRadius: 8,
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    statsLinkTitle: {
-        fontWeight: '700',
-    },
-    statsLinkSub: {
-        fontWeight: '500',
     },
 
     // Form

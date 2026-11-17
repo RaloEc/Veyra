@@ -1,16 +1,21 @@
 import * as Y from 'yjs';
 import { SupabaseClient, RealtimeChannel } from '@supabase/supabase-js';
 import { YjsLocalPersistence, base64ToBytes, bytesToBase64 } from './yjsLocalPersistence';
-import { YjsRemotePersistence } from './yjsRemotePersistence';
+import { YjsRemotePersistence, computeUpdateHash } from './yjsRemotePersistence';
 import { diagLog } from './diagLog';
+import { buildInitialYDocFromNote, computeContentSha256 } from './pilotActivationStrategy';
+import { NoteService } from '../services/noteService';
+import { SyncService } from '../services/syncService';
+import { useNotesStore } from '../store/useNotesStore';
+import { Note } from '../types/db';
 
-export type SupabaseYjsStatus = 
-    | 'DISCONNECTED' 
-    | 'CONNECTING' 
-    | 'CONNECTED' 
-    | 'SYNCING' 
-    | 'SYNCED' 
-    | 'RECONNECTING' 
+export type SupabaseYjsStatus =
+    | 'DISCONNECTED'
+    | 'CONNECTING'
+    | 'CONNECTED'
+    | 'SYNCING'
+    | 'SYNCED'
+    | 'RECONNECTING'
     | 'ERROR';
 
 export type ConnectionStatus = SupabaseYjsStatus;
@@ -67,6 +72,7 @@ export interface SupabaseYjsProviderOptions {
     onError?: (err: Error) => void;
     onMetrics?: (metrics: { sent: number; received: number; lastSync: string }) => void;
     onPageOrderChange?: (pageIds: string[]) => void;
+    onTitleChange?: (title: string) => void;
 }
 
 /**
@@ -136,6 +142,7 @@ export class SupabaseYjsProvider {
     private onHeartbeat?: (remoteClientId: string | number) => void;
     private onError?: (err: Error) => void;
     private onMetrics?: (metrics: { sent: number; received: number; lastSync: string }) => void;
+    private onTitleChange?: (title: string) => void;
 
     constructor(options: SupabaseYjsProviderOptions) {
         this.supabase = options.supabase;
@@ -161,6 +168,7 @@ export class SupabaseYjsProvider {
         this.onError = options.onError;
         this.onMetrics = options.onMetrics;
         this.onPageOrderChange = options.onPageOrderChange;
+        this.onTitleChange = options.onTitleChange;
 
         // Documento Yjs autoritativo del proveedor
         this.doc = new Y.Doc();
@@ -173,16 +181,28 @@ export class SupabaseYjsProvider {
             this.onPageOrderChange?.(ids);
         });
 
-        // Escucha cambios locales en this.doc (generados por addPage, removePage, movePage)
+        // Escucha reactiva en metadatos (ej. título sincronizado en tiempo real)
+        const metaMap = this.doc.getMap('meta');
+        metaMap.observe((event) => {
+            if (event.keysChanged.has('title')) {
+                const titleVal = metaMap.get('title');
+                if (typeof titleVal === 'string') {
+                    console.log(`[PoC Yjs Provider] meta.observe -> nuevo título: "${titleVal}"`);
+                    this.onTitleChange?.(titleVal);
+                }
+            }
+        });
+
+        // Escucha cambios locales en this.doc (generados por addPage, removePage, movePage, setTitle)
         this.doc.on('update', (update: Uint8Array, origin: any) => {
-            if (origin === 'local' || origin === 'local-page-op') {
+            if (origin === 'local' || origin === 'local-page-op' || origin === 'local-meta-op') {
                 const base64Update = bytesToBase64(update);
                 // Propagar a persistencia SQLite, PostgreSQL y difusion por Realtime
                 this.sendUpdate(base64Update).catch(err => {
-                    console.warn('[PoC Yjs Provider] Error propagando cambio estructural de página:', err);
+                    console.warn('[PoC Yjs Provider] Error propagando cambio estructural/meta:', err);
                 });
                 // Notificar al WebView editor local para que su ydoc interno reciba la mutación
-                this.onRemoteUpdate?.(base64Update, 'local-page-op');
+                this.onRemoteUpdate?.(base64Update, origin);
             }
         });
 
@@ -212,7 +232,7 @@ export class SupabaseYjsProvider {
                 clientId: this.clientId,
                 user: this.user,
                 onlineAt: Date.now(),
-            }).catch?.(() => {});
+            }).catch?.(() => { });
         }
     }
 
@@ -304,7 +324,7 @@ export class SupabaseYjsProvider {
 
     private notifyDetailedStatus() {
         if (this.onDetailedStatusChange) {
-            this.getDetailedStatus().then((s) => this.onDetailedStatusChange?.(s)).catch(() => {});
+            this.getDetailedStatus().then((s) => this.onDetailedStatusChange?.(s)).catch(() => { });
         }
     }
 
@@ -324,7 +344,7 @@ export class SupabaseYjsProvider {
             if (realtime && Array.isArray(realtime.channels)) {
                 realtime.channels = realtime.channels.filter((c: any) => c.topic !== topic);
             }
-        } catch (e) {}
+        } catch (e) { }
     }
 
     private flushQueue() {
@@ -352,13 +372,13 @@ export class SupabaseYjsProvider {
         if (oldChannel) {
             try {
                 await oldChannel.untrack?.();
-            } catch (e) {}
+            } catch (e) { }
             try {
                 await oldChannel.unsubscribe?.();
-            } catch (e) {}
+            } catch (e) { }
             try {
                 await this.supabase.removeChannel(oldChannel);
-            } catch (e) {}
+            } catch (e) { }
         }
 
         if (this.documentId) {
@@ -398,6 +418,23 @@ export class SupabaseYjsProvider {
 
         this.connectingStartedAt = Date.now();
         this.updateStatus('CONNECTING');
+
+        // Precargar estado consolidado de la nota desde SQLite en this.doc si aún no está inicializado
+        if (this.localPersistence) {
+            try {
+                await this.localPersistence.loadDocument(this.documentId, this.doc);
+                const currentTitle = this.getTitle();
+                if (currentTitle) {
+                    this.onTitleChange?.(currentTitle);
+                }
+                const currentOrder = this.getPageOrder();
+                if (currentOrder.length > 0) {
+                    this.onPageOrderChange?.(currentOrder);
+                }
+            } catch (err) {
+                console.warn('[PoC Yjs Provider] Error precargando SQLite en this.doc:', err);
+            }
+        }
 
         const channelName = `note_yjs_${this.documentId.trim()}`;
 
@@ -458,12 +495,27 @@ export class SupabaseYjsProvider {
 
         const noteId = this.documentId;
         const authUser = await this.supabase.auth.getUser();
+        const effectiveUserId = authUser.data.user?.id || this.user.id || null;
+
+        // Asegurar que la nota esté activada en modo 'yjs' en Supabase antes de abrir la suscripción al canal privado
+        if (effectiveUserId) {
+            try {
+                await this.ensureRemoteActivated(effectiveUserId);
+            } catch (err: any) {
+                console.warn('[PoC Yjs] Advertencia en ensureRemoteActivated:', err.message);
+            }
+            if (this.isDestroyed || currentAttempt !== this.connectionAttemptId) {
+                this.isConnecting = false;
+                return;
+            }
+        }
+
         this.channelCreationTime = Date.now();
         diagLog('channel_create', { channelName, noteId, timestamp: this.channelCreationTime });
         console.log('[YJS-DIAG] creando canal', {
             channelName,
             noteId,
-            userId: authUser.data.user?.id,
+            userId: effectiveUserId,
             timestamp: this.channelCreationTime
         });
 
@@ -498,68 +550,7 @@ export class SupabaseYjsProvider {
                 this.receivedCount++;
                 this.updateMetrics('Delta');
 
-                // Si el usuario es viewer, solo aplica a memoria; no intenta escribir a PostgreSQL
-                if (this.isViewer()) {
-                    try {
-                        const bytes = base64ToBytes(payload.update);
-                        Y.applyUpdate(this.doc, bytes, 'remote-broadcast');
-                        const currentOrder = this.getPageOrder();
-                        if (currentOrder.length > 0) {
-                            this.onPageOrderChange?.(currentOrder);
-                        }
-                    } catch (_) {}
-                    this.onRemoteUpdate?.(payload.update, 'remote-broadcast');
-                    return;
-                }
-
-                // Si el usuario es editor/owner, rescata en SQLite con synced = 0
-                if (this.localPersistence) {
-                    try {
-                        const localId = await this.localPersistence.storeUpdate(
-                            this.documentId,
-                            base64ToBytes(payload.update),
-                            false // synced = 0 (provisional)
-                        );
-                        this.updatePersistenceStatus('SAVED_LOCAL', 'PENDING_REMOTE');
-
-                        // Intentar confirmar en PostgreSQL de fondo
-                        if (this.remotePersistence && localId) {
-                            this.remotePersistence.saveRemoteUpdate(
-                                this.documentId,
-                                payload.update,
-                                this.clientId
-                            ).then((res) => {
-                                if (res.success && this.localPersistence) {
-                                    this.localPersistence.markUpdatesAsSynced([localId]).catch(() => {});
-                                    this.updatePersistenceStatus('SAVED_LOCAL', 'CONFIRMED_REMOTE');
-                                } else if (!res.success) {
-                                    console.warn('[PoC Yjs] Rescate remoto rechazado:', res.error);
-                                    this.updatePersistenceStatus('SAVED_LOCAL', 'ERROR');
-                                }
-                            }).catch((err) => {
-                                console.warn('[PoC Yjs] Excepción en rescate remoto:', err);
-                                this.updatePersistenceStatus('SAVED_LOCAL', 'ERROR');
-                            });
-                        }
-                    } catch (e) {
-                        console.warn('[PoC Yjs] Error registrando delta recibido en SQLite:', e);
-                        if (this.remotePersistence) {
-                            this.remotePersistence.saveRemoteUpdate(
-                                this.documentId,
-                                payload.update,
-                                this.clientId
-                            ).catch(() => {});
-                        }
-                    }
-                } else if (this.remotePersistence) {
-                    this.remotePersistence.saveRemoteUpdate(
-                        this.documentId,
-                        payload.update,
-                        this.clientId
-                    ).catch(() => {});
-                }
-
-                // Sincronizar delta remoto en el Y.Doc del proveedor
+                // Sincronizar delta remoto inmediatamente en memoria y despachar a WebView (0 latencia)
                 try {
                     const updateBytes = base64ToBytes(payload.update);
                     Y.applyUpdate(this.doc, updateBytes, 'remote');
@@ -572,6 +563,22 @@ export class SupabaseYjsProvider {
                 }
 
                 this.onRemoteUpdate?.(payload.update, 'remote-broadcast');
+
+                // Si el usuario es viewer, ya terminó su trabajo en memoria
+                if (this.isViewer()) {
+                    return;
+                }
+
+                // Persistir en SQLite en segundo plano (synced = 1 porque ya viene confirmado/emitido por el autor)
+                if (this.localPersistence) {
+                    this.localPersistence.storeUpdate(
+                        this.documentId,
+                        base64ToBytes(payload.update),
+                        true // synced = 1
+                    ).catch((e) => {
+                        console.warn('[PoC Yjs] Error registrando delta recibido en SQLite:', e);
+                    });
+                }
             }
         });
 
@@ -653,10 +660,10 @@ export class SupabaseYjsProvider {
                                 this.clientId
                             ).then((res) => {
                                 if (res.success && this.localPersistence) {
-                                    this.localPersistence.markUpdatesAsSynced([localId]).catch(() => {});
+                                    this.localPersistence.markUpdatesAsSynced([localId]).catch(() => { });
                                     this.updatePersistenceStatus('SAVED_LOCAL', 'CONFIRMED_REMOTE');
                                 }
-                            }).catch(() => {});
+                            }).catch(() => { });
                         }
                     } catch (e) {
                         console.warn('[PoC Yjs] Error en rescate de SYNC_STEP_2:', e);
@@ -671,7 +678,7 @@ export class SupabaseYjsProvider {
                     if (currentOrder.length > 0) {
                         this.onPageOrderChange?.(currentOrder);
                     }
-                } catch (_) {}
+                } catch (_) { }
 
                 this.onRemoteUpdate?.(payload.update, 'remote-broadcast');
                 this.peerStatus = 'CONVERGED';
@@ -730,7 +737,7 @@ export class SupabaseYjsProvider {
                     clientId: this.clientId,
                     user: this.user,
                     onlineAt: Date.now(),
-                }).catch?.(() => {});
+                }).catch?.(() => { });
 
                 // REGLA FASE B.4: Coordinación estricta en reconexión
                 try {
@@ -826,9 +833,40 @@ export class SupabaseYjsProvider {
         try {
             const bytes = base64ToBytes(base64Update);
             Y.applyUpdate(this.doc, bytes, 'webview');
-        } catch (_) {}
+        } catch (_) { }
 
-        // 1. Intentar persistencia local duradera en SQLite si está disponible
+        // 1. Difundir vía Realtime de inmediato (0ms latencia, perfectamente en sincronía con Awareness)
+        const sendBroadcastUpdate = async () => {
+            if (!this.channel) return;
+            try {
+                const resp = await this.channel.send({
+                    type: 'broadcast',
+                    event: 'YJS_UPDATE',
+                    payload: {
+                        senderClientId: this.clientId,
+                        senderUserId: this.user.id,
+                        update: base64Update,
+                        timestamp: Date.now(),
+                    },
+                });
+
+                if (resp === 'ok') {
+                    realtimeSent = true;
+                    this.sentCount++;
+                    this.updateMetrics('Envío Delta');
+                }
+            } catch (err: any) {
+                this.onError?.(err);
+            }
+        };
+
+        if (this.isChannelReady && this.channel) {
+            sendBroadcastUpdate();
+        } else {
+            this.broadcastQueue.push(sendBroadcastUpdate);
+        }
+
+        // 2. Persistir localmente en SQLite y remotamente en PostgreSQL de forma asíncrona
         if (this.localPersistence) {
             try {
                 localRowId = await this.localPersistence.storeUpdate(
@@ -846,8 +884,7 @@ export class SupabaseYjsProvider {
             }
         }
 
-        // 2. Si no se obtuvo guardado local (por error o porque localPersistence no está configurado)
-        // se intenta persistencia remota de inmediato antes de cualquier difusión por Realtime.
+        // Si no se obtuvo guardado local, persistir remotamente de inmediato
         if (!localSaved) {
             if (this.remotePersistence) {
                 try {
@@ -900,38 +937,6 @@ export class SupabaseYjsProvider {
                     error: errorMsg || 'No hay ninguna capa de persistencia duradera configurada',
                 };
             }
-        }
-
-        // 3. Difundir vía Realtime: garantizado que existe al menos una copia duradera (local o remota)
-        const sendBroadcastUpdate = async () => {
-            if (!this.channel) return;
-            try {
-                const resp = await this.channel.send({
-                    type: 'broadcast',
-                    event: 'YJS_UPDATE',
-                    payload: {
-                        senderClientId: this.clientId,
-                        senderUserId: this.user.id,
-                        update: base64Update,
-                        timestamp: Date.now(),
-                    },
-                });
-
-                if (resp === 'ok') {
-                    realtimeSent = true;
-                    this.sentCount++;
-                    this.updateMetrics('Envío Delta');
-                }
-            } catch (err: any) {
-                this.onError?.(err);
-            }
-        };
-
-        if (this.isChannelReady && this.channel) {
-            await sendBroadcastUpdate();
-        } else {
-            console.log('[PoC Yjs] Canal aún no SUBSCRIBED. Encolando broadcast YJS_UPDATE');
-            this.broadcastQueue.push(sendBroadcastUpdate);
         }
 
         // 4. Si el delta se guardó localmente pero aún no se persistió remotamente, guardar en PostgreSQL
@@ -1096,6 +1101,7 @@ export class SupabaseYjsProvider {
                         bytes: fullState.byteLength,
                         appliedUpdatesCount: applied
                     });
+                    this.applyInitialDoc(fetchRes.doc);
                     // Comprobación de puente seguro: si el callback lanza error, se aborta la recuperación
                     this.onRemoteUpdate?.(bytesToBase64(fullState), 'remote-replay-load');
                 }
@@ -1156,7 +1162,7 @@ export class SupabaseYjsProvider {
                         try {
                             const bytes = base64ToBytes(upd.update_data);
                             Y.applyUpdate(this.doc, bytes, 'remote-catchup');
-                        } catch (_) {}
+                        } catch (_) { }
                     }
                 }
             }
@@ -1172,6 +1178,10 @@ export class SupabaseYjsProvider {
             const currentOrder = this.getPageOrder();
             if (currentOrder.length > 0) {
                 this.onPageOrderChange?.(currentOrder);
+            }
+            const currentTitle = this.getTitle();
+            if (currentTitle) {
+                this.onTitleChange?.(currentTitle);
             }
 
             this.lastCatchUpSuccess = true;
@@ -1297,7 +1307,7 @@ export class SupabaseYjsProvider {
                         timestamp: Date.now(),
                     },
                 });
-            } catch {}
+            } catch { }
         };
 
         if (this.isChannelReady && this.channel) {
@@ -1333,7 +1343,7 @@ export class SupabaseYjsProvider {
                     this.sentCount++;
                     this.updateMetrics(isReturnHandshake ? 'Retorno Handshake 1' : 'Envío Handshake 1');
                 }
-            } catch {}
+            } catch { }
         };
 
         if (this.isChannelReady && this.channel) {
@@ -1365,7 +1375,7 @@ export class SupabaseYjsProvider {
                     this.sentCount++;
                     this.updateMetrics('Envío Handshake 2');
                 }
-            } catch {}
+            } catch { }
         };
 
         if (this.isChannelReady && this.channel) {
@@ -1380,7 +1390,7 @@ export class SupabaseYjsProvider {
     public async sendPeerLeft(): Promise<boolean> {
         if (!this.channel || !this.isChannelReady) return false;
         try {
-            this.channel.untrack?.().catch?.(() => {});
+            this.channel.untrack?.().catch?.(() => { });
             this.channel.send({
                 type: 'broadcast',
                 event: 'PEER_LEFT',
@@ -1388,7 +1398,7 @@ export class SupabaseYjsProvider {
                     senderClientId: this.clientId,
                     timestamp: Date.now(),
                 },
-            }).catch?.(() => {});
+            }).catch?.(() => { });
             return true;
         } catch {
             return false;
@@ -1406,7 +1416,7 @@ export class SupabaseYjsProvider {
                         senderClientId: this.clientId,
                         timestamp: Date.now(),
                     },
-                }).catch?.(() => {});
+                }).catch?.(() => { });
             }
         }, 1500);
     }
@@ -1484,10 +1494,10 @@ export class SupabaseYjsProvider {
             this.channel = null;
             try {
                 oldChannel.unsubscribe?.();
-            } catch (e) {}
+            } catch (e) { }
             try {
                 this.supabase.removeChannel(oldChannel);
-            } catch (e) {}
+            } catch (e) { }
         }
 
         if (this.documentId) {
@@ -1496,7 +1506,7 @@ export class SupabaseYjsProvider {
 
         try {
             this.doc.destroy();
-        } catch (_) {}
+        } catch (_) { }
 
         this.updateStatus('DISCONNECTED');
     }
@@ -1504,10 +1514,51 @@ export class SupabaseYjsProvider {
     // ─── GESTIÓN DE PÁGINAS (HOJAS) COLABORATIVAS ──────────────────────────────
 
     /**
-     * Retorna el listado ordenado de IDs de páginas activas.
+     * Retorna el listado ordenado de IDs de páginas activas (eliminando duplicados si los hubiera).
      */
     public getPageOrder(): string[] {
-        return this.pageOrder.toArray().map(String);
+        const raw = this.pageOrder.toArray().map(String);
+        const unique: string[] = [];
+        const seen = new Set<string>();
+        for (const id of raw) {
+            if (!seen.has(id)) {
+                seen.add(id);
+                unique.push(id);
+            }
+        }
+        if (unique.length !== raw.length && !this.isDestroyed) {
+            try {
+                this.doc.transact(() => {
+                    while (this.pageOrder.length > 0) {
+                        this.pageOrder.delete(0, 1);
+                    }
+                    this.pageOrder.insert(0, unique);
+                }, 'dedup-page-order');
+            } catch (_) { }
+        }
+        return unique;
+    }
+
+    /**
+     * Retorna el título colaborativo actual desde el mapa de metadatos.
+     */
+    public getTitle(): string {
+        const titleVal = this.doc.getMap('meta').get('title');
+        return typeof titleVal === 'string' ? titleVal : '';
+    }
+
+    /**
+     * Actualiza el título colaborativo en el mapa de metadatos y difunde en tiempo real.
+     */
+    public setTitle(newTitle: string): void {
+        if (this.isViewer()) return;
+        const meta = this.doc.getMap('meta');
+        if (meta.get('title') !== newTitle) {
+            this.doc.transact(() => {
+                meta.set('title', newTitle);
+                meta.set('updatedAt', Date.now());
+            }, 'local-meta-op');
+        }
     }
 
     /**
@@ -1518,6 +1569,11 @@ export class SupabaseYjsProvider {
     public addPage(customPageId?: string, targetIndex?: number): string {
         if (this.isViewer()) {
             throw new Error('Permiso denegado: el usuario viewer no puede agregar páginas');
+        }
+
+        const currentPages = this.getPageOrder();
+        if (customPageId && currentPages.includes(customPageId)) {
+            return customPageId;
         }
 
         const pageId = customPageId || `page_${Math.random().toString(36).substring(2, 9)}_${Date.now().toString(36)}`;
@@ -1567,7 +1623,7 @@ export class SupabaseYjsProvider {
                     if (fragment.length > 0) {
                         fragment.delete(0, fragment.length);
                     }
-                } catch (_) {}
+                } catch (_) { }
 
                 // Si no quedan páginas, generar hoja de respaldo automática
                 if (this.pageOrder.length === 0) {
@@ -1625,6 +1681,10 @@ export class SupabaseYjsProvider {
         if (currentOrder.length > 0) {
             this.onPageOrderChange?.(currentOrder);
         }
+        const currentTitle = this.getTitle();
+        if (currentTitle) {
+            this.onTitleChange?.(currentTitle);
+        }
     }
 
     /**
@@ -1647,6 +1707,132 @@ export class SupabaseYjsProvider {
                     }
                 }
             }, 'local-init-pages');
+        }
+    }
+
+    /**
+     * Asegura que la nota esté registrada y activada en modo 'yjs' en Supabase
+     * antes de abrir la suscripción al canal privado Realtime.
+     * Si la nota está en modo 'rest' o recién creada, ejecuta la RPC transaccional
+     * `activate_note_yjs_mode` que confiere autorización RLS al canal privado
+     * y habilita la recepción de deltas en `append_note_yjs_update`.
+     */
+    private async ensureRemoteActivated(userId: string | null): Promise<void> {
+        if (!userId || !this.documentId) return;
+
+        try {
+            // 1. Consultar estado actual de la fila en Supabase
+            let { data: noteRow, error: fetchErr } = await this.supabase
+                .from('notes')
+                .select('id, user_id, content, sync_mode, updated_at_ms, last_modified_ms')
+                .eq('id', this.documentId)
+                .maybeSingle();
+
+            // 2. Si la nota no existe remotamente, realizar upsert previo desde SQLite
+            if (!noteRow) {
+                try {
+                    const localNote = await NoteService.getNoteById(this.documentId);
+                    if (localNote) {
+                        const remotePayload = SyncService.localNoteToRemote(localNote, userId);
+                        await this.supabase.from('notes').upsert(remotePayload, { onConflict: 'id' });
+
+                        const { data: freshRow } = await this.supabase
+                            .from('notes')
+                            .select('id, user_id, content, sync_mode, updated_at_ms, last_modified_ms')
+                            .eq('id', this.documentId)
+                            .maybeSingle();
+                        noteRow = freshRow;
+                    }
+                } catch (upsertErr) {
+                    console.warn('[PoC Yjs] Error asegurando fila inicial de nota en Supabase:', upsertErr);
+                }
+            }
+
+            if (!noteRow) {
+                console.warn('[PoC Yjs] Nota no encontrada en Supabase ni en almacenamiento local para activación Yjs');
+                return;
+            }
+
+            // 3. Si ya está en modo Yjs remotamente, confirmar en SQLite local y salir
+            if (noteRow.sync_mode === 'yjs') {
+                try {
+                    await NoteService.setNoteSyncMode(this.documentId, 'yjs');
+                } catch (_) { }
+                return;
+            }
+
+            // 4. Si el usuario actual no es el propietario, solo el propietario puede activar Yjs
+            if (noteRow.user_id && noteRow.user_id !== userId) {
+                console.log('[PoC Yjs] El usuario actual no es propietario de la nota; activación remota delegada al propietario');
+                return;
+            }
+
+            // 5. Nota en modo 'rest': activar atómicamente vía RPC activate_note_yjs_mode
+            console.log(`[PoC Yjs] Activando nota ${this.documentId} en Supabase a modo 'yjs'...`);
+            let localNote: Note | null = null;
+            try {
+                localNote = await NoteService.getNoteById(this.documentId);
+            } catch (_) { }
+
+            const targetNote: Note = localNote || (noteRow as Note);
+            const activationDoc = (this.doc.share.size > 0 && this.getPageOrder().length > 0)
+                ? this.doc
+                : buildInitialYDocFromNote(targetNote);
+            if (activationDoc !== this.doc) {
+                this.applyInitialDoc(activationDoc);
+            }
+
+            const updateBytes = Y.encodeStateAsUpdate(activationDoc);
+            const initialUpdateData = bytesToBase64(updateBytes);
+            const initialUpdateHash = await computeUpdateHash(initialUpdateData);
+
+            const svBytes = Y.encodeStateVector(activationDoc);
+            const initialStateVector = bytesToBase64(svBytes);
+
+            // Requisito estricto de PostgreSQL: expectedContentHash y expectedUpdatedAtMs deben calcularse
+            // exactamente sobre los valores de la fila en Supabase (noteRow)
+            const expectedContentHash = await computeContentSha256(noteRow.content || '');
+            const expectedUpdatedAtMs = Number(noteRow.updated_at_ms || noteRow.last_modified_ms || Date.now());
+
+            const { data: rpcData, error: rpcErr } = await this.supabase.rpc('activate_note_yjs_mode', {
+                p_note_id: this.documentId,
+                p_client_id: this.clientId,
+                p_initial_update_data: initialUpdateData,
+                p_initial_update_hash: initialUpdateHash,
+                p_expected_content_hash: expectedContentHash,
+                p_expected_updated_at_ms: Math.floor(expectedUpdatedAtMs),
+                p_initial_state_vector: initialStateVector,
+            });
+
+            if (rpcErr) {
+                if (rpcErr.message?.includes("ya se encuentra en modo 'yjs'")) {
+                    console.log(`[PoC Yjs] Nota ${this.documentId} ya se encontraba activada en modo 'yjs'`);
+                } else {
+                    console.warn(`[PoC Yjs] Error en activate_note_yjs_mode RPC: ${rpcErr.message} (código: ${rpcErr.code})`);
+                    return;
+                }
+            } else {
+                console.log(`[PoC Yjs] ✅ Nota ${this.documentId} activada exitosamente en modo 'yjs' en Supabase:`, rpcData);
+            }
+
+            // Guardar delta inicial en SQLite local
+            if (this.localPersistence) {
+                try {
+                    await this.localPersistence.storeUpdate(this.documentId, updateBytes, true);
+                } catch (deltaErr: any) {
+                    console.warn('[PoC Yjs] Advertencia guardando delta inicial en SQLite:', deltaErr.message);
+                }
+            }
+
+            // Actualizar sync_mode a 'yjs' en SQLite y en useNotesStore
+            try {
+                await NoteService.setNoteSyncMode(this.documentId, 'yjs');
+                useNotesStore.getState().updateNote(this.documentId, { sync_mode: 'yjs' });
+            } catch (err: any) {
+                console.warn('[PoC Yjs] Advertencia actualizando modo local a yjs:', err.message);
+            }
+        } catch (activateEx: any) {
+            console.warn('[PoC Yjs] Excepción asegurando activación remota Yjs:', activateEx.message);
         }
     }
 }

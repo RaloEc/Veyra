@@ -119,7 +119,7 @@ import { YjsRemotePersistence } from '../../src/poc-yjs/yjsRemotePersistence';
 import { diagLog } from '../../src/poc-yjs/diagLog';
 import { useYjsPreviewSync } from '../../src/poc-yjs/useYjsPreviewSync';
 import { useYjsActivity } from '../../src/poc-yjs/useYjsActivity';
-import { executePilotActivation } from '../../src/poc-yjs/pilotActivationStrategy';
+import { executePilotActivation, buildInitialYDocFromNote } from '../../src/poc-yjs/pilotActivationStrategy';
 import { NoteService } from '../../src/services/noteService';
 import { StorageService } from '../../src/services/storageService';
 import { Note } from '../../src/types/db';
@@ -132,7 +132,7 @@ import { registerActiveEditor } from '../../src/services/uploadQueueService';
 export default function NoteDetailAndEditScreen() {
     const { t } = useTranslation();
     const router = useRouter();
-    const { id, pageIndex } = useLocalSearchParams<{ id: string; pageIndex?: string }>();
+    const { id, pageIndex, isNew } = useLocalSearchParams<{ id: string; pageIndex?: string; isNew?: string }>();
     const insets = useSafeAreaInsets();
     const { width: windowWidth, height: windowHeight } = useWindowDimensions();
     const { colors, typography, radii, accent, isDark, isAmoled } = useVeyraTheme();
@@ -140,8 +140,10 @@ export default function NoteDetailAndEditScreen() {
     const currentUserId = useStore(state => state.session?.user?.id);
     const notePageFormat = useStore(state => state.notePageFormat);
     const setNotePageFormat = useStore(state => state.setNotePageFormat);
+    const notePaperMode = useStore(state => state.notePaperMode);
+    const setNotePaperMode = useStore(state => state.setNotePaperMode);
     const isCreating = !id || id === 'create';
-    const [isEditMode, setIsEditMode] = useState(isCreating);
+    const [isEditMode, setIsEditMode] = useState(isCreating || isNew === '1');
     const [isNotesFocused, setIsNotesFocused] = useState(false);
     const [galleryVisible, setGalleryVisible] = useState(false);
     const [galleryIndex, setGalleryIndex] = useState(0);
@@ -153,8 +155,28 @@ export default function NoteDetailAndEditScreen() {
     const [isHistoryModalVisible, setIsHistoryModalVisible] = useState(false);
 
     const currentNote = useNotesStore(state => state.notes.find(n => n.id === id));
-    const syncMode = currentNote?.sync_mode || 'rest';
-    const isYjsMode = syncMode === 'yjs';
+    const syncMode = currentNote?.sync_mode || 'yjs';
+    // Todas las notas en la app moderna se abren en modo Yjs/Tiptap para soporte de formato A4 y colaboración fluida
+    const isYjsMode = true;
+
+    // Actualización automática: si una nota existente aún tiene sync_mode 'rest', migrarla a 'yjs' en SQLite y store
+    useEffect(() => {
+        if (id && id !== 'create' && currentNote && currentNote.sync_mode === 'rest') {
+            useNotesStore.getState().updateNote(id, { sync_mode: 'yjs' });
+            withDB(db => db.runAsync("UPDATE notes SET sync_mode = 'yjs' WHERE id = ?", [id])).catch(() => { });
+        }
+    }, [id, currentNote?.sync_mode]);
+
+    // Si se accede directamente con 'create' en esta pantalla, crear la nota con UUID y redirigir limpiamente
+    useEffect(() => {
+        if (isCreating) {
+            useNotesStore.getState().addNote('', '', '[]', undefined, false, null, null, 'sans', 'yjs').then(newNote => {
+                if (newNote?.id) {
+                    router.replace({ pathname: '/notes/[id]', params: { id: newNote.id, isNew: '1' } });
+                }
+            });
+        }
+    }, [isCreating, router]);
 
     // Formato de página y encabezado/pie individual por nota (sincronizado con Web vía ydoc.getMap('meta') y JSON)
     const [currentNotePageFormat, setCurrentNotePageFormat] = useState<'infinite' | 'a4'>(() => {
@@ -273,6 +295,7 @@ export default function NoteDetailAndEditScreen() {
         textColor: null,
         highlightColor: null,
         fontFamily: null,
+        fontSize: null,
     });
     const [yjsActivePeers, setYjsActivePeers] = useState<
         Array<{ clientId: number; userId?: string | null; name: string; color: string; hasCursor: boolean; isEditing?: boolean }>
@@ -403,7 +426,8 @@ export default function NoteDetailAndEditScreen() {
     }, [isEditMode]);
 
     // ─── Apertura instantánea con contenido cacheado + fade al WebView ───
-    const [showCached, setShowCached] = useState(isYjsMode);
+    const [showCached, setShowCached] = useState(isYjsMode && isNew !== '1');
+    const hasUserEditedRef = useRef(false);
     const [webViewReady, setWebViewReady] = useState(false);
     const [cachedPreviewText, setCachedPreviewText] = useState<string | null>(null);
     const [contentRendered, setContentRendered] = useState(false);
@@ -462,6 +486,11 @@ export default function NoteDetailAndEditScreen() {
         }
     }, [isDark]);
 
+    const currentNotePageFormatRef = useRef(currentNotePageFormat);
+    currentNotePageFormatRef.current = currentNotePageFormat;
+    const a4HeaderFooterConfigRef = useRef(a4HeaderFooterConfig);
+    a4HeaderFooterConfigRef.current = a4HeaderFooterConfig;
+
     const {
         title,
         setTitle,
@@ -518,7 +547,28 @@ export default function NoteDetailAndEditScreen() {
         hasAccess,
         isRevoked,
         syncPagesFromYjs,
-    } = useCreateNote(id, undefined, undefined, undefined, undefined, { isEditMode, yjsProviderRef });
+    } = useCreateNote(id, undefined, undefined, undefined, undefined, {
+        isEditMode,
+        yjsProviderRef,
+        getPageFormat: () => currentNotePageFormatRef.current,
+        getA4HeaderFooterConfig: () => a4HeaderFooterConfigRef.current,
+    });
+
+    const titleRef = useRef(title);
+    useEffect(() => {
+        titleRef.current = title;
+    }, [title]);
+
+    const handleSetTitle = useCallback((val: string) => {
+        hasUserEditedRef.current = true;
+        titleRef.current = val;
+        setTitle(val);
+        yjsProviderRef.current?.setTitle(val);
+        yjsEditorRef.current?.setNoteMetaContext?.(val, '');
+        if (id && id !== 'create') {
+            useNotesStore.getState().updateNote(id, { title: val }).catch(() => {});
+        }
+    }, [setTitle, id]);
 
     const isOwner = userPermission.isOwner;
     const effectiveCanEdit = canEdit && (isYjsMode ? isYjsPersistenceReady === true : true);
@@ -537,6 +587,7 @@ export default function NoteDetailAndEditScreen() {
     });
 
     const handlePreviewUpdate = useCallback((preview: string, origin?: string) => {
+        setCachedPreviewText(preview);
         baseOnPreviewUpdate?.(preview, origin);
     }, [baseOnPreviewUpdate]);
 
@@ -563,6 +614,7 @@ export default function NoteDetailAndEditScreen() {
     const hasLoadedYjsDocRef = useRef(false);
     const activeProviderNoteIdRef = useRef<string | null>(null);
     const transitionTimersRef = useRef<any[]>([]);
+    const inFlightImageUploadRef = useRef<Promise<void> | null>(null);
 
     useEffect(() => {
         isComponentMountedRef.current = true;
@@ -838,6 +890,14 @@ export default function NoteDetailAndEditScreen() {
             onError: (err) => {
                 console.warn('[Notes Yjs] Error en SupabaseYjsProvider:', err);
             },
+            onTitleChange: (newTitle) => {
+                if (newTitle !== titleRef.current) {
+                    console.log('[Notes Yjs] Sincronizando título remoto desde Yjs:', newTitle);
+                    titleRef.current = newTitle;
+                    setTitle(newTitle);
+                    useNotesStore.getState().updateNote(id, { title: newTitle }).catch(() => {});
+                }
+            },
             onPageOrderChange: (pageIds) => {
                 console.log('[Notes Yjs] Sincronizando orden de páginas desde Yjs:', pageIds);
                 syncPagesFromYjs(pageIds);
@@ -846,6 +906,15 @@ export default function NoteDetailAndEditScreen() {
 
         yjsProviderRef.current = provider;
         provider.connect();
+
+        const initialYjsTitle = provider.getTitle();
+        if (initialYjsTitle && initialYjsTitle.trim() && initialYjsTitle !== titleRef.current) {
+            titleRef.current = initialYjsTitle;
+            setTitle(initialYjsTitle);
+        }
+        const unregisterUploadEditor = registerActiveEditor(id, (oldLocalUri, newRemoteUrl) => {
+            yjsEditorRef.current?.replaceImageSrc(oldLocalUri, newRemoteUrl);
+        });
 
         if (pendingYjsUpdatesRef.current.length > 0) {
             const queued = [...pendingYjsUpdatesRef.current];
@@ -859,6 +928,7 @@ export default function NoteDetailAndEditScreen() {
         }
 
         return () => {
+            unregisterUploadEditor();
             diagLog('provider_unmount', { noteId: id, reason: 'cleanup' });
             activeProviderNoteIdRef.current = null;
 
@@ -983,7 +1053,7 @@ export default function NoteDetailAndEditScreen() {
         diagLog('open_start', { noteId: id, phase: 'handleYjsReady' });
         // 1. Cargar estado local SQLite de inmediato en el editor para visualización offline-first instantánea
         console.log('[YJS-DIAG] [OPEN] 1. Leyendo estado inicial desde SQLite local para nota:', id);
-        localPersistence.loadDocument(id).then(localRes => {
+        localPersistence.loadDocument(id).then(async localRes => {
             if (!isComponentMountedRef.current) return;
             console.log('[YJS-DIAG] [OPEN] Estado SQLite local obtenido:', {
                 noteId: id,
@@ -995,37 +1065,78 @@ export default function NoteDetailAndEditScreen() {
                 console.log('[YJS-DIAG] [OPEN] Aplicando estado SQLite al editor y al proveedor', { bytes: fullState.byteLength });
                 yjsProviderRef.current?.applyInitialDoc(localRes.doc);
                 yjsEditorRef.current?.applyRemoteUpdate(bytesToBase64(fullState), 'remote-replay-load');
+
+                if (yjsProviderRef.current) {
+                    console.log('[YJS-DIAG] [OPEN] 2. Solicitando catchUpRemoteUpdates()...');
+                    yjsProviderRef.current.catchUpRemoteUpdates().then(res => {
+                        if (!isComponentMountedRef.current) return;
+                        console.log('[YJS-DIAG] [OPEN] catchUpRemoteUpdates completado:', res);
+                    }).catch((err) => {
+                        if (!isComponentMountedRef.current) return;
+                        console.warn('[YJS-DIAG] [OPEN] Error en catchUpRemoteUpdates:', err);
+                    });
+                }
             } else {
-                console.log('[YJS-DIAG] [OPEN] SQLite local no contiene deltas ni snapshot');
-                const initialIds = pages.map(p => p.id).filter(Boolean);
-                yjsProviderRef.current?.initializePageOrderIfEmpty(initialIds);
+                // Si no hay estado en SQLite local, primero intentar recuperar de Supabase para no duplicar pageOrder
+                let remoteHadData = false;
+                if (yjsProviderRef.current) {
+                    try {
+                        console.log('[YJS-DIAG] [OPEN] 2. Solicitando catchUpRemoteUpdates() antes de sembrar...');
+                        const res = await yjsProviderRef.current.catchUpRemoteUpdates();
+                        if (!isComponentMountedRef.current) return;
+                        console.log('[YJS-DIAG] [OPEN] catchUpRemoteUpdates completado:', res);
+                        remoteHadData = Boolean((res && res.appliedCount > 0) || yjsProviderRef.current.getPageOrder().length > 0);
+                    } catch (err) {
+                        if (!isComponentMountedRef.current) return;
+                        console.warn('[YJS-DIAG] [OPEN] Error en catchUpRemoteUpdates:', err);
+                    }
+                }
+
+                // Verificar de nuevo SQLite por si ensureRemoteActivated ya guardó el documento inicial
+                if (!remoteHadData) {
+                    try {
+                        const recheck = await localPersistence.loadDocument(id);
+                        if (!isComponentMountedRef.current) return;
+                        if (recheck.hasSnapshot || recheck.appliedUpdatesCount > 0) {
+                            const fullState = Y.encodeStateAsUpdate(recheck.doc);
+                            yjsProviderRef.current?.applyInitialDoc(recheck.doc);
+                            yjsEditorRef.current?.applyRemoteUpdate(bytesToBase64(fullState), 'remote-replay-load');
+                            remoteHadData = true;
+                        }
+                    } catch (_) { }
+                }
+
+                const existingPages = yjsProviderRef.current?.getPageOrder() || [];
+                const targetNote = currentNote || ({ id, title: '', content: '', page_format: currentNotePageFormat } as unknown as Note);
+                const isExistingYjs = targetNote.sync_mode === 'yjs';
+
+                if (!remoteHadData && existingPages.length === 0 && !isExistingYjs) {
+                    console.log('[YJS-DIAG] [OPEN] Sembrando Y.Doc estructurado inicial para nota nueva o sin deltas');
+                    const initialDoc = buildInitialYDocFromNote(targetNote);
+                    const fullState = Y.encodeStateAsUpdate(initialDoc);
+                    localPersistence.storeUpdate(id, fullState, false).catch(() => { });
+                    yjsProviderRef.current?.applyInitialDoc(initialDoc);
+                    yjsEditorRef.current?.applyRemoteUpdate(bytesToBase64(fullState), 'remote-replay-load');
+                }
+            }
+
+            if (yjsProviderRef.current) {
+                const status = yjsProviderRef.current.getStatus();
+                if (status === 'CONNECTED' || status === 'SYNCED') {
+                    yjsEditorRef.current?.requestSyncStep1();
+                    yjsEditorRef.current?.broadcastAwareness();
+                }
             }
         }).catch(err => {
             if (!isComponentMountedRef.current) return;
             console.warn('[YJS-DIAG] [OPEN] Error cargando estado inicial de SQLite:', err);
         });
 
-        // 2. Recuperar deltas remotos acumulados
-        if (yjsProviderRef.current) {
-            console.log('[YJS-DIAG] [OPEN] 2. Solicitando catchUpRemoteUpdates()...');
-            yjsProviderRef.current.catchUpRemoteUpdates().then(res => {
-                if (!isComponentMountedRef.current) return;
-                console.log('[YJS-DIAG] [OPEN] catchUpRemoteUpdates completado:', res);
-            }).catch((err) => {
-                if (!isComponentMountedRef.current) return;
-                console.warn('[YJS-DIAG] [OPEN] Error en catchUpRemoteUpdates:', err);
-            });
-            const status = yjsProviderRef.current.getStatus();
-            if (status === 'CONNECTED' || status === 'SYNCED') {
-                yjsEditorRef.current?.requestSyncStep1();
-                yjsEditorRef.current?.broadcastAwareness();
-            }
-        }
-
         yjsEditorRef.current?.setCursorVisible(isEditMode && effectiveCanEdit);
     }, [localPersistence, id, isEditMode, effectiveCanEdit]);
 
     const handleYjsUpdate = useCallback((base64Update: string) => {
+        hasUserEditedRef.current = true;
         if (!yjsProviderRef.current) {
             console.log('[Notes Yjs] Bufferizando delta local porque el provider aún no está listo');
             pendingYjsUpdatesRef.current.push(base64Update);
@@ -1203,7 +1314,7 @@ export default function NoteDetailAndEditScreen() {
         }, [isEditMode, isOptionsMenuVisible, isFontModalVisible, isPagesModalVisible, isCropperVisible, alertVisible, imageCoords, youtubeCoords, isImageViewerVisible])
     );
 
-    const editModeAnim = useRef(new Animated.Value(isCreating ? 1 : 0)).current;
+    const editModeAnim = useRef(new Animated.Value(isCreating || isNew === '1' ? 1 : 0)).current;
 
     const handleEnterEditMode = () => {
         if (!canEdit) {
@@ -1291,18 +1402,32 @@ export default function NoteDetailAndEditScreen() {
         try {
             setIsExportingPdf(true);
             let pagesToExport = pages;
+            let customA4Html: string | undefined = undefined;
 
-            if (isYjsMode && yjsEditorRef.current?.getAllPagesHtml) {
-                try {
-                    const yjsPages = await yjsEditorRef.current.getAllPagesHtml();
-                    if (yjsPages && yjsPages.length > 0) {
-                        pagesToExport = yjsPages.map(p => ({
-                            id: p.id,
-                            content: p.content,
-                        }));
+            if (isYjsMode) {
+                if (yjsEditorRef.current?.getA4ExportHtml) {
+                    try {
+                        const a4Html = await yjsEditorRef.current.getA4ExportHtml(title);
+                        if (a4Html && a4Html.trim().length > 0) {
+                            customA4Html = a4Html;
+                        }
+                    } catch (e) {
+                        console.warn('[PDF Export] Error al obtener A4 export HTML:', e);
                     }
-                } catch (e) {
-                    console.warn('[PDF Export] Fallback a páginas locales:', e);
+                }
+
+                if (!customA4Html && yjsEditorRef.current?.getAllPagesHtml) {
+                    try {
+                        const yjsPages = await yjsEditorRef.current.getAllPagesHtml();
+                        if (yjsPages && yjsPages.length > 0 && yjsPages.some(p => p.content && p.content.trim().length > 0)) {
+                            pagesToExport = yjsPages.map(p => ({
+                                id: p.id,
+                                content: p.content,
+                            }));
+                        }
+                    } catch (e) {
+                        console.warn('[PDF Export] Fallback a páginas locales:', e);
+                    }
                 }
             } else if (!isYjsMode) {
                 const latestPages = await Promise.all(
@@ -1326,6 +1451,7 @@ export default function NoteDetailAndEditScreen() {
                 a4HeaderFooterConfig,
                 includeHeaderTitle: false,
                 authorName: effectiveUserName,
+                customA4Html,
             });
         } catch (error) {
             console.error('Error exporting note to PDF:', error);
@@ -1361,6 +1487,35 @@ export default function NoteDetailAndEditScreen() {
     }, [isYjsMode, currentPageIndex, editorRefs]);
 
     const handleBack = async () => {
+        if (inFlightImageUploadRef.current) {
+            try {
+                await inFlightImageUploadRef.current;
+            } catch (_) { }
+        }
+
+        const isNoteBlank = !title.trim() &&
+            (!cachedPreviewText || !cachedPreviewText.trim()) &&
+            attachments.length === 0 &&
+            !hasUserEditedRef.current;
+
+        if (isNew === '1' && isNoteBlank) {
+            if (isExiting.current) return;
+            isExiting.current = true;
+            if (id && id !== 'create') {
+                await useNotesStore.getState().deleteNote(id);
+            }
+            router.back();
+            return;
+        }
+
+        if (isNew === '1') {
+            if (isExiting.current) return;
+            isExiting.current = true;
+            await saveSilently();
+            router.back();
+            return;
+        }
+
         if (isEditMode) {
             await handleExitEditMode();
         } else {
@@ -1625,7 +1780,7 @@ export default function NoteDetailAndEditScreen() {
                     {isEditMode && effectiveCanEdit ? (
                         <TitleInput
                             title={title}
-                            setTitle={setTitle}
+                            setTitle={handleSetTitle}
                             isEditing={true}
                             flat={true}
                             placeholder={t('notes.placeholder_title', { defaultValue: 'Título' })}
@@ -1677,6 +1832,7 @@ export default function NoteDetailAndEditScreen() {
                             userColor={effectiveUserColor}
                             activePageId={pages[currentPageIndex]?.id || (pages.length > 0 ? pages[0].id : undefined)}
                             pageFormat={currentNotePageFormat}
+                            notePaperMode={notePaperMode}
                             a4HeaderFooterConfig={a4HeaderFooterConfig}
                             noteTitle={title}
                             isEditing={isEditMode && effectiveCanEdit}
@@ -1697,14 +1853,30 @@ export default function NoteDetailAndEditScreen() {
                             onImageDismissed={handleImageDismissed}
                             onYoutubeClicked={handleYoutubeClicked}
                             onYoutubeDismissed={handleYoutubeDismissed}
+                            onTitleChanged={(newTitle) => {
+                                if (newTitle !== titleRef.current) {
+                                    console.log('[Notes Yjs] Sincronizando título remoto desde WebView meta:', newTitle);
+                                    titleRef.current = newTitle;
+                                    setTitle(newTitle);
+                                    useNotesStore.getState().updateNote(id, { title: newTitle }).catch(() => {});
+                                }
+                            }}
                             onPageFormatChanged={(fmt) => {
-                                setCurrentNotePageFormat(fmt);
-                                saveNotePageFormatForNote(id, fmt);
+                                if (fmt !== currentNotePageFormatRef.current) {
+                                    currentNotePageFormatRef.current = fmt;
+                                    setCurrentNotePageFormat(fmt);
+                                    saveNotePageFormatForNote(id, fmt);
+                                }
                             }}
                             onA4HeaderFooterChanged={(cfg) => {
                                 const clean = sanitizeA4HeaderFooterConfig(cfg);
-                                setA4HeaderFooterConfig(clean);
-                                saveA4HeaderFooterConfigForNote(id, clean);
+                                const prevSerialized = JSON.stringify(a4HeaderFooterConfigRef.current);
+                                const nextSerialized = JSON.stringify(clean);
+                                if (prevSerialized !== nextSerialized) {
+                                    a4HeaderFooterConfigRef.current = clean;
+                                    setA4HeaderFooterConfig(clean);
+                                    saveA4HeaderFooterConfigForNote(id, clean);
+                                }
                             }}
                             onA4HeaderFooterTap={(kind, pageNum) => {
                                 setHeaderFooterInitialKind(kind);
@@ -2274,7 +2446,7 @@ export default function NoteDetailAndEditScreen() {
                     {isEditMode && canEdit ? (
                         <TitleInput
                             title={title}
-                            setTitle={setTitle}
+                            setTitle={handleSetTitle}
                             isEditing={true}
                             flat={true}
                             placeholder={t('notes.placeholder_title', { defaultValue: 'Título' })}
@@ -2475,7 +2647,7 @@ export default function NoteDetailAndEditScreen() {
                     {isEditMode && canEdit ? (
                         <TitleInput
                             title={title}
-                            setTitle={setTitle}
+                            setTitle={handleSetTitle}
                             isEditing={true}
                             flat={true}
                             placeholder={t('notes.placeholder_title', { defaultValue: 'Título' })}
@@ -3074,60 +3246,84 @@ export default function NoteDetailAndEditScreen() {
                                 setIsEditingExistingImage(false);
                             }}
                             onEditingComplete={async (result) => {
+                                const wasReplacingUrl = isEditingExistingImage ? imageCoords?.url : null;
                                 setIsCropperVisible(false);
                                 setCropperUri(null);
+                                setIsEditingExistingImage(false);
                                 if (result?.uri) {
+                                    hasUserEditedRef.current = true;
                                     if (isYjsMode) {
-                                        let finalUrl: string | null = null;
-                                        const netState = await NetInfo.fetch();
-                                        const isOnline = Boolean(netState.isConnected && netState.isInternetReachable !== false);
+                                        const uploadTask = (async () => {
+                                            let finalUrl: string | null = null;
+                                            const netState = await NetInfo.fetch();
+                                            const isOnline = Boolean(netState.isConnected && netState.isInternetReachable !== false);
 
-                                        if (isOnline) {
-                                            try {
-                                                const userId = currentUserId || useStore.getState().session?.user?.id || 'anonymous';
-                                                const fileName = `img_${Date.now()}.jpg`;
-                                                const remotePath = await StorageService.uploadFile(userId, result.uri, fileName);
-                                                if (remotePath) {
-                                                    const { data: publicUrlData } = supabase.storage
-                                                        .from('attachments')
-                                                        .getPublicUrl(remotePath);
-                                                    if (publicUrlData?.publicUrl) {
-                                                        finalUrl = publicUrlData.publicUrl;
+                                            if (isOnline) {
+                                                try {
+                                                    const userId = currentUserId || useStore.getState().session?.user?.id || 'anonymous';
+                                                    const fileName = `img_${Date.now()}.jpg`;
+                                                    const remotePath = await StorageService.uploadFile(userId, result.uri, fileName);
+                                                    if (remotePath) {
+                                                        const { data: publicUrlData } = supabase.storage
+                                                            .from('attachments')
+                                                            .getPublicUrl(remotePath);
+                                                        if (publicUrlData?.publicUrl) {
+                                                            finalUrl = publicUrlData.publicUrl;
+                                                        }
                                                     }
+                                                } catch (err) {
+                                                    console.warn('[Yjs Image Upload] Error subiendo imagen directa a Supabase:', err);
                                                 }
-                                            } catch (err) {
-                                                console.warn('[Yjs Image Upload] Error subiendo imagen directa a Supabase:', err);
                                             }
-                                        }
 
-                                        if (finalUrl) {
-                                            yjsEditorRef.current?.insertImage(finalUrl);
-                                        } else {
-                                            // Modo Offline o fallo de red: persistir localmente y encolar
-                                            try {
-                                                const dir = `${FileSystem.documentDirectory}images/`;
-                                                const dirInfo = await FileSystem.getInfoAsync(dir);
-                                                if (!dirInfo.exists) {
-                                                    await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
+                                            if (finalUrl) {
+                                                if (wasReplacingUrl) {
+                                                    yjsEditorRef.current?.replaceImageSrc(wasReplacingUrl, finalUrl);
+                                                } else {
+                                                    yjsEditorRef.current?.insertImage(finalUrl);
                                                 }
-                                                const imgId = Crypto.randomUUID();
-                                                const persistentUri = `${dir}${imgId}.jpg`;
-                                                await FileSystem.copyAsync({
-                                                    from: result.uri,
-                                                    to: persistentUri,
-                                                });
+                                                // Dar margen al bridge del WebView para emitir YJS_UPDATE y persistirlo en SQLite
+                                                await new Promise(resolve => setTimeout(resolve, 180));
+                                            } else {
+                                                // Modo Offline o fallo de red: persistir localmente y encolar
+                                                try {
+                                                    const dir = `${FileSystem.documentDirectory}images/`;
+                                                    const dirInfo = await FileSystem.getInfoAsync(dir);
+                                                    if (!dirInfo.exists) {
+                                                        await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
+                                                    }
+                                                    const imgId = Crypto.randomUUID();
+                                                    const persistentUri = `${dir}${imgId}.jpg`;
+                                                    await FileSystem.copyAsync({
+                                                        from: result.uri,
+                                                        to: persistentUri,
+                                                    });
 
-                                                await withDB(async (db) => {
-                                                    await db.runAsync(
-                                                        'INSERT INTO pending_image_uploads (id, note_id, local_uri, created_at_ms) VALUES (?, ?, ?, ?);',
-                                                        [imgId, id, persistentUri, Date.now()]
-                                                    );
-                                                });
+                                                    await withDB(async (db) => {
+                                                        await db.runAsync(
+                                                            'INSERT INTO pending_image_uploads (id, note_id, local_uri, created_at_ms) VALUES (?, ?, ?, ?);',
+                                                            [imgId, id, persistentUri, Date.now()]
+                                                        );
+                                                    });
 
-                                                yjsEditorRef.current?.insertImage(persistentUri);
-                                            } catch (err) {
-                                                console.error('[Yjs Image Offline] Error guardando imagen localmente:', err);
-                                                Alert.alert('Error', 'No se pudo guardar la imagen localmente.');
+                                                    if (wasReplacingUrl) {
+                                                        yjsEditorRef.current?.replaceImageSrc(wasReplacingUrl, persistentUri);
+                                                    } else {
+                                                        yjsEditorRef.current?.insertImage(persistentUri);
+                                                    }
+                                                    await new Promise(resolve => setTimeout(resolve, 180));
+                                                } catch (err) {
+                                                    console.error('[Yjs Image Offline] Error guardando imagen localmente:', err);
+                                                    Alert.alert('Error', 'No se pudo guardar la imagen localmente.');
+                                                }
+                                            }
+                                        })();
+                                        inFlightImageUploadRef.current = uploadTask;
+                                        try {
+                                            await uploadTask;
+                                        } finally {
+                                            if (inFlightImageUploadRef.current === uploadTask) {
+                                                inFlightImageUploadRef.current = null;
                                             }
                                         }
                                     } else {
@@ -3252,6 +3448,11 @@ export default function NoteDetailAndEditScreen() {
                             setCurrentNotePageFormat(next);
                             saveNotePageFormatForNote(id, next);
                             yjsEditorRef.current?.setPageFormat?.(next, false);
+                        }}
+                        notePaperMode={notePaperMode}
+                        onToggleNotePaperMode={() => {
+                            const next = (notePaperMode ?? 'auto') === 'light' ? 'auto' : 'light';
+                            setNotePaperMode(next);
                         }}
                         onOpenHeaderFooterModal={() => {
                             setHeaderFooterInitialKind('header');

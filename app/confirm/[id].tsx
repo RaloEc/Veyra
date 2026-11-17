@@ -27,7 +27,6 @@ import {
     Bell,
     Volume2,
     VolumeX,
-    Flame,
     ExternalLink,
     Paperclip,
     X,
@@ -100,7 +99,6 @@ export default function ConfirmScreen() {
         soundSettings,
         loadReminders,
         toggleSubtask,
-        streak,
         language,
         vibrationEnabled,
     } = useStore();
@@ -609,17 +607,6 @@ export default function ConfirmScreen() {
                             </Text>
                         </View>
                     </View>
-
-                    {streak > 0 && (
-                        <View style={styles.streakBadgeWrap}>
-                            <Flame size={14} color="#F59E0B" />
-                            <Text style={styles.streakBadgeText}>
-                                {language === 'es'
-                                    ? `Racha activa de ${streak} día${streak > 1 ? 's' : ''}`
-                                    : `${streak}-day streak active`}
-                            </Text>
-                        </View>
-                    )}
                 </View>
 
                 {/* ─── 3. TÍTULO Y DESCRIPCIÓN ─── */}
@@ -958,20 +945,6 @@ const styles = StyleSheet.create({
     overdueBadgeText: {
         fontSize: 11,
         fontWeight: '600',
-    },
-    streakBadgeWrap: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 5,
-        paddingHorizontal: 10,
-        paddingVertical: 4,
-        borderRadius: 12,
-        backgroundColor: 'rgba(245, 158, 11, 0.12)',
-    },
-    streakBadgeText: {
-        color: '#F59E0B',
-        fontSize: 11,
-        fontWeight: '700',
     },
     titleSection: {
         gap: 12,
