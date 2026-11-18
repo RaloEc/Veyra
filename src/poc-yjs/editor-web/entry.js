@@ -21,6 +21,8 @@ import { CustomImage } from './image-node.js';
 import { createYouTubeNodeView } from './youtube-nodeview.js';
 import { AIPromptNodeView } from './aiprompt-nodeview.js';
 import { BookmarkPromptNodeView } from './bookmarkprompt-nodeview.js';
+import { createA4PaginationPlugin, a4PaginationPluginKey, getLiveVirtualBreaks } from './a4PaginationPlugin.js';
+import { calculateParagraphSplit } from './lineBreakMeasurer.js';
 import * as Y from 'yjs';
 import * as awarenessProtocol from 'y-protocols/awareness';
 import { ySyncPluginKey, yCursorPluginKey, absolutePositionToRelativePosition, yXmlFragmentToProseMirrorRootNode } from 'y-prosemirror';
@@ -1147,7 +1149,13 @@ function initEditor(fragmentName) {
 
                     return cursor;
                 }
-            })
+            }),
+            Extension.create({
+                name: 'a4Pagination',
+                addProseMirrorPlugins() {
+                    return [createA4PaginationPlugin({ enabled: true })];
+                },
+            }),
         ],
         onTransaction: () => {
             notifyToolbarStateChanged();
@@ -3784,6 +3792,12 @@ function runVeyraA4Pagination() {
             overlayEl.style.display = 'none';
         }
         veyraA4LastBreaks = '';
+        if (editor) {
+            const liveBreaks = getLiveVirtualBreaks(editor.state);
+            if (liveBreaks.length > 0) {
+                editor.view.dispatch(editor.state.tr.setMeta(a4PaginationPluginKey, { breaks: [], enabled: false }));
+            }
+        }
         return;
     }
 
@@ -3912,78 +3926,138 @@ function runVeyraA4Pagination() {
 
         const rules = basePaddingRule ? [basePaddingRule] : [];
         const breaks = [];
+        const virtualBreaks = [];
         let currentPage = 0;
         const zoom = veyraA4CurrentZoom || 1;
 
-        const applyPush = (target, desiredTop) => {
-            const pRect = pm.getBoundingClientRect();
-            const tRect = target.topEl.getBoundingClientRect();
-            const currentTop = (tRect.top - pRect.top) / zoom;
-            const cs = window.getComputedStyle(target.targetEl);
-            const baseVal = parseFloat(target.prop === 'margin-top' ? cs.marginTop : cs.paddingTop) || 0;
-            let neededVal = Math.max(0, Math.round(baseVal + (desiredTop - currentTop)));
-            const extraRule = target.prop === 'padding-top' ? ' vertical-align: top !important;' : '';
-            const ruleIndex = rules.length;
-            rules.push(`${target.selector} { ${target.prop}: ${neededVal}px !important;${extraRule} }`);
-            styleEl.textContent = rules.join('\n');
+        let isMeasuringApplied = false;
+        if (pm) {
+            pm.classList.add('a4-measuring');
+            isMeasuringApplied = true;
+        }
 
-            const vPmRect = pm.getBoundingClientRect();
-            const vTopRect = target.topEl.getBoundingClientRect();
-            const actualTop = (vTopRect.top - vPmRect.top) / zoom;
-            const diff = Math.round(desiredTop - actualTop);
-            if (Math.abs(diff) > 1) {
-                neededVal = Math.max(0, neededVal + diff);
-                rules[ruleIndex] = `${target.selector} { ${target.prop}: ${neededVal}px !important;${extraRule} }`;
+        try {
+            const applyPush = (target, desiredTop) => {
+                const pRect = pm.getBoundingClientRect();
+                const tRect = target.topEl.getBoundingClientRect();
+                const currentTop = (tRect.top - pRect.top) / zoom;
+                const cs = window.getComputedStyle(target.targetEl);
+                const baseVal = parseFloat(target.prop === 'margin-top' ? cs.marginTop : cs.paddingTop) || 0;
+                let neededVal = Math.max(0, Math.round(baseVal + (desiredTop - currentTop)));
+                const extraRule = target.prop === 'padding-top' ? ' vertical-align: top !important;' : '';
+                const ruleIndex = rules.length;
+                rules.push(`${target.selector} { ${target.prop}: ${neededVal}px !important;${extraRule} }`);
                 styleEl.textContent = rules.join('\n');
-            }
-        };
 
-        for (let k = 0; k < items.length; k++) {
-            const item = items[k];
-            let pmRect = pm.getBoundingClientRect();
-            let itemTop = (item.topEl.getBoundingClientRect().top - pmRect.top) / zoom;
-            let itemBottom = (item.bottomEl.getBoundingClientRect().bottom - pmRect.top) / zoom;
+                const vPmRect = pm.getBoundingClientRect();
+                const vTopRect = target.topEl.getBoundingClientRect();
+                const actualTop = (vTopRect.top - vPmRect.top) / zoom;
+                const diff = Math.round(desiredTop - actualTop);
+                if (Math.abs(diff) > 1) {
+                    neededVal = Math.max(0, neededVal + diff);
+                    rules[ruleIndex] = `${target.selector} { ${target.prop}: ${neededVal}px !important;${extraRule} }`;
+                    styleEl.textContent = rules.join('\n');
+                }
+            };
 
-            let minPrintableY = currentPage * STRIDE + marginTopPx;
-            let maxPrintableY = currentPage * STRIDE + A4_HEIGHT_PX - marginBottomPx;
+            for (let k = 0; k < items.length; k++) {
+                const item = items[k];
+                let pmRect = pm.getBoundingClientRect();
+                let itemTop = (item.topEl.getBoundingClientRect().top - pmRect.top) / zoom;
+                let itemBottom = (item.bottomEl.getBoundingClientRect().bottom - pmRect.top) / zoom;
 
-            if (currentPage > 0 && itemTop < minPrintableY - 2) {
-                applyPush(item, minPrintableY);
-                pmRect = pm.getBoundingClientRect();
-                itemTop = (item.topEl.getBoundingClientRect().top - pmRect.top) / zoom;
-                itemBottom = (item.bottomEl.getBoundingClientRect().bottom - pmRect.top) / zoom;
-            }
+                const totalVirtualSpacersHeight = virtualBreaks.reduce((sum, b) => sum + b.spacerHeight, 0);
+                const renderedItemTop = itemTop + totalVirtualSpacersHeight;
+                const renderedItemBottom = itemBottom + totalVirtualSpacersHeight;
 
-            if (itemBottom > maxPrintableY) {
-                let pushIdx = k;
-                while (pushIdx > 0 && items[pushIdx - 1].isHeadingOrLead) {
-                    const prevTop = (items[pushIdx - 1].topEl.getBoundingClientRect().top - pmRect.top) / zoom;
-                    if (prevTop > minPrintableY + 28) {
-                        pushIdx -= 1;
-                    } else {
-                        break;
+                let minPrintableY = currentPage * STRIDE + marginTopPx;
+                let maxPrintableY = currentPage * STRIDE + A4_HEIGHT_PX - marginBottomPx;
+
+                if (currentPage > 0 && renderedItemTop < minPrintableY - 2) {
+                    applyPush(item, minPrintableY - totalVirtualSpacersHeight);
+                    pmRect = pm.getBoundingClientRect();
+                    itemTop = (item.topEl.getBoundingClientRect().top - pmRect.top) / zoom;
+                    itemBottom = (item.bottomEl.getBoundingClientRect().bottom - pmRect.top) / zoom;
+                }
+
+                if (renderedItemBottom > maxPrintableY) {
+                    let pushIdx = k;
+                    while (pushIdx > 0 && items[pushIdx - 1].isHeadingOrLead) {
+                        const prevTop = (items[pushIdx - 1].topEl.getBoundingClientRect().top - pmRect.top) / zoom + totalVirtualSpacersHeight;
+                        if (prevTop > minPrintableY + 28) {
+                            pushIdx -= 1;
+                        } else {
+                            break;
+                        }
+                    }
+
+                    if (editor && item.targetEl.tagName.toLowerCase() === 'p' && !item.isHeadingOrLead && pushIdx === k) {
+                        const splitResult = calculateParagraphSplit(
+                            item.targetEl,
+                            pmRect.top,
+                            STRIDE,
+                            marginTopPx,
+                            marginBottomPx,
+                            currentPage,
+                            editor.view,
+                            totalVirtualSpacersHeight,
+                            zoom
+                        );
+
+                        const cands = splitResult.candidates && splitResult.candidates.length > 0
+                            ? splitResult.candidates
+                            : (splitResult.candidate ? [splitResult.candidate] : []);
+
+                        if (cands.length > 0) {
+                            for (const cand of cands) {
+                                virtualBreaks.push({
+                                    pos: cand.pos,
+                                    spacerHeight: cand.spacerHeight,
+                                    sheetIndex: cand.sheetIndex,
+                                    key: `vbreak-${cand.sheetIndex}-${cand.pos}`,
+                                });
+                                breaks.push(cand.sheetIndex * STRIDE + A4_HEIGHT_PX);
+                            }
+                            currentPage += cands.length;
+                            minPrintableY = currentPage * STRIDE + marginTopPx;
+                            maxPrintableY = currentPage * STRIDE + A4_HEIGHT_PX - marginBottomPx;
+                            continue;
+                        }
+                    }
+
+                    const target = items[pushIdx];
+                    const targetTop = (target.topEl.getBoundingClientRect().top - pmRect.top) / zoom + totalVirtualSpacersHeight;
+
+                    if (targetTop > minPrintableY + 14) {
+                        breaks.push(currentPage * STRIDE + A4_HEIGHT_PX);
+                        currentPage += 1;
+                        const desiredTop = currentPage * STRIDE + marginTopPx;
+                        applyPush(target, desiredTop - totalVirtualSpacersHeight);
+
+                        pmRect = pm.getBoundingClientRect();
+                        itemBottom = (item.bottomEl.getBoundingClientRect().bottom - pmRect.top) / zoom;
+                        minPrintableY = currentPage * STRIDE + marginTopPx;
+                        maxPrintableY = currentPage * STRIDE + A4_HEIGHT_PX - marginBottomPx;
+                    }
+
+                    while (itemBottom + totalVirtualSpacersHeight > currentPage * STRIDE + A4_HEIGHT_PX - marginBottomPx) {
+                        breaks.push(currentPage * STRIDE + A4_HEIGHT_PX);
+                        currentPage += 1;
                     }
                 }
+            }
+        } finally {
+            if (isMeasuringApplied && pm) {
+                pm.classList.remove('a4-measuring');
+            }
+        }
 
-                const target = items[pushIdx];
-                const targetTop = (target.topEl.getBoundingClientRect().top - pmRect.top) / zoom;
-
-                if (targetTop > minPrintableY + 14) {
-                    breaks.push(currentPage * STRIDE + A4_HEIGHT_PX);
-                    currentPage += 1;
-                    const desiredTop = currentPage * STRIDE + marginTopPx;
-                    applyPush(target, desiredTop);
-
-                    pmRect = pm.getBoundingClientRect();
-                    itemBottom = (item.bottomEl.getBoundingClientRect().bottom - pmRect.top) / zoom;
-                    minPrintableY = currentPage * STRIDE + marginTopPx;
-                    maxPrintableY = currentPage * STRIDE + A4_HEIGHT_PX - marginBottomPx;
-                }
-
-                while (itemBottom > currentPage * STRIDE + A4_HEIGHT_PX - marginBottomPx) {
-                    breaks.push(currentPage * STRIDE + A4_HEIGHT_PX);
-                    currentPage += 1;
-                }
+        if (editor) {
+            const liveBreaks = getLiveVirtualBreaks(editor.state);
+            const liveSig = liveBreaks.map(b => `${b.sheetIndex}:${b.pos}:${b.spacerHeight}`).join(',');
+            const nextSig = virtualBreaks.map(b => `${b.sheetIndex}:${b.pos}:${b.spacerHeight}`).join(',');
+            if (liveSig !== nextSig) {
+                editor.view.dispatch(editor.state.tr.setMeta(a4PaginationPluginKey, { breaks: virtualBreaks, enabled: true }));
             }
         }
 

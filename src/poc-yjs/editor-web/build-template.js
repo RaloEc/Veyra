@@ -268,6 +268,18 @@ export function getTiptapHtml(options: { isDark?: boolean; isAmoled?: boolean; a
             border: 1px solid #E2E8F0 !important;
             box-shadow: 0 4px 24px rgba(0, 0, 0, 0.08) !important;
         }
+        .a4-virtual-page-break {
+            display: inline-block !important;
+            vertical-align: top !important;
+            user-select: none !important;
+            pointer-events: none !important;
+            background: transparent !important;
+            width: 100% !important;
+        }
+        .a4-measuring .a4-virtual-page-break {
+            display: none !important;
+            height: 0 !important;
+        }
         html.a4-page-mode .ProseMirror p {
             font-size: 14px !important;
             line-height: 1.7 !important;
