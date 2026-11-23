@@ -3,6 +3,18 @@ import * as FileSystem from 'expo-file-system/legacy';
 import * as Crypto from 'expo-crypto';
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 import { base64ToBytes } from '../poc-yjs/yjsLocalPersistence';
+import {
+    uploadFile as uploadPrivateAttachment,
+    type AttachmentTargetType,
+    type MobileUploadOptions,
+    type MobileUploadResult,
+} from './storageUploader';
+import {
+    invalidateSignedUrlCache,
+    isVeyraAttachmentUri,
+    parseAttachmentUri,
+    resolveAttachmentUri,
+} from './attachmentUriResolver';
 
 const BUCKET = 'attachments';
 const LOCAL_CACHE_DIR = `${FileSystem.documentDirectory}cloud_cache/`;
@@ -91,7 +103,51 @@ export const StorageService = {
     },
 
     /**
-     * Sube un archivo local a Supabase Storage.
+     * Orquestador Fase 5 (bucket privado 'veyra-attachments' + reserva de cuota + TUS / upload-finalize).
+     * Comprime imágenes (excepto GIF) antes de reservar cuota para minimizar consumo del usuario.
+     */
+    async uploadAttachment(
+        localUri: string,
+        targetType: AttachmentTargetType,
+        targetId: string,
+        options?: MobileUploadOptions
+    ): Promise<MobileUploadResult> {
+        let uploadUri = localUri;
+        let fileName =
+            options?.fileName ||
+            (typeof localUri === 'string' ? localUri.split('/').pop()?.split('?')[0] : '') ||
+            `attachment_${Date.now()}`;
+        let mimeType = options?.mimeType;
+
+        const isImg = this.isImage(fileName) || (mimeType?.startsWith('image/') ?? false);
+        const isGif =
+            fileName.toLowerCase().endsWith('.gif') ||
+            localUri.toLowerCase().endsWith('.gif') ||
+            mimeType === 'image/gif';
+
+        if (isImg) {
+            if (isGif) {
+                mimeType = 'image/gif';
+            } else {
+                const compressedUri = await this.compressImage(localUri);
+                if (compressedUri !== localUri) {
+                    uploadUri = compressedUri;
+                    mimeType = 'image/webp';
+                    const dotIdx = fileName.lastIndexOf('.');
+                    fileName = `${dotIdx > 0 ? fileName.slice(0, dotIdx) : fileName}.webp`;
+                }
+            }
+        }
+
+        return await uploadPrivateAttachment(uploadUri, targetType, targetId, {
+            ...options,
+            fileName,
+            mimeType,
+        });
+    },
+
+    /**
+     * Sube un archivo local a Supabase Storage (legacy bucket 'attachments').
      * Ruta para nuevas subidas: ${userId}/notes/${Date.now()}_${randomId}.${ext}
      * Retorna la ruta remota para obtener URLs públicas directas o firmadas.
      */
@@ -185,6 +241,50 @@ export const StorageService = {
             }
             if (cleanPath.startsWith('/')) {
                 cleanPath = cleanPath.replace(/^\/+/, '');
+            }
+
+            // Nuevo esquema privado Fase 5: veyra-attachment://<attachment_id>
+            if (isVeyraAttachmentUri(cleanPath)) {
+                const attachmentId = parseAttachmentUri(cleanPath);
+                if (!attachmentId) {
+                    return { localPath: null, notFound: true };
+                }
+
+                const privateLocalPath = `${LOCAL_CACHE_DIR}att_${attachmentId}`;
+                const privateCached = await FileSystem.getInfoAsync(privateLocalPath);
+                if (privateCached.exists) {
+                    return { localPath: privateLocalPath };
+                }
+
+                let signedUrl: string;
+                try {
+                    signedUrl = await resolveAttachmentUri(cleanPath);
+                } catch (err: any) {
+                    const msg = String(err?.message || '').toLowerCase();
+                    if (msg.includes('404') || msg.includes('not found')) {
+                        return { localPath: null, notFound: true };
+                    }
+                    console.warn('[StorageService] Error resolviendo veyra-attachment URI:', err);
+                    return { localPath: null };
+                }
+
+                const downloadResult = await Promise.race([
+                    FileSystem.downloadAsync(signedUrl, privateLocalPath),
+                    new Promise<any>((_, reject) =>
+                        setTimeout(() => reject(new Error('DownloadAsync timeout (15s)')), 15000)
+                    ),
+                ]).catch((e) => {
+                    console.warn('[StorageService] Private attachment download error:', e);
+                    return null;
+                });
+
+                if (downloadResult && downloadResult.status === 200) {
+                    return { localPath: privateLocalPath };
+                }
+                if (downloadResult && downloadResult.status === 404) {
+                    return { localPath: null, notFound: true };
+                }
+                return { localPath: null };
             }
 
             // Verificar caché local primero (evita egress)
@@ -282,12 +382,37 @@ export const StorageService = {
     },
 
     /**
-     * Elimina un archivo del servidor (acepta remotePath o URL pública).
+     * Elimina lógicamente un archivo en el almacenamiento privado (`veyra-attachment://<id>` via
+     * `rpc_soft_delete_attachment` + `storage_deletion_queue`) o legado (`attachments`), y limpia caché local.
      */
     async deleteFile(remoteUrlOrPath: string): Promise<boolean> {
         if (!remoteUrlOrPath || typeof remoteUrlOrPath !== 'string') return false;
         try {
-            let cleanPath = remoteUrlOrPath.trim();
+            await this.ensureCacheDir();
+
+            const trimmed = remoteUrlOrPath.trim();
+            if (isVeyraAttachmentUri(trimmed)) {
+                const attachmentId = parseAttachmentUri(trimmed);
+                if (!attachmentId) return false;
+
+                invalidateSignedUrlCache(attachmentId);
+                const { error } = await (supabase.rpc as any)('rpc_soft_delete_attachment', {
+                    p_attachment_id: attachmentId,
+                });
+                if (error) {
+                    console.error('[StorageService] Soft delete RPC failed:', error);
+                    return false;
+                }
+
+                const privateLocalPath = `${LOCAL_CACHE_DIR}att_${attachmentId}`;
+                const privateCached = await FileSystem.getInfoAsync(privateLocalPath);
+                if (privateCached.exists) {
+                    await FileSystem.deleteAsync(privateLocalPath, { idempotent: true });
+                }
+                return true;
+            }
+
+            let cleanPath = trimmed;
             const match = cleanPath.match(/\/storage\/v1\/object\/(?:public|sign)\/attachments\/(.+?)(?:\?.*)?$/i);
             if (match && match[1]) {
                 cleanPath = decodeURIComponent(match[1]);
@@ -299,17 +424,37 @@ export const StorageService = {
             }
             cleanPath = cleanPath.replace(/^\/+/, '');
 
-            const { error } = await supabase.storage
-                .from(BUCKET)
-                .remove([cleanPath]);
+            // Intentar borrado lógico primero si el archivo legado ya fue backfilled en `public.attachments`
+            const { data: legacyRow } = await (supabase as any)
+                .from('attachments')
+                .select('id')
+                .eq('storage_bucket', BUCKET)
+                .eq('storage_path', cleanPath)
+                .is('deleted_at', null)
+                .limit(1)
+                .maybeSingle();
 
-            if (error) {
-                console.error('[StorageService] Delete failed:', error);
-                return false;
+            if (legacyRow?.id) {
+                const { error: rpcErr } = await (supabase.rpc as any)('rpc_soft_delete_attachment', {
+                    p_attachment_id: legacyRow.id,
+                });
+                if (rpcErr) {
+                    console.error('[StorageService] Legacy soft delete RPC failed:', rpcErr);
+                    return false;
+                }
+            } else {
+                const { error } = await supabase.storage
+                    .from(BUCKET)
+                    .remove([cleanPath]);
+
+                if (error) {
+                    console.error('[StorageService] Delete failed:', error);
+                    return false;
+                }
             }
 
             // Eliminar del caché local también
-            const safeName = cleanPath.replace(/\//g, '_');
+            const safeName = cleanPath.replace(/[^a-zA-Z0-9._-]/g, '_');
             const localPath = `${LOCAL_CACHE_DIR}${safeName}`;
             const cached = await FileSystem.getInfoAsync(localPath);
             if (cached.exists) {
@@ -325,12 +470,13 @@ export const StorageService = {
 
     /**
      * Procesa una lista de attachments:
-     * - Los que son locales (file://...) se suben al servidor
-     * - Se retorna la lista actualizada con las rutas remotas
+     * - Los que son locales (file://...) se suben al almacenamiento privado (`veyra-attachments`)
+     *   cuando se recibe `{ targetType, targetId }`, guardando `remotePath = veyra-attachment://<id>`.
      */
     async uploadAttachments(
         userId: string,
-        attachments: { uri: string; name?: string; remotePath?: string }[]
+        attachments: { uri: string; name?: string; remotePath?: string }[],
+        target?: { targetType: AttachmentTargetType; targetId: string }
     ): Promise<{ uri: string; name: string; remotePath?: string }[]> {
         const results: any[] = [];
         if (!Array.isArray(attachments)) return results;
@@ -352,12 +498,30 @@ export const StorageService = {
                 const fileInfo = await FileSystem.getInfoAsync(att.uri);
                 if (fileInfo.exists) {
                     const fileName = att.name || att.uri.split('/').pop() || `file_${Date.now()}`;
-                    const remotePath = await this.uploadFile(userId, att.uri, fileName);
-                    if (remotePath) {
-                        results.push({ ...att, name: fileName, remotePath });
+                    if (target?.targetType && target?.targetId) {
+                        try {
+                            const uploaded = await this.uploadAttachment(
+                                att.uri,
+                                target.targetType,
+                                target.targetId,
+                                {
+                                    fileName,
+                                    mimeType: this.getMimeType(fileName),
+                                }
+                            );
+                            results.push({ ...att, name: fileName, remotePath: uploaded.attachment_uri });
+                        } catch (uploadErr) {
+                            console.warn(`[StorageService] uploadAttachment failed for ${fileName}, keeping local:`, uploadErr);
+                            results.push(att);
+                        }
                     } else {
-                        // Falló la subida, mantener como local
-                        results.push(att);
+                        const remotePath = await this.uploadFile(userId, att.uri, fileName);
+                        if (remotePath) {
+                            results.push({ ...att, name: fileName, remotePath });
+                        } else {
+                            // Falló la subida, mantener como local
+                            results.push(att);
+                        }
                     }
                 } else {
                     // Archivo no existe localmente, omitir
@@ -465,6 +629,6 @@ export const StorageService = {
     },
 };
 
-export async function deleteFile(remoteUrlOrPath: string): Promise<void> {
+export async function deleteFile(remoteUrlOrPath: string): Promise<boolean> {
     return StorageService.deleteFile(remoteUrlOrPath);
 }

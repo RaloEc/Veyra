@@ -1,10 +1,9 @@
 import NetInfo, { NetInfoState } from '@react-native-community/netinfo';
 import * as FileSystem from 'expo-file-system/legacy';
 import { withDB, PendingImageUpload } from '../db';
-import { supabase } from '../lib/supabase';
 import { StorageService } from './storageService';
+import { MobileStorageUploadError } from './storageUploader';
 import { useStore } from '../store/useStore';
-import { base64ToBytes } from '../poc-yjs/yjsLocalPersistence';
 
 type ReplaceImageCallback = (oldLocalUri: string, newRemoteUrl: string) => void;
 
@@ -78,63 +77,45 @@ export async function processPendingUploads(): Promise<void> {
                 }
 
                 const fileName = `img_${item.id}.jpg`;
-                let remoteUrl: string | null = null;
+                let attachmentUri: string | null = null;
 
-                // 1. Intentar subir mediante StorageService
+                // 1. Subida oficial Fase 5: quota-reserve -> upload (standard o TUS por trozos) -> upload-finalize
                 try {
-                    const remotePath = await StorageService.uploadFile(userId, item.local_uri, fileName);
-                    if (remotePath) {
-                        const { data: publicUrlData } = supabase.storage
-                            .from('attachments')
-                            .getPublicUrl(remotePath);
-                        if (publicUrlData?.publicUrl) {
-                            remoteUrl = publicUrlData.publicUrl;
-                        }
-                    }
+                    const result = await StorageService.uploadAttachment(
+                        item.local_uri,
+                        'note',
+                        item.note_id,
+                        { fileName }
+                    );
+                    attachmentUri = result.attachment_uri; // veyra-attachment://<attachment_id>
                 } catch (storageErr) {
-                    console.warn('[UploadQueue] StorageService uploadFile advertencia:', storageErr);
-                }
-
-                // 2. Fallback de subida directa a Supabase Storage ('attachments')
-                if (!remoteUrl) {
-                    try {
-                        const base64 = await FileSystem.readAsStringAsync(item.local_uri, {
-                            encoding: FileSystem.EncodingType.Base64,
-                        });
-                        const bytes = base64ToBytes(base64);
-                        const directPath = `${userId}/${fileName}`;
-                        const { error: uploadErr } = await supabase.storage
-                            .from('attachments')
-                            .upload(directPath, bytes, {
-                                contentType: 'image/jpeg',
-                                upsert: true,
-                                cacheControl: '31536000',
-                            });
-                        if (!uploadErr) {
-                            const { data: publicUrlData } = supabase.storage
-                                .from('attachments')
-                                .getPublicUrl(directPath);
-                            if (publicUrlData?.publicUrl) {
-                                remoteUrl = publicUrlData.publicUrl;
-                            }
-                        }
-                    } catch (fallbackErr) {
-                        console.error('[UploadQueue] Fallback subida directa error:', fallbackErr);
+                    if (
+                        storageErr instanceof MobileStorageUploadError &&
+                        (storageErr.code === 'QUOTA_EXCEEDED' ||
+                            storageErr.code === 'FILE_TOO_LARGE' ||
+                            storageErr.code === 'UNSUPPORTED_MIME')
+                    ) {
+                        console.warn(
+                            `[UploadQueue] Error no reintentable (${storageErr.code}) para item ${item.id}:`,
+                            storageErr.message
+                        );
+                        continue;
                     }
+                    console.warn('[UploadQueue] StorageService.uploadAttachment advertencia:', storageErr);
                 }
 
-                // 3. Si se obtuvo la URL remota de Supabase, reemplazar en el editor y eliminar registro
-                if (remoteUrl) {
+                // 2. Si se obtuvo la URI estable veyra-attachment://<id>, reemplazar en el editor y limpiar SQLite
+                if (attachmentUri) {
                     const isTargetEditorOpen = Boolean(activeEditor && activeEditor.noteId === item.note_id);
                     if (isTargetEditorOpen && activeEditor) {
-                        activeEditor.replaceImageSrc(item.local_uri, remoteUrl);
+                        activeEditor.replaceImageSrc(item.local_uri, attachmentUri);
                         await withDB(async (db) => {
                             await db.runAsync('DELETE FROM pending_image_uploads WHERE id = ?;', [item.id]);
                         });
-                        console.log(`[UploadQueue] Reemplazo exitoso en editor: ${item.local_uri} -> ${remoteUrl}`);
+                        console.log(`[UploadQueue] Reemplazo exitoso en editor: ${item.local_uri} -> ${attachmentUri}`);
                     } else if (!activeEditor) {
                         // Esperar a que la nota sea abierta para aplicar el reemplazo en el documento
-                        console.log(`[UploadQueue] Imagen subida pero editor cerrado. Se reemplazará al abrir nota ${item.note_id}`);
+                        console.log(`[UploadQueue] Imagen subida (${attachmentUri}) pero editor cerrado. Se reemplazará al abrir nota ${item.note_id}`);
                     }
                 }
             } catch (itemErr) {

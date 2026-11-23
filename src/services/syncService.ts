@@ -1886,7 +1886,10 @@ export const SyncService = {
                 );
 
                 if (hasLocalFiles) {
-                    const updated = await StorageService.uploadAttachments(userId, atts);
+                    const updated = await StorageService.uploadAttachments(userId, atts, {
+                        targetType: 'reminder',
+                        targetId: row.id,
+                    });
                     const updatedJson = JSON.stringify(updated);
                     if (updatedJson !== row.attachments) {
                         await db.runAsync(
@@ -1925,7 +1928,10 @@ export const SyncService = {
                 );
 
                 if (hasLocalFiles) {
-                    const updated = await StorageService.uploadAttachments(userId, atts);
+                    const updated = await StorageService.uploadAttachments(userId, atts, {
+                        targetType: 'note',
+                        targetId: row.id,
+                    });
                     const updatedJson = JSON.stringify(updated);
                     if (updatedJson !== row.attachments) {
                         await db.runAsync(

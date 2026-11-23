@@ -16,6 +16,90 @@
 
 import { NodeSelection } from 'prosemirror-state';
 
+const VEYRA_SCHEME = 'veyra-attachment://';
+const BRIDGE_TIMEOUT_MS = 35000;
+
+function ensureAttachmentBridge() {
+    if (typeof window === 'undefined') return;
+    if (!window.__veyraAttachmentCallbacks) {
+        window.__veyraAttachmentCallbacks = {};
+    }
+    if (!window.__veyraResolveAttachmentCallback) {
+        window.__veyraResolveAttachmentCallback = function (requestId, signedUrl, errorMsg) {
+            const cb = window.__veyraAttachmentCallbacks && window.__veyraAttachmentCallbacks[requestId];
+            if (cb) {
+                delete window.__veyraAttachmentCallbacks[requestId];
+                cb(signedUrl || null, errorMsg || null);
+            }
+        };
+    }
+}
+
+export function applyResolvedImageSrc(imgEl, rawSrc, forceRefresh = false, hooks = null) {
+    if (!imgEl) return;
+    const srcStr = typeof rawSrc === 'string' ? rawSrc : '';
+
+    if (!srcStr.startsWith(VEYRA_SCHEME)) {
+        delete imgEl.dataset.veyraUri;
+        delete imgEl.dataset.veyraRetried;
+        if ((imgEl.getAttribute('src') || '') !== srcStr) {
+            imgEl.src = srcStr;
+        }
+        return;
+    }
+
+    imgEl.dataset.veyraUri = srcStr;
+    if (!forceRefresh) {
+        delete imgEl.dataset.veyraRetried;
+    }
+
+    if (typeof window === 'undefined' || !window.ReactNativeWebView) {
+        hooks?.onError?.('Bridge de WebView no disponible');
+        return;
+    }
+
+    ensureAttachmentBridge();
+    const requestId = `att_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+    let settled = false;
+    const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        delete window.__veyraAttachmentCallbacks[requestId];
+        hooks?.onError?.('Tiempo de espera agotado al obtener URL firmada');
+    }, BRIDGE_TIMEOUT_MS);
+
+    window.__veyraAttachmentCallbacks[requestId] = (signedUrl, errorMsg) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (imgEl.dataset.veyraUri !== srcStr) return;
+        if (!signedUrl) {
+            hooks?.onError?.(errorMsg || 'No se pudo cargar la imagen');
+            return;
+        }
+        imgEl.src = signedUrl;
+        hooks?.onResolved?.(signedUrl);
+    };
+
+    try {
+        window.ReactNativeWebView.postMessage(
+            JSON.stringify({
+                type: 'RESOLVE_ATTACHMENT_URI',
+                requestId,
+                uri: srcStr,
+                forceRefresh: Boolean(forceRefresh),
+            })
+        );
+    } catch (err) {
+        if (!settled) {
+            settled = true;
+            clearTimeout(timer);
+            delete window.__veyraAttachmentCallbacks[requestId];
+            hooks?.onError?.(err?.message || 'Error enviando solicitud al host');
+        }
+    }
+}
+
 export class ImageNodeView {
     constructor(node, view, getPos) {
         this.node = node;
@@ -70,7 +154,6 @@ export class ImageNodeView {
 
         // <img> inside imageWrapper
         this.img = document.createElement('img');
-        this.img.src = this.node.attrs.src || '';
         if (this.node.attrs.alt) {
             this.img.alt = this.node.attrs.alt;
         }
@@ -83,22 +166,81 @@ export class ImageNodeView {
         this.img.style.webkitTouchCallout = 'none';
         this.img.style.webkitTapHighlightColor = 'transparent';
         this.img.style.pointerEvents = 'auto';
+        this.img.style.transition = 'opacity 0.28s cubic-bezier(0.16, 1, 0.3, 1)';
 
-        // Animación suave de carga (Fade-in elegante)
-        if (!this.img.complete) {
-            this.imageWrapper.classList.add('is-loading');
-            this.img.style.opacity = '0';
-            this.img.style.transition = 'opacity 0.28s cubic-bezier(0.16, 1, 0.3, 1)';
-            const onLoad = () => {
-                this.imageWrapper.classList.remove('is-loading');
-                this.img.style.opacity = '1';
-            };
-            this.img.addEventListener('load', onLoad, { once: true });
-            this.img.addEventListener('error', onLoad, { once: true });
-        } else {
+        this.errorOverlay = document.createElement('div');
+        this.errorOverlay.className = 'veyra-image-error-overlay';
+        this.errorOverlay.style.display = 'none';
+        this.errorOverlay.style.flexDirection = 'column';
+        this.errorOverlay.style.alignItems = 'center';
+        this.errorOverlay.style.justifyContent = 'center';
+        this.errorOverlay.style.gap = '8px';
+        this.errorOverlay.style.minHeight = '112px';
+        this.errorOverlay.style.padding = '16px';
+        this.errorOverlay.style.borderRadius = '8px';
+        this.errorOverlay.style.border = '1px dashed rgba(148, 163, 184, 0.45)';
+        this.errorOverlay.style.background = 'rgba(148, 163, 184, 0.08)';
+        this.errorOverlay.style.textAlign = 'center';
+
+        this.errorTextEl = document.createElement('div');
+        this.errorTextEl.style.fontSize = '12px';
+        this.errorTextEl.style.color = '#94A3B8';
+        this.errorTextEl.textContent = 'No se pudo cargar la imagen';
+
+        this.retryBtn = document.createElement('button');
+        this.retryBtn.type = 'button';
+        this.retryBtn.className = 'veyra-image-retry-btn';
+        this.retryBtn.textContent = 'Reintentar';
+        this.retryBtn.style.padding = '6px 12px';
+        this.retryBtn.style.fontSize = '12px';
+        this.retryBtn.style.fontWeight = '600';
+        this.retryBtn.style.borderRadius = '6px';
+        this.retryBtn.style.border = '1px solid rgba(139, 92, 246, 0.45)';
+        this.retryBtn.style.background = 'rgba(139, 92, 246, 0.14)';
+        this.retryBtn.style.color = '#A78BFA';
+        this.retryBtn.style.cursor = 'pointer';
+
+        const handleRetryTap = (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const rawSrc = this.node?.attrs?.src || this.img?.dataset?.veyraUri || '';
+            if (rawSrc) {
+                delete this.img.dataset.veyraRetried;
+                this.resolveCurrentSrc(rawSrc, true);
+            }
+        };
+        this.retryBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
+        this.retryBtn.addEventListener('click', handleRetryTap);
+
+        this.errorOverlay.appendChild(this.errorTextEl);
+        this.errorOverlay.appendChild(this.retryBtn);
+
+        const onLoad = () => {
+            this.hideErrorState();
+            this.imageWrapper.classList.remove('is-loading');
+            this.img.style.removeProperty('display');
             this.img.style.opacity = '1';
-        }
+        };
+        const onError = () => {
+            const veyraUri = this.img.dataset.veyraUri;
+            if (veyraUri && !this.img.dataset.veyraRetried) {
+                this.img.dataset.veyraRetried = '1';
+                this.resolveCurrentSrc(veyraUri, true);
+                return;
+            }
+            if (veyraUri) {
+                this.showErrorState('No se pudo cargar la imagen');
+            } else {
+                onLoad();
+            }
+        };
+        this.img.addEventListener('load', onLoad);
+        this.img.addEventListener('error', onError);
+
         this.imageWrapper.appendChild(this.img);
+        this.imageWrapper.appendChild(this.errorOverlay);
+
+        this.resolveCurrentSrc(this.node.attrs.src || '', false);
 
         // Píldora indicadora de porcentaje flotante en resize
         this.pill = document.createElement('div');
@@ -447,8 +589,10 @@ export class ImageNodeView {
         this.dom.dataset.editable = String(editable);
         this.dom.classList.toggle('is-readonly', !editable);
 
-        if (this.img.src !== (node.attrs.src || '')) {
-            this.img.src = node.attrs.src || '';
+        const currentRawSrc = this.img.dataset.veyraUri || this.img.getAttribute('src') || '';
+        const nextRawSrc = node.attrs.src || '';
+        if (currentRawSrc !== nextRawSrc) {
+            this.resolveCurrentSrc(nextRawSrc, false);
         }
         if (node.attrs.alt) {
             this.img.alt = node.attrs.alt;
@@ -466,6 +610,49 @@ export class ImageNodeView {
             this.renderCaption();
         }
         return true;
+    }
+
+    showErrorState(errMsg) {
+        if (this.imageWrapper) {
+            this.imageWrapper.classList.remove('is-loading');
+        }
+        if (this.img) {
+            this.img.style.setProperty('display', 'none', 'important');
+        }
+        if (this.errorTextEl && errMsg) {
+            this.errorTextEl.textContent = 'No se pudo cargar la imagen';
+        }
+        if (this.errorOverlay) {
+            this.errorOverlay.style.display = 'flex';
+        }
+    }
+
+    hideErrorState() {
+        if (this.errorOverlay) {
+            this.errorOverlay.style.display = 'none';
+        }
+        if (this.img) {
+            this.img.style.removeProperty('display');
+        }
+    }
+
+    resolveCurrentSrc(rawSrc, forceRefresh = false) {
+        const srcStr = typeof rawSrc === 'string' ? rawSrc : '';
+        this.hideErrorState();
+        if (srcStr.startsWith(VEYRA_SCHEME) || !this.img.complete) {
+            this.imageWrapper.classList.add('is-loading');
+            this.img.style.opacity = '0';
+        } else {
+            this.imageWrapper.classList.remove('is-loading');
+            this.img.style.opacity = '1';
+        }
+
+        applyResolvedImageSrc(this.img, srcStr, forceRefresh, {
+            onError: (errMsg) => {
+                if ((this.img?.dataset?.veyraUri || '') !== srcStr) return;
+                this.showErrorState(errMsg);
+            },
+        });
     }
 
     selectNode() {
@@ -487,10 +674,22 @@ export class ImageNodeView {
     stopEvent(event) {
         const target = event.target;
         if (target) {
-            if (target.closest && (target.closest('.veyra-figcaption-input') || target.closest('.resize-handle'))) {
+            if (
+                target.closest &&
+                (target.closest('.veyra-figcaption-input') ||
+                    target.closest('.resize-handle') ||
+                    target.closest('.veyra-image-error-overlay') ||
+                    target.closest('.veyra-image-retry-btn'))
+            ) {
                 return true;
             }
-            if (target.classList && (target.classList.contains('veyra-figcaption-input') || target.classList.contains('resize-handle'))) {
+            if (
+                target.classList &&
+                (target.classList.contains('veyra-figcaption-input') ||
+                    target.classList.contains('resize-handle') ||
+                    target.classList.contains('veyra-image-error-overlay') ||
+                    target.classList.contains('veyra-image-retry-btn'))
+            ) {
                 return true;
             }
         }

@@ -4,6 +4,7 @@ import { WebView, WebViewMessageEvent } from 'react-native-webview';
 import { getTiptapHtml } from './editor-web/htmlTemplate';
 import { diagLog } from './diagLog';
 import { supabase } from '../lib/supabase';
+import { resolveAttachmentUri } from '../services/attachmentUriResolver';
 
 export interface VeyraTiptapEditorRef {
     applyRemoteUpdate: (base64Update: string, origin?: string) => void;
@@ -1038,6 +1039,30 @@ Responde únicamente con el JSON sin bloques de código markdown alrededor.`;
                         case 'APPLY_UPDATE_ACK':
                             onApplyUpdateAck?.(data.success);
                             break;
+                        case 'RESOLVE_ATTACHMENT_URI': {
+                            const { requestId, uri, forceRefresh } = data;
+                            if (!requestId || !uri) break;
+                            (async () => {
+                                try {
+                                    const signedUrl = await resolveAttachmentUri(uri, {
+                                        forceRefresh: Boolean(forceRefresh),
+                                    });
+                                    executeInWebView(
+                                        `window.__veyraResolveAttachmentCallback && window.__veyraResolveAttachmentCallback(${JSON.stringify(requestId)}, ${JSON.stringify(signedUrl)}, null)`
+                                    );
+                                } catch (err: any) {
+                                    console.warn('[VeyraTiptapYjsEditor] RESOLVE_ATTACHMENT_URI failed:', {
+                                        uri,
+                                        forceRefresh: Boolean(forceRefresh),
+                                        error: err?.message || String(err),
+                                    });
+                                    executeInWebView(
+                                        `window.__veyraResolveAttachmentCallback && window.__veyraResolveAttachmentCallback(${JSON.stringify(requestId)}, null, ${JSON.stringify(err?.message || 'Error')})`
+                                    );
+                                }
+                            })();
+                            break;
+                        }
                         case 'IMAGE_CLICKED':
                             if (data.url) {
                                 onImageClicked?.(data.url, data.rect, data.attrs);

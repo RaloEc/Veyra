@@ -1,0 +1,7 @@
+{
+  "name": "veyra-drive-picker",
+  "version": "0.1.0-poc",
+  "description": "Local Expo module for Android Google Drive Picker OAuth trigger (PoC P4)",
+  "main": "index.ts",
+  "types": "index.ts"
+}

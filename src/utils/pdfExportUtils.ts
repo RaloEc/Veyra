@@ -11,6 +11,7 @@ import {
     DEFAULT_A4_HEADER_FOOTER_CONFIG,
     A4BandConfig,
 } from './a4HeaderFooterUtils';
+import { resolveAttachmentUrisInHtml } from '../services/attachmentUriResolver';
 
 export interface ExportPdfOptions {
     includeHeaderTitle?: boolean;
@@ -505,9 +506,10 @@ export async function exportNoteToPdf(
     pages: NotePage[],
     options?: ExportPdfOptions
 ): Promise<string> {
-    const html = (options && options.customA4Html && options.customA4Html.trim().length > 0)
+    const rawHtml = (options && options.customA4Html && options.customA4Html.trim().length > 0)
         ? options.customA4Html
         : buildPdfHtml(title, pages, options);
+    const html = await resolveAttachmentUrisInHtml(rawHtml).catch(() => rawHtml);
 
     // 1. Generar el PDF mediante expo-print solicitando también el string base64.
     // En Android / Expo Go, la URI generada por Print suele estar en cache/Print/

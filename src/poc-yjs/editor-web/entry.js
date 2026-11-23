@@ -18,6 +18,7 @@ import { CodeBlockLowlight } from '@tiptap/extension-code-block-lowlight';
 import { common, createLowlight } from 'lowlight';
 import { CodeBlockNodeView } from './codeblock-nodeview.js';
 import { CustomImage } from './image-node.js';
+import { applyResolvedImageSrc } from './image-nodeview.js';
 import { createYouTubeNodeView } from './youtube-nodeview.js';
 import { AIPromptNodeView } from './aiprompt-nodeview.js';
 import { BookmarkPromptNodeView } from './bookmarkprompt-nodeview.js';
@@ -1334,7 +1335,7 @@ function initEditor(fragmentName) {
                         right: r.right,
                     };
                 } catch (_) { }
-                sendToNative({ type: 'IMAGE_CLICKED', url: target.src, rect, attrs });
+                sendToNative({ type: 'IMAGE_CLICKED', url: target.dataset?.veyraUri || target.src, rect, attrs });
             } else if (target && target.closest && (target.closest('.veyra-image-wrapper') || target.closest('.veyra-figcaption-container'))) {
                 // Click dentro del wrapper de imagen (handles, píldora) o pie de foto
             } else if (target && target.closest && target.closest('.veyra-youtube-wrapper')) {
@@ -2565,7 +2566,7 @@ window.veyraSetImageSize = function (percentage) {
             const r = selectedImg.getBoundingClientRect();
             sendToNative({
                 type: 'IMAGE_CLICKED',
-                url: selectedImg.src,
+                url: selectedImg.dataset?.veyraUri || selectedImg.src,
                 rect: {
                     x: r.left + (r.width / 2),
                     y: r.top,
@@ -2681,7 +2682,7 @@ window.veyraSetImageAlign = function (align) {
             const r = selectedImg.getBoundingClientRect();
             sendToNative({
                 type: 'IMAGE_CLICKED',
-                url: selectedImg.src,
+                url: selectedImg.dataset?.veyraUri || selectedImg.src,
                 rect: {
                     x: r.left + (r.width / 2),
                     y: r.top,
@@ -3650,6 +3651,17 @@ function getEffectiveZoneHeightPx(config, zone) {
     return Math.max(baseMarginPx, maxImagesBottom);
 }
 
+function resolvePrivateOverlayImages(containerEl) {
+    if (!containerEl) return;
+    const imgs = containerEl.querySelectorAll('img[src^="veyra-attachment://"]');
+    imgs.forEach((imgEl) => {
+        const rawSrc = imgEl.getAttribute('src') || '';
+        if (rawSrc) {
+            applyResolvedImageSrc(imgEl, rawSrc, false);
+        }
+    });
+}
+
 function renderVeyraBandHtml(kind, pageIdx, totalPages, A4_HEIGHT_PX, STRIDE, marginVPx, marginHPx, pmWidth) {
     const pageNumber = pageIdx + 1;
     const band = resolveVeyraPageBand(veyraA4HeaderFooterConfig, kind, pageNumber);
@@ -3817,6 +3829,7 @@ function runVeyraA4Pagination() {
                     renderVeyraBandHtml('footer', 0, 1, 1123, 1159, 95, 113, 794)
                 ];
                 overlayEl.innerHTML = bandsParts.join('');
+                resolvePrivateOverlayImages(overlayEl);
             }
         }
         sendToNative({
@@ -4106,6 +4119,7 @@ function runVeyraA4Pagination() {
                 </div>
             `).join('');
             overlayEl.innerHTML = bandsParts.join('') + breaksHtml;
+            resolvePrivateOverlayImages(overlayEl);
         }
 
         // Calcular metadatos reales de cada hoja física A4 para el Organizador de Hojas móvil

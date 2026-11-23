@@ -27,6 +27,7 @@ import {
     FileText,
     Sun,
     Moon,
+    HardDrive,
 } from '@tamagui/lucide-icons';
 import { useVeyraTheme } from '../../theme/useVeyraTheme';
 import { VeyraSurface } from '../ui/VeyraSurface';
@@ -38,6 +39,8 @@ export interface NoteOptionsMenuProps {
     onViewHistory?: () => void;
     onExportPdf: () => void;
     isExportingPdf?: boolean;
+    onAttachFromDrive?: () => void;
+    isAttachingDrive?: boolean;
     onOpenPagesManager: () => void;
     onOpenFontPicker?: () => void;
     onOpenHeaderFooterModal?: () => void;
@@ -66,6 +69,8 @@ export function NoteOptionsMenu({
     onClose,
     onExportPdf,
     isExportingPdf = false,
+    onAttachFromDrive,
+    isAttachingDrive = false,
     onOpenPagesManager,
     onOpenFontPicker,
     onOpenHeaderFooterModal,
@@ -231,6 +236,30 @@ export function NoteOptionsMenu({
                                 {t('notes.export_pdf', { defaultValue: 'Exportar a PDF' })}
                             </Text>
                         </TouchableOpacity>
+
+                        {/* 1.5 Adjuntar desde Google Drive */}
+                        {onAttachFromDrive && (
+                            <TouchableOpacity
+                                activeOpacity={0.65}
+                                disabled={isAttachingDrive}
+                                onPress={() => {
+                                    onClose();
+                                    onAttachFromDrive();
+                                }}
+                                style={styles.menuRow}
+                            >
+                                <View style={styles.iconSlot}>
+                                    {isAttachingDrive ? (
+                                        <ActivityIndicator size="small" color="#10B981" />
+                                    ) : (
+                                        <HardDrive size={16} color="#10B981" strokeWidth={2.2} />
+                                    )}
+                                </View>
+                                <Text style={[styles.menuLabel, { color: colors.textPrimary }]}>
+                                    {t('notes.attach_from_drive', { defaultValue: 'Adjuntar desde Drive' })}
+                                </Text>
+                            </TouchableOpacity>
+                        )}
 
                         {/* Compartir nota */}
                         {onShare && (
@@ -508,7 +537,7 @@ const styles = StyleSheet.create({
     popoverContainer: {
         position: 'absolute',
         right: 14,
-        width: 198,
+        width: 218,
         shadowColor: '#000',
         shadowOffset: { width: 0, height: 6 },
         shadowOpacity: 0.22,

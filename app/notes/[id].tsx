@@ -128,6 +128,16 @@ import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 import * as Crypto from 'expo-crypto';
 import { registerActiveEditor } from '../../src/services/uploadQueueService';
+import {
+    buildAttachmentUri,
+    isVeyraAttachmentUri,
+    resolveAttachmentUri,
+} from '../../src/services/attachmentUriResolver';
+import {
+    AccountSwitchConfirmationError,
+    humanizeDriveAttachError,
+    pickAndAttachDriveFilesNative,
+} from '../../src/services/googleDriveIntegrationService';
 
 export default function NoteDetailAndEditScreen() {
     const { t } = useTranslation();
@@ -151,6 +161,7 @@ export default function NoteDetailAndEditScreen() {
     const [isOptionsMenuVisible, setIsOptionsMenuVisible] = useState(false);
     const [isFontModalVisible, setIsFontModalVisible] = useState(false);
     const [isExportingPdf, setIsExportingPdf] = useState(false);
+    const [isAttachingDrive, setIsAttachingDrive] = useState(false);
     const [isShareModalVisible, setIsShareModalVisible] = useState(false);
     const [isHistoryModalVisible, setIsHistoryModalVisible] = useState(false);
 
@@ -322,9 +333,38 @@ export default function NoteDetailAndEditScreen() {
         attrs?: { width?: number | null; caption?: string | null; textAlign?: string | null };
     } | null>(null);
     const imageTooltipAnim = useRef(new Animated.Value(0)).current;
+    const fullscreenResolveSeqRef = useRef(0);
+
+    const openFullscreenImage = useCallback(async (rawUrl: string) => {
+        const seq = ++fullscreenResolveSeqRef.current;
+        try {
+            const finalUrl = isVeyraAttachmentUri(rawUrl)
+                ? await resolveAttachmentUri(rawUrl)
+                : rawUrl;
+            if (seq !== fullscreenResolveSeqRef.current) return;
+            setSelectedImageUrl(finalUrl);
+            setTimeout(() => {
+                setIsImageViewerVisible(true);
+            }, 80);
+        } catch (err) {
+            console.warn('[Mobile] Error resolviendo imagen para visor:', err);
+            Alert.alert('Error', 'No se pudo cargar la imagen privada.');
+        }
+    }, []);
 
     const handleImageClicked = useCallback((url: string, rect?: { x: number; y: number; width: number; height: number; top?: number; bottom?: number }, attrs?: { width?: number | null; caption?: string | null; textAlign?: string | null }) => {
-        setSelectedImageUrl(url);
+        const seq = ++fullscreenResolveSeqRef.current;
+        if (!isVeyraAttachmentUri(url)) {
+            setSelectedImageUrl(url);
+        } else {
+            resolveAttachmentUri(url)
+                .then((resolved) => {
+                    if (seq === fullscreenResolveSeqRef.current) {
+                        setSelectedImageUrl(resolved);
+                    }
+                })
+                .catch(() => {});
+        }
         if (rect) {
             setImageCoords({
                 x: rect.x,
@@ -1398,6 +1438,91 @@ export default function NoteDetailAndEditScreen() {
         }, 300);
     };
 
+    const handleAttachFromDrive = useCallback(async (confirmAccountSwitch = false) => {
+        if (isCreating || !id) return;
+        if (!useStore.getState().session?.user) {
+            Alert.alert(
+                'Inicia sesión',
+                'Necesitas iniciar sesión en Veyra para adjuntar archivos desde Google Drive.',
+            );
+            return;
+        }
+        if (isAttachingDrive) return;
+
+        setIsAttachingDrive(true);
+        try {
+            const res = await pickAndAttachDriveFilesNative('note', id, {
+                confirmAccountSwitch,
+            });
+            if (res.cancelled) return;
+
+            if (res.emptySelection) {
+                Alert.alert('Google Drive', 'No se seleccionó ningún archivo en Google Drive.');
+                return;
+            }
+
+            if (res.attachments.length > 0) {
+                if (!isEditMode) {
+                    setIsEditMode(true);
+                    yjsEditorRef.current?.setEditing?.(true);
+                    await new Promise((resolve) => setTimeout(resolve, 140));
+                }
+
+                const escapeHtml = (str: string) =>
+                    str
+                        .replace(/&/g, '&amp;')
+                        .replace(/</g, '&lt;')
+                        .replace(/>/g, '&gt;')
+                        .replace(/"/g, '&quot;');
+
+                for (const att of res.attachments) {
+                    const uri = buildAttachmentUri(att.id);
+                    if (att.mime_type?.toLowerCase().startsWith('image/')) {
+                        yjsEditorRef.current?.insertImage(uri);
+                    } else {
+                        const safeName = escapeHtml(att.name || 'Archivo de Google Drive');
+                        yjsEditorRef.current?.pasteText(
+                            `<p><a href="${uri}" title="${safeName}">📎 ${safeName} (Google Drive)</a></p>`,
+                        );
+                    }
+                    await new Promise((resolve) => setTimeout(resolve, 180));
+                }
+            }
+
+            if (res.errors.length > 0) {
+                const firstErr = humanizeDriveAttachError(res.errors[0]);
+                Alert.alert(
+                    res.attachments.length > 0 ? 'Algunos archivos omitidos' : 'No se pudo adjuntar',
+                    res.errors.length === 1
+                        ? firstErr
+                        : `${res.errors.length} archivo(s) no se pudieron adjuntar: ${firstErr}`,
+                );
+            }
+        } catch (err: any) {
+            if (err instanceof AccountSwitchConfirmationError) {
+                Alert.alert(
+                    '¿Cambiar de cuenta de Google Drive?',
+                    `Tienes ${err.affectedAttachments} adjunto(s) vinculados a ${err.currentEmail || 'tu cuenta anterior'}. Si cambias a ${err.newEmail || 'la nueva cuenta'}, esos adjuntos pasarán a estado no disponible.`,
+                    [
+                        { text: 'Cancelar', style: 'cancel' },
+                        {
+                            text: 'Confirmar cambio',
+                            style: 'destructive',
+                            onPress: () => {
+                                void handleAttachFromDrive(true);
+                            },
+                        },
+                    ],
+                );
+                return;
+            }
+            console.warn('[Notes] Error adjuntando desde Google Drive:', err);
+            Alert.alert('Google Drive', err?.message || 'No se pudo adjuntar desde Google Drive.');
+        } finally {
+            setIsAttachingDrive(false);
+        }
+    }, [id, isCreating, isEditMode, isAttachingDrive]);
+
     const handleExportPdf = async () => {
         try {
             setIsExportingPdf(true);
@@ -2071,20 +2196,29 @@ export default function NoteDetailAndEditScreen() {
                                                     const currentImageUrl = imageCoords.url;
                                                     setImageCoords(null);
 
-                                                    const userId = currentUserId || useStore.getState().session?.user?.id || 'anonymous';
+                                                    const activeNoteId = id && id !== 'create' ? id : undefined;
+                                                    if (!activeNoteId) return;
                                                     const ext = asset.uri.split('.').pop() || 'webp';
                                                     const fileName = `replaced_${Date.now()}.${ext}`;
-                                                    const remotePath = await StorageService.uploadFile(userId, asset.uri, fileName);
-                                                    if (remotePath) {
-                                                        const { data: publicUrlData } = supabase.storage
-                                                            .from('attachments')
-                                                            .getPublicUrl(remotePath);
-                                                        const newUrl = publicUrlData?.publicUrl;
-                                                        if (newUrl) {
-                                                            yjsEditorRef.current?.replaceImageSrc(currentImageUrl, newUrl);
-                                                            if (currentImageUrl && currentImageUrl.includes('attachments')) {
-                                                                StorageService.deleteFile(currentImageUrl).catch(e => console.warn('[Mobile] Error eliminando imagen antigua tras replace:', e));
-                                                            }
+                                                    const uploaded = await StorageService.uploadAttachment(
+                                                        asset.uri,
+                                                        'note',
+                                                        activeNoteId,
+                                                        {
+                                                            fileName,
+                                                            mimeType: asset.mimeType || undefined,
+                                                        }
+                                                    );
+                                                    const newUrl = uploaded.attachment_uri;
+                                                    if (newUrl) {
+                                                        yjsEditorRef.current?.replaceImageSrc(currentImageUrl, newUrl);
+                                                        if (
+                                                            currentImageUrl &&
+                                                            (isVeyraAttachmentUri(currentImageUrl) || currentImageUrl.includes('attachments'))
+                                                        ) {
+                                                            StorageService.deleteFile(currentImageUrl).catch(e =>
+                                                                console.warn('[Mobile] Error eliminando imagen antigua tras replace:', e)
+                                                            );
                                                         }
                                                     }
                                                 } catch (err) {
@@ -2104,9 +2238,12 @@ export default function NoteDetailAndEditScreen() {
                                                 try {
                                                     const currentImageUrl = imageCoords.url;
                                                     setImageCoords(null);
+                                                    const downloadUrl = isVeyraAttachmentUri(currentImageUrl)
+                                                        ? await resolveAttachmentUri(currentImageUrl)
+                                                        : currentImageUrl;
                                                     const dir = FileSystem.cacheDirectory || FileSystem.documentDirectory || '';
                                                     const fileUri = dir + 'image_' + Date.now() + '.webp';
-                                                    await FileSystem.downloadAsync(currentImageUrl, fileUri);
+                                                    await FileSystem.downloadAsync(downloadUrl, fileUri);
                                                     await Sharing.shareAsync(fileUri, { mimeType: 'image/webp' });
                                                 } catch (err) {
                                                     console.warn('[Mobile] Error descargando imagen:', err);
@@ -2124,7 +2261,7 @@ export default function NoteDetailAndEditScreen() {
                                                 const oldUrl = imageCoords.url;
                                                 yjsEditorRef.current?.deleteImage();
                                                 setImageCoords(null);
-                                                if (oldUrl && oldUrl.includes('attachments')) {
+                                                if (oldUrl && (isVeyraAttachmentUri(oldUrl) || oldUrl.includes('attachments'))) {
                                                     StorageService.deleteFile(oldUrl).catch(e => console.warn('[Mobile] Error eliminando imagen de storage:', e));
                                                 }
                                             }}
@@ -2137,11 +2274,9 @@ export default function NoteDetailAndEditScreen() {
                                         <TouchableOpacity
                                             style={styles.floatingMenuBtn}
                                             onPress={() => {
-                                                setSelectedImageUrl(imageCoords.url);
+                                                const targetUrl = imageCoords.url;
                                                 setImageCoords(null);
-                                                setTimeout(() => {
-                                                    setIsImageViewerVisible(true);
-                                                }, 80);
+                                                void openFullscreenImage(targetUrl);
                                             }}
                                             activeOpacity={0.7}
                                         >
@@ -2168,11 +2303,9 @@ export default function NoteDetailAndEditScreen() {
                                         <TouchableOpacity
                                             style={styles.floatingMenuBtn}
                                             onPress={() => {
-                                                setSelectedImageUrl(imageCoords.url);
+                                                const targetUrl = imageCoords.url;
                                                 setImageCoords(null);
-                                                setTimeout(() => {
-                                                    setIsImageViewerVisible(true);
-                                                }, 80);
+                                                void openFullscreenImage(targetUrl);
                                             }}
                                             activeOpacity={0.7}
                                         >
@@ -3258,19 +3391,19 @@ export default function NoteDetailAndEditScreen() {
                                             const netState = await NetInfo.fetch();
                                             const isOnline = Boolean(netState.isConnected && netState.isInternetReachable !== false);
 
-                                            if (isOnline) {
+                                            if (isOnline && id && id !== 'create') {
                                                 try {
-                                                    const userId = currentUserId || useStore.getState().session?.user?.id || 'anonymous';
                                                     const fileName = `img_${Date.now()}.jpg`;
-                                                    const remotePath = await StorageService.uploadFile(userId, result.uri, fileName);
-                                                    if (remotePath) {
-                                                        const { data: publicUrlData } = supabase.storage
-                                                            .from('attachments')
-                                                            .getPublicUrl(remotePath);
-                                                        if (publicUrlData?.publicUrl) {
-                                                            finalUrl = publicUrlData.publicUrl;
+                                                    const uploaded = await StorageService.uploadAttachment(
+                                                        result.uri,
+                                                        'note',
+                                                        id,
+                                                        {
+                                                            fileName,
+                                                            mimeType: 'image/jpeg',
                                                         }
-                                                    }
+                                                    );
+                                                    finalUrl = uploaded.attachment_uri;
                                                 } catch (err) {
                                                     console.warn('[Yjs Image Upload] Error subiendo imagen directa a Supabase:', err);
                                                 }
@@ -3279,6 +3412,11 @@ export default function NoteDetailAndEditScreen() {
                                             if (finalUrl) {
                                                 if (wasReplacingUrl) {
                                                     yjsEditorRef.current?.replaceImageSrc(wasReplacingUrl, finalUrl);
+                                                    if (isVeyraAttachmentUri(wasReplacingUrl) || wasReplacingUrl.includes('attachments')) {
+                                                        StorageService.deleteFile(wasReplacingUrl).catch(e =>
+                                                            console.warn('[Mobile] Error eliminando imagen antigua tras recorte:', e)
+                                                        );
+                                                    }
                                                 } else {
                                                     yjsEditorRef.current?.insertImage(finalUrl);
                                                 }
@@ -3440,6 +3578,8 @@ export default function NoteDetailAndEditScreen() {
                         onClose={() => setIsOptionsMenuVisible(false)}
                         onExportPdf={handleExportPdf}
                         isExportingPdf={isExportingPdf}
+                        onAttachFromDrive={!isCreating && id && canEdit ? () => { void handleAttachFromDrive(false); } : undefined}
+                        isAttachingDrive={isAttachingDrive}
                         onOpenPagesManager={() => setIsPagesModalVisible(true)}
                         onOpenFontPicker={() => setIsFontModalVisible(true)}
                         pageFormat={currentNotePageFormat}

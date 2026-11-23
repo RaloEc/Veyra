@@ -145,6 +145,7 @@ function AppShell({ theme, isAmoled }: { theme: 'dark' | 'light'; isAmoled: bool
                 <Stack.Screen name="confirm/[id]" options={{ presentation: 'fullScreenModal', headerShown: false }} />
                 <Stack.Screen name="join" options={{ presentation: 'modal', animation: 'slide_from_bottom', headerShown: false }} />
                 <Stack.Screen name="collab/[id]" options={{ presentation: 'card', animation: 'slide_from_right', headerShown: false }} />
+                <Stack.Screen name="poc-drive" options={{ presentation: 'card', animation: 'slide_from_right', headerShown: false }} />
             </Stack>
             <StatusBar style={theme === 'dark' || isAmoled ? 'light' : 'dark'} />
         </View>

@@ -43,6 +43,7 @@ import {
     X,
     SlidersHorizontal,
     User,
+    Link2,
 } from '@tamagui/lucide-icons';
 import Constants from 'expo-constants';
 
@@ -52,12 +53,13 @@ import { ACCENT_OPTIONS } from '../src/theme/accentColors';
 import { useVeyraTheme } from '../src/theme/useVeyraTheme';
 import { VeyraIconButton } from '../src/components/ui/VeyraIconButton';
 import { AlarmPermissionsModal } from '../src/components/settings/AlarmPermissionsModal';
+import { GoogleDriveIntegrationsCard } from '../src/components/settings/GoogleDriveIntegrationsCard';
 import { WidgetService } from '../src/services/widgetService';
 import { updateTodayWidget } from '../src/widgets/widgetUpdater';
 import { useNotesStore } from '../src/store/useNotesStore';
 import { useFoldersStore } from '../src/store/useFoldersStore';
 
-type SettingsSection = 'main' | 'notifications' | 'appearance' | 'widgets' | 'cloud' | 'legal';
+type SettingsSection = 'main' | 'notifications' | 'appearance' | 'widgets' | 'cloud' | 'integrations' | 'legal';
 
 export default function SettingsScreen() {
     const router = useRouter();
@@ -224,6 +226,8 @@ export default function SettingsScreen() {
                 return language === 'es' ? 'Widgets de Inicio' : 'Home Widgets';
             case 'cloud':
                 return t('settings.cloud_sync', 'Nube y Cuenta');
+            case 'integrations':
+                return language === 'es' ? 'Integraciones' : 'Integrations';
             case 'legal':
                 return language === 'es' ? 'Información y Legal' : 'Legal & Info';
             default:
@@ -249,6 +253,10 @@ export default function SettingsScreen() {
                 return language === 'es'
                     ? 'Sincronización en la nube y respaldo de recordatorios y notas'
                     : 'Cloud sync and backup for reminders and notes';
+            case 'integrations':
+                return language === 'es'
+                    ? 'Conecta Google Drive para adjuntar archivos sin usar tu cuota de Veyra'
+                    : 'Connect Google Drive to attach files without consuming Veyra quota';
             case 'legal':
                 return language === 'es'
                     ? 'Políticas de privacidad, términos de servicio y versión de Veyra'
@@ -424,6 +432,18 @@ export default function SettingsScreen() {
                                 isLink
                                 onPress={() => setCurrentSection('cloud')}
                             />
+
+                            <RowDivider />
+                            <ModernSettingsRow
+                                icon={Link2}
+                                iconColor="#10B981"
+                                iconBg={isDark ? 'rgba(16, 185, 129, 0.15)' : 'rgba(16, 185, 129, 0.10)'}
+                                title={language === 'es' ? 'Integraciones' : 'Integrations'}
+                                description={language === 'es' ? 'Conectar o desconectar Google Drive' : 'Connect or disconnect Google Drive'}
+                                value="Google Drive"
+                                isLink
+                                onPress={() => setCurrentSection('integrations')}
+                            />
                         </View>
 
                         {/* SECCIÓN: SISTEMA Y EXPERIMENTAL */}
@@ -443,6 +463,18 @@ export default function SettingsScreen() {
                                 value="/poc-yjs"
                                 isLink
                                 onPress={() => router.push('/poc-yjs' as any)}
+                            />
+
+                            <RowDivider />
+                            <ModernSettingsRow
+                                icon={Folder}
+                                iconColor="#3B82F6"
+                                iconBg={isDark ? 'rgba(59, 130, 246, 0.15)' : 'rgba(59, 130, 246, 0.10)'}
+                                title={language === 'es' ? 'PoC Google Drive Picker (P4)' : 'PoC Google Drive Picker (P4)'}
+                                description={language === 'es' ? 'Prueba nativa Identity PICKER_OAUTH_TRIGGER' : 'Native Identity PICKER_OAUTH_TRIGGER test'}
+                                value="/poc-drive"
+                                isLink
+                                onPress={() => router.push('/poc-drive' as any)}
                             />
 
                             <RowDivider />
@@ -1265,6 +1297,11 @@ export default function SettingsScreen() {
                         </View>
                     </>
                 )}
+
+                {/* ══════════════════════════════════════════════════════════════ */}
+                {/* 5b. SUB-PANTALLA: INTEGRACIONES (GOOGLE DRIVE)                 */}
+                {/* ══════════════════════════════════════════════════════════════ */}
+                {currentSection === 'integrations' && <GoogleDriveIntegrationsCard />}
 
                 {/* ══════════════════════════════════════════════════════════════ */}
                 {/* 6. SUB-PANTALLA: INFORMACIÓN Y LEGAL                         */}

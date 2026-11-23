@@ -1,0 +1,19 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'com.ralo.veyra'
+version = '0.1.0-poc'
+
+android {
+  namespace "com.ralo.veyra.picker"
+  defaultConfig {
+    versionCode 1
+    versionName "0.1.0-poc"
+  }
+}
+
+dependencies {
+  implementation("com.google.android.gms:play-services-auth:22.0.0")
+}

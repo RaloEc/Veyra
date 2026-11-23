@@ -17,11 +17,13 @@ import * as Linking from 'expo-linking';
 import { Mail, Lock, ChevronLeft, Eye, EyeOff, User, Shield, AlertCircle } from '@tamagui/lucide-icons';
 
 import { supabase } from '../src/lib/supabase';
+import { signInWithGoogleNative } from '../src/services/googleAuthService';
 import { useStore } from '../src/store/useStore';
 import { useVeyraTheme } from '../src/theme/useVeyraTheme';
 import { VeyraIconButton } from '../src/components/ui/VeyraIconButton';
 import { VeyraButton } from '../src/components/ui/VeyraButton';
 import { VeyraSurface } from '../src/components/ui/VeyraSurface';
+import { GoogleBrandIcon } from '../src/components/ui/GoogleBrandIcon';
 
 export default function RegisterScreen() {
     const router = useRouter();
@@ -34,6 +36,7 @@ export default function RegisterScreen() {
     const [password, setPassword] = useState('');
     const [focusedField, setFocusedField] = useState<'name' | 'email' | 'password' | null>(null);
     const [loading, setLoading] = useState(false);
+    const [googleLoading, setGoogleLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [showPassword, setShowPassword] = useState(false);
 
@@ -92,6 +95,24 @@ export default function RegisterScreen() {
                     ]
                 );
             }
+        }
+    }
+
+    async function signUpWithGoogle() {
+        setGoogleLoading(true);
+        setError(null);
+        try {
+            const res = await signInWithGoogleNative();
+            if (res.cancelled) return;
+            if (!useStore.getState().onboardingCompleted) {
+                router.replace('/onboarding');
+            } else {
+                router.replace('/');
+            }
+        } catch (err: any) {
+            setError(err?.message || t('auth.google_login_error', 'No se pudo continuar con Google.'));
+        } finally {
+            setGoogleLoading(false);
         }
     }
 
@@ -281,8 +302,28 @@ export default function RegisterScreen() {
                             size="lg"
                             label={t('auth.register_btn')}
                             loading={loading}
-                            disabled={loading}
+                            disabled={loading || googleLoading}
                             onPress={signUpWithEmail}
+                        />
+
+                        {/* Divider */}
+                        <View style={styles.oauthDividerRow}>
+                            <View style={[styles.oauthDividerLine, { backgroundColor: colors.borderSubtle }]} />
+                            <Text style={[styles.oauthDividerText, { color: colors.textMuted, fontSize: typography.caption.fontSize }]}>
+                                {t('auth.or_continue_with', 'o continúa con')}
+                            </Text>
+                            <View style={[styles.oauthDividerLine, { backgroundColor: colors.borderSubtle }]} />
+                        </View>
+
+                        {/* Google Button */}
+                        <VeyraButton
+                            variant="secondary"
+                            size="lg"
+                            label={t('auth.continue_with_google', 'Continuar con Google')}
+                            iconLeft={<GoogleBrandIcon size={18} />}
+                            loading={googleLoading}
+                            disabled={loading || googleLoading}
+                            onPress={signUpWithGoogle}
                         />
 
                         {/* Footer */}
@@ -404,8 +445,21 @@ const styles = StyleSheet.create({
         fontWeight: '600',
     },
     interactionZone: {
-        gap: 16,
+        gap: 14,
         paddingTop: 24,
+    },
+    oauthDividerRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 10,
+        marginVertical: 2,
+    },
+    oauthDividerLine: {
+        flex: 1,
+        height: 1,
+    },
+    oauthDividerText: {
+        fontWeight: '600',
     },
     footerRow: {
         flexDirection: 'row',
