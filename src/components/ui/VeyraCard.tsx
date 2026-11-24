@@ -20,7 +20,7 @@ export interface VeyraCardProps {
 
 /**
  * VeyraCard — Tarjeta de contenido sólido con soporte táctil, bordes calibrados
- * y opcionalmente barra lateral indicadora de nivel de control (Normal / Strict / Critical).
+ * y opcionalmente barra lateral indicadora de nivel de control (Normal / Critical).
  */
 export const VeyraCard: React.FC<VeyraCardProps> = ({
     level = 1,

@@ -149,7 +149,6 @@ export default function SettingsScreen() {
 
     const controlLevels = [
         { value: 'normal', label: t('settings.normal', 'Normal'), color: isDark ? '#34D399' : '#059669', badgeBg: isDark ? 'rgba(52, 211, 153, 0.15)' : 'rgba(5, 150, 105, 0.10)' },
-        { value: 'strict', label: t('settings.strict', 'Estricto'), color: isDark ? '#FBBF24' : '#F59E0B', badgeBg: isDark ? 'rgba(251, 191, 36, 0.15)' : 'rgba(245, 158, 11, 0.10)' },
         { value: 'critical', label: t('settings.critical', 'Crítico'), color: isDark ? '#FB7185' : '#E11D48', badgeBg: isDark ? 'rgba(251, 113, 133, 0.15)' : 'rgba(225, 29, 72, 0.10)' },
     ];
 
@@ -642,17 +641,6 @@ export default function SettingsScreen() {
                                         value={getSoundName(soundSettings.normal)}
                                         isLink
                                         onPress={() => router.push({ pathname: '/sounds', params: { level: 'normal' } })}
-                                    />
-                                    <RowDivider />
-                                    <ModernSettingsRow
-                                        icon={Zap}
-                                        iconColor="#F59E0B"
-                                        iconBg={isDark ? 'rgba(245, 158, 11, 0.15)' : 'rgba(245, 158, 11, 0.10)'}
-                                        title={language === 'es' ? 'Tono: Estricto' : 'Ringtone: Strict'}
-                                        description={language === 'es' ? 'Para compromisos importantes' : 'For important commitments'}
-                                        value={getSoundName(soundSettings.strict)}
-                                        isLink
-                                        onPress={() => router.push({ pathname: '/sounds', params: { level: 'strict' } })}
                                     />
                                     <RowDivider />
                                     <ModernSettingsRow

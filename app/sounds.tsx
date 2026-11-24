@@ -12,7 +12,6 @@ import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import {
     AlertOctagon,
-    Zap,
     Bell,
     ChevronLeft,
     Play,
@@ -35,7 +34,7 @@ export default function SoundSelectorScreen() {
     const { t } = useTranslation();
     const router = useRouter();
     const params = useLocalSearchParams();
-    const level = (params.level as 'normal' | 'strict' | 'critical') || 'normal';
+    const level: 'normal' | 'critical' = params.level === 'critical' ? 'critical' : 'normal';
 
     const { soundSettings, setSoundSetting } = useStore();
     const { colors, typography, accent, isDark } = useVeyraTheme();
@@ -70,8 +69,6 @@ export default function SoundSelectorScreen() {
         try {
             const previewVibrationPattern = level === 'critical'
                 ? [0, 600, 250, 600]
-                : level === 'strict'
-                ? [0, 450, 200, 450]
                 : [0, 250, 150, 250];
             try {
                 Vibration.vibrate(previewVibrationPattern, false);
@@ -135,13 +132,6 @@ export default function SoundSelectorScreen() {
                     color: isDark ? '#FB7185' : '#E11D48',
                     label: t('sounds.levels.critical.label'),
                     desc: t('sounds.levels.critical.desc'),
-                };
-            case 'strict':
-                return {
-                    icon: Zap,
-                    color: isDark ? '#FBBF24' : '#F59E0B',
-                    label: t('sounds.levels.strict.label'),
-                    desc: t('sounds.levels.strict.desc'),
                 };
             default:
                 return {

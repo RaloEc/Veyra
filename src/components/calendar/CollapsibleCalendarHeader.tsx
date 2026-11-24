@@ -321,8 +321,7 @@ export function CollapsibleCalendarHeader({
                             const dayItems = remindersByDate.get(dayKey) || [];
 
                             const hasCritical = dayItems.some(r => r.status === 'pending' && r.control_level === 'critical');
-                            const hasStrict = dayItems.some(r => r.status === 'pending' && r.control_level === 'strict');
-                            const hasNormal = dayItems.some(r => r.status === 'pending' && (r.control_level === 'normal' || !r.control_level));
+                            const hasNormal = dayItems.some(r => r.status === 'pending' && r.control_level !== 'critical');
                             const hasCompleted = dayItems.some(r => r.status === 'completed');
 
                             // Comprobar eventos para este día
@@ -372,15 +371,7 @@ export function CollapsibleCalendarHeader({
                                                         ]}
                                                     />
                                                 )}
-                                                {hasStrict && (
-                                                    <View
-                                                        style={[
-                                                            styles.dot,
-                                                            { backgroundColor: isSelected ? '#FFFFFF' : '#F59E0B' },
-                                                        ]}
-                                                    />
-                                                )}
-                                                {hasNormal && !hasCritical && !hasStrict && (
+                                                {hasNormal && !hasCritical && (
                                                     <View
                                                         style={[
                                                             styles.dot,
@@ -388,7 +379,7 @@ export function CollapsibleCalendarHeader({
                                                         ]}
                                                     />
                                                 )}
-                                                {hasCompleted && !hasCritical && !hasStrict && !hasNormal && (
+                                                {hasCompleted && !hasCritical && !hasNormal && (
                                                     <View
                                                         style={[
                                                             styles.dot,

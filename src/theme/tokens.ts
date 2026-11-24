@@ -173,15 +173,6 @@ export const VEYRA_TOKENS = {
                 badgeTextLight: '#334155',
                 dot: '#71717A',
             },
-            strict: {
-                primary: '#F59E0B',
-                primaryDark: '#FBBF24',
-                badgeBgDark: 'rgba(245, 158, 11, 0.14)',
-                badgeTextDark: '#FBBF24',
-                badgeBgLight: 'rgba(245, 158, 11, 0.12)',
-                badgeTextLight: '#B45309',
-                dot: '#F59E0B',
-            },
             critical: {
                 primary: '#E11D48',
                 primaryDark: '#FB7185',
@@ -218,7 +209,7 @@ export const VEYRA_TOKENS = {
 
 export type VeyraRadii = keyof typeof VEYRA_TOKENS.radii;
 export type VeyraSpacing = keyof typeof VEYRA_TOKENS.spacing;
-export type ControlLevelType = 'normal' | 'strict' | 'critical';
+export type ControlLevelType = 'normal' | 'critical';
 
 export interface VeyraPalette {
     bg: string;

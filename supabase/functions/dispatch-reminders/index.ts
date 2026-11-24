@@ -185,16 +185,13 @@ serve(async (req: Request) => {
         : (typeof rem.offset_minutes === 'number' ? rem.offset_minutes : settings.defaultLeadMinutes);
       const leadTriggerMs = rem.due_date_ms - Math.max(0, leadMinutes) * 60 * 1000;
 
-      const level = rem.control_level || 'normal';
+      const level = rem.control_level?.toLowerCase() === 'critical' ? 'critical' : 'normal';
       let attemptType: string | null = null;
 
       if (effectiveDueMs >= lowerBoundMs && effectiveDueMs <= nowMs) {
         const elapsedMs = nowMs - effectiveDueMs;
         attemptType = 'base';
-        if (level === 'strict') {
-          if (elapsedMs >= 30 * 60 * 1000) attemptType = 'strict_2';
-          else if (elapsedMs >= 15 * 60 * 1000) attemptType = 'strict_1';
-        } else if (level === 'critical') {
+        if (level === 'critical') {
           if (elapsedMs >= 25 * 60 * 1000) attemptType = 'critical_5';
           else if (elapsedMs >= 20 * 60 * 1000) attemptType = 'critical_4';
           else if (elapsedMs >= 15 * 60 * 1000) attemptType = 'critical_3';

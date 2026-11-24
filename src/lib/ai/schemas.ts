@@ -6,7 +6,10 @@ import { z } from 'zod';
  */
 
 // Nivel de control para recordatorios
-export const ControlLevelSchema = z.enum(['normal', 'strict', 'critical']);
+export const ControlLevelSchema = z.preprocess(
+  (val) => (typeof val === 'string' && val.toLowerCase() === 'critical' ? 'critical' : 'normal'),
+  z.enum(['normal', 'critical'])
+);
 
 // Tipos de recurrencia soportados en Veyra
 export const RecurrenceTypeSchema = z.enum(['none', 'daily', 'weekly', 'monthly', 'yearly']);

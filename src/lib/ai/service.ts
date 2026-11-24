@@ -616,7 +616,7 @@ ${notesSummary}
 
 REGLAS CRÍTICAS DE EDICIÓN:
 1. NUNCA inventes IDs. Debes usar EXACTAMENTE los IDs [id: ...] presentes en los datos del usuario listados arriba.
-2. Si la orden se refiere a un único recordatorio existente (ej: "cambia la hora de la leche a las 5pm", "haz estricto el recordatorio del médico", "mueve la reunión de Carlos al viernes"):
+2. Si la orden se refiere a un único recordatorio existente (ej: "cambia la hora de la leche a las 5pm", "haz crítico el recordatorio del médico", "mueve la reunión de Carlos al viernes"):
    - action: "update_reminder"
    - targetId: el ID exacto del recordatorio.
    - targetTitle: título actual del recordatorio.
@@ -633,11 +633,11 @@ REGLAS CRÍTICAS DE EDICIÓN:
      * En date: la fecha del evento de referencia.
    - changes: { title?, date?, startTime?, endTime?, location?, description? }
    - summary: resumen breve legible del cambio (ej: "Mover a las 12:00 (después de Clase)").
-4. Si la orden afecta a múltiples elementos (ej: "cambia todos mis recordatorios de mañana para el sábado", "haz todos mis recordatorios estrictos", "pasa los pendientes de hoy a mañana"):
+4. Si la orden afecta a múltiples elementos (ej: "cambia todos mis recordatorios de mañana para el sábado", "haz todos mis recordatorios críticos", "pasa los pendientes de hoy a mañana"):
    - action: "batch_update"
    - targetType: "reminder" | "event"
    - items: lista con cada elemento afectado [{ id, title, currentValue?, newValue?, selected: true }]
-   - changes: los campos modificados comunes a aplicar (ej: { date: "2026-10-03" } o { control_level: "strict" })
+   - changes: los campos modificados comunes a aplicar (ej: { date: "2026-10-03" } o { control_level: "critical" })
    - summary: resumen legible del lote (ej: "Mover 3 recordatorios al sábado").
 5. Si la orden es mover notas a una carpeta (ej: "pon los relacionados con la universidad en mi carpeta Universidad", "mueve la nota de física a Universidad"):
    - action: "move_note"

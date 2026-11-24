@@ -12,7 +12,6 @@ import { expandOccurrences } from './recurrence/recurrenceEngine';
 
 export const DEFAULT_SOUND_SETTINGS = {
     normal: 'ping_brillante.wav',
-    strict: 'buzzer_fabrica.wav',
     critical: 'alarma_fuego.mp3',
 };
 
@@ -65,8 +64,9 @@ export const NotificationService = {
         }
 
         try {
+            const normalizedLevel: ControlLevel = level === 'critical' ? 'critical' : 'normal';
             const soundKey = stripExtension(soundFilename);
-            const channelId = `veyra_${CURRENT_CHANNEL_VERSION}_${level}_${soundKey || 'default'}`;
+            const channelId = `veyra_${CURRENT_CHANNEL_VERSION}_${normalizedLevel}_${soundKey || 'default'}`;
             const soundLabel = getSoundName(soundFilename);
 
             let channelName = 'Normal';
@@ -75,13 +75,7 @@ export const NotificationService = {
             let lightColor = '#3b82f6';
             let bypassDnd = false;
 
-            if (level === 'strict') {
-                channelName = `Estricto (${soundLabel})`;
-                importance = Notifications.AndroidImportance.MAX;
-                vibrationPattern = [0, 600, 300, 600, 300, 600];
-                lightColor = '#f59e0b';
-                bypassDnd = true;
-            } else if (level === 'critical') {
+            if (normalizedLevel === 'critical') {
                 channelName = `Crítico (${soundLabel})`;
                 importance = Notifications.AndroidImportance.MAX;
                 vibrationPattern = [0, 800, 300, 800, 300, 800, 300, 1000];
@@ -104,7 +98,7 @@ export const NotificationService = {
                 enableVibrate: true,
                 enableLights: true,
                 audioAttributes: {
-                    usage: level === 'normal'
+                    usage: normalizedLevel === 'normal'
                         ? Notifications.AndroidAudioUsage.NOTIFICATION
                         : Notifications.AndroidAudioUsage.ALARM,
                     contentType: Notifications.AndroidAudioContentType.SONIFICATION,
@@ -122,7 +116,7 @@ export const NotificationService = {
         }
     },
 
-    async requestPermissions(soundSettings?: { normal?: string; strict?: string; critical?: string }) {
+    async requestPermissions(soundSettings?: { normal?: string; critical?: string }) {
         try {
             console.log('[NotificationService] 📋 Verificando permisos de notificación...');
             const { status: existingStatus } = await Notifications.getPermissionsAsync();
@@ -148,7 +142,7 @@ export const NotificationService = {
                 const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient || (Constants as any).appOwnership === 'expo';
                 if (!isExpoGo) {
                     try {
-                        // Limpiar canales obsoletos (v1, v2, v3, v4, v5) para garantizar configuración limpia
+                        // Limpiar canales obsoletos (v1..v5 y canales strict obsoletos) para garantizar configuración limpia
                         const existingChannels = await Notifications.getNotificationChannelsAsync();
                         for (const ch of existingChannels) {
                             if (
@@ -156,7 +150,8 @@ export const NotificationService = {
                                 ch.id.startsWith('veyra_v2_') ||
                                 ch.id.startsWith('veyra_v3_') ||
                                 ch.id.startsWith('veyra_v4_') ||
-                                ch.id.startsWith('veyra_v5_')
+                                ch.id.startsWith('veyra_v5_') ||
+                                ch.id.includes('_strict_')
                             ) {
                                 console.log(`[NotificationService] 🧹 Eliminando canal obsoleto: ${ch.id}`);
                                 await Notifications.deleteNotificationChannelAsync(ch.id);
@@ -168,7 +163,6 @@ export const NotificationService = {
 
                     const sounds = { ...DEFAULT_SOUND_SETTINGS, ...soundSettings };
                     await this.ensureChannel('normal', sounds.normal);
-                    await this.ensureChannel('strict', sounds.strict);
                     await this.ensureChannel('critical', sounds.critical);
                 }
             }
@@ -229,7 +223,8 @@ export const NotificationService = {
         }
     },
 
-    async scheduleReminderNotification(reminder: Reminder, soundSettings?: { normal?: string; strict?: string; critical?: string }): Promise<string[]> {
+    async scheduleReminderNotification(reminder: Reminder, soundSettings?: { normal?: string; critical?: string }): Promise<string[]> {
+        const level: ControlLevel = reminder.control_level === 'critical' ? 'critical' : 'normal';
         let trigger = reminder.due_date_ms;
         if (reminder.event_id) {
             try {
@@ -248,8 +243,7 @@ export const NotificationService = {
             try {
                 const scheduled = await Notifications.getAllScheduledNotificationsAsync();
                 let slotsNeeded = 1;
-                if (reminder.control_level === 'strict') slotsNeeded += 2;
-                if (reminder.control_level === 'critical') slotsNeeded += 5;
+                if (level === 'critical') slotsNeeded += 5;
 
                 const MAX_SCHEDULED = 60;
                 if (scheduled.length + slotsNeeded > MAX_SCHEDULED) {
@@ -292,32 +286,18 @@ export const NotificationService = {
         }
 
         const sounds = { ...DEFAULT_SOUND_SETTINGS, ...soundSettings };
-        let soundFile = sounds.normal;
-
-        switch (reminder.control_level) {
-            case 'strict':
-                soundFile = sounds.strict;
-                break;
-            case 'critical':
-                soundFile = sounds.critical;
-                break;
-            default:
-                soundFile = sounds.normal;
-                break;
-        }
+        const soundFile = level === 'critical' ? sounds.critical : sounds.normal;
 
         // Crear/obtener canal dinámico en Android para el sonido específico
-        const channelId = await this.ensureChannel(reminder.control_level, soundFile);
+        const channelId = await this.ensureChannel(level, soundFile);
 
         const t = i18n.t.bind(i18n);
         const descriptionBody = stripHtml(reminder.description || '');
 
-        const isPersistent = reminder.control_level === 'strict' || reminder.control_level === 'critical';
+        const isPersistent = level === 'critical';
 
-        const vibrationPattern = reminder.control_level === 'critical'
+        const vibrationPattern = level === 'critical'
             ? [0, 800, 300, 800, 300, 800, 300, 1000]
-            : reminder.control_level === 'strict'
-            ? [0, 600, 300, 600, 300, 600]
             : [0, 300, 200, 300];
 
         const baseContent = {
@@ -331,19 +311,15 @@ export const NotificationService = {
             sound: soundFile, // Usado en iOS
             vibrate: vibrationPattern, // Usado explícitamente en Android
             categoryIdentifier: 'REMINDER_ACTION',
-            priority: reminder.control_level === 'critical'
+            priority: level === 'critical'
                 ? Notifications.AndroidNotificationPriority.MAX
                 : Notifications.AndroidNotificationPriority.HIGH,
-            interruptionLevel: (reminder.control_level === 'critical'
-                ? 'critical'
-                : reminder.control_level === 'strict'
-                ? 'timeSensitive'
-                : 'active') as any,
+            interruptionLevel: (level === 'critical' ? 'critical' : 'active') as any,
             sticky: isPersistent,
             autoDismiss: !isPersistent,
         };
 
-        console.log(`[NotificationService] ⏰ Programando recordatorio "${reminder.title}" [${reminder.control_level.toUpperCase()}] para ${new Date(trigger).toLocaleString()} | Canal: ${channelId} | Sonido: ${soundFile}`);
+        console.log(`[NotificationService] ⏰ Programando recordatorio "${reminder.title}" [${level.toUpperCase()}] para ${new Date(trigger).toLocaleString()} | Canal: ${channelId} | Sonido: ${soundFile}`);
 
         // Programar notificación primaria
         const primaryId = await Notifications.scheduleNotificationAsync({
@@ -357,17 +333,17 @@ export const NotificationService = {
         notificationIds.push(primaryId);
         console.log(`[NotificationService] ✅ Notificación primaria programada: [${primaryId}]`);
 
-        // Repeticiones para niveles Estricto y Crítico (mecanismo de respaldo)
-        if (reminder.control_level === 'strict' || reminder.control_level === 'critical') {
-            const interval = reminder.control_level === 'critical' ? 5 * 60 * 1000 : 15 * 60 * 1000;
-            const repeats = reminder.control_level === 'critical' ? 5 : 2;
+        // Repeticiones para nivel Crítico (mecanismo de respaldo)
+        if (level === 'critical') {
+            const interval = 5 * 60 * 1000;
+            const repeats = 5;
 
             for (let i = 1; i <= repeats; i++) {
                 const followUpId = await Notifications.scheduleNotificationAsync({
                     content: {
                         ...baseContent,
                         body: t('notifications.follow_up_body', {
-                            level: reminder.control_level.toUpperCase(),
+                            level: level.toUpperCase(),
                             title: reminder.title,
                         }),
                     },
@@ -383,7 +359,7 @@ export const NotificationService = {
         }
 
         // Programar en el motor nativo de alarmas exactas (Android AlarmManager) para recordatorios críticos
-        if (reminder.control_level === 'critical' && VeyraAlarm.isAvailable()) {
+        if (level === 'critical' && VeyraAlarm.isAvailable()) {
             try {
                 console.log(`[NotificationService] 🚨 Programando alarma nativa exacta para [${reminder.id}]`);
                 await VeyraAlarm.schedule({
@@ -392,7 +368,7 @@ export const NotificationService = {
                     title: reminder.title,
                     description: descriptionBody,
                     sound: soundFile,
-                    controlLevel: reminder.control_level,
+                    controlLevel: level,
                 });
             } catch (alarmErr) {
                 console.warn('[NotificationService] Falló programación nativa de alarma exacta:', alarmErr);
@@ -483,31 +459,18 @@ export const NotificationService = {
         await Notifications.cancelAllScheduledNotificationsAsync();
     },
 
-    async scheduleImmediateNotification(reminder: Reminder, soundSettings?: { normal?: string; strict?: string; critical?: string }) {
+    async scheduleImmediateNotification(reminder: Reminder, soundSettings?: { normal?: string; critical?: string }) {
+        const level: ControlLevel = reminder.control_level === 'critical' ? 'critical' : 'normal';
         const sounds = { ...DEFAULT_SOUND_SETTINGS, ...soundSettings };
-        let soundFile = sounds.normal;
+        const soundFile = level === 'critical' ? sounds.critical : sounds.normal;
 
-        switch (reminder.control_level) {
-            case 'strict':
-                soundFile = sounds.strict;
-                break;
-            case 'critical':
-                soundFile = sounds.critical;
-                break;
-            default:
-                soundFile = sounds.normal;
-                break;
-        }
-
-        const channelId = await this.ensureChannel(reminder.control_level, soundFile);
+        const channelId = await this.ensureChannel(level, soundFile);
         const t = i18n.t.bind(i18n);
 
-        const isPersistent = reminder.control_level === 'strict' || reminder.control_level === 'critical';
+        const isPersistent = level === 'critical';
 
-        const vibrationPattern = reminder.control_level === 'critical'
+        const vibrationPattern = level === 'critical'
             ? [0, 800, 300, 800, 300, 800, 300, 1000]
-            : reminder.control_level === 'strict'
-            ? [0, 600, 300, 600, 300, 600]
             : [0, 300, 200, 300];
 
         await Notifications.scheduleNotificationAsync({
@@ -521,7 +484,7 @@ export const NotificationService = {
                 sound: soundFile,
                 vibrate: vibrationPattern,
                 categoryIdentifier: 'REMINDER_ACTION',
-                priority: reminder.control_level === 'critical'
+                priority: level === 'critical'
                     ? Notifications.AndroidNotificationPriority.MAX
                     : Notifications.AndroidNotificationPriority.HIGH,
                 sticky: isPersistent,

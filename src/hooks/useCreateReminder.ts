@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { useStore } from '../store/useStore';
-import { ControlLevel, Subtask, CalendarEvent } from '../types/db';
+import { ControlLevel, Subtask, CalendarEvent, normalizeControlLevel } from '../types/db';
 import { TagService } from '../services/TagService';
 import { EventService } from '../services/eventService';
 import { extractHashtags, normalizeTagSlug } from '../utils/hashtagParser';
@@ -142,7 +142,9 @@ export const useCreateReminder = (id?: string, initialDateMs?: number | string) 
 
         return targetDate;
     });
-    const [controlLevel, setControlLevel] = useState<ControlLevel>(() => cachedReminder?.control_level || defaultControlLevel);
+    const [controlLevel, setControlLevel] = useState<ControlLevel>(() =>
+        normalizeControlLevel(cachedReminder?.control_level || defaultControlLevel)
+    );
     const [showPicker, setShowPicker] = useState(false);
     const [recurrenceType, setRecurrenceType] = useState<RecurrenceType>(() => {
         if (!cachedReminder?.repeat_rule) return 'none';
@@ -221,7 +223,7 @@ export const useCreateReminder = (id?: string, initialDateMs?: number | string) 
                 setAttachments(formattedAttachments);
                 setLinks(reminder.links ? JSON.parse(reminder.links) : []);
                 setDate(new Date(reminder.due_date_ms));
-                setControlLevel(reminder.control_level);
+                setControlLevel(normalizeControlLevel(reminder.control_level));
                 setStatus(reminder.status);
                 if (reminder.repeat_rule) {
                     try {

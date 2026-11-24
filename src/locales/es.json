@@ -353,7 +353,7 @@
         "faqs_title": "Preguntas Frecuentes",
         "faqs": {
             "q1": "¿Cómo funcionan los niveles de control?",
-            "a1": "Los niveles de control determinan qué tan insistente es la aplicación con tus recordatorios:\n\n• Normal: Una notificación única.\n• Estricto: Notificación + 2 recordatorios cada 15 minutos.\n• Crítico: Notificación + 5 recordatorios cada 5 minutos con sonido y vibración intensos.",
+            "a1": "Los niveles de control determinan qué tan insistente es la aplicación con tus recordatorios:\n\n• Normal: Una notificación única.\n• Crítico: Notificación + 5 recordatorios cada 5 minutos con alarma a pantalla completa, sonido y vibración intensos.",
             "q2": "¿Puedo desactivar las notificaciones repetidas?",
             "a2": "Sí, puedes cambiar el nivel de control de cualquier recordatorio a \"Normal\" editándolo. También puedes ajustar las configuraciones globales en Ajustes.",
             "q3": "¿Qué pasa si elimino un recordatorio?",
@@ -415,8 +415,8 @@
             },
             "levels": {
                 "title": "Niveles de Control de Alarma",
-                "desc": "Acceso al Nivel Crítico: 10 reintentos cada 5 min para tareas de vida o muerte.",
-                "free": "Normal y Estricto",
+                "desc": "Acceso al Nivel Crítico: alarma continua y 5 reintentos cada 5 min para tareas urgentes.",
+                "free": "Normal y Crítico",
                 "pro": "Crítico"
             },
             "stats": {

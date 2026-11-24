@@ -113,8 +113,6 @@ export default function CreateScreen() {
         switch (controlLevel) {
             case 'critical':
                 return isDark ? '#FB7185' : '#EF4444';
-            case 'strict':
-                return isDark ? '#FBBF24' : '#F59E0B';
             case 'normal':
             default:
                 return isDark ? '#94A3B8' : '#64748B';
@@ -125,8 +123,6 @@ export default function CreateScreen() {
         switch (controlLevel) {
             case 'critical':
                 return t('create.priority.critical.label', { defaultValue: 'Crítico' });
-            case 'strict':
-                return t('create.priority.strict.label', { defaultValue: 'Estricto' });
             case 'normal':
             default:
                 return t('create.priority.normal.label', { defaultValue: 'Normal' });

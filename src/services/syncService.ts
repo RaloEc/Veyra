@@ -1,7 +1,7 @@
 import NetInfo from '@react-native-community/netinfo';
 import { supabase } from '../lib/supabase';
 import { getDB, withSerializedTransaction } from '../db';
-import { Reminder, Note, ComplianceEvent, CalendarEvent, Folder } from '../types/db';
+import { Reminder, Note, ComplianceEvent, CalendarEvent, Folder, normalizeControlLevel } from '../types/db';
 import { StorageService } from './storageService';
 import { SearchService } from './searchService';
 import { NotificationService } from './notificationService';
@@ -294,7 +294,7 @@ export const SyncService = {
             // Si es login inicial, restaurar los ajustes desde la nube
             if (remoteProfile) {
                 if (remoteProfile.default_control_level) {
-                    store.setDefaultControlLevel(remoteProfile.default_control_level);
+                    store.setDefaultControlLevel(normalizeControlLevel(remoteProfile.default_control_level));
                 }
                 const authEmail = userData?.email || store.session?.user?.email;
                 const isOwner = isWhitelistedPremiumEmail(authEmail);
@@ -332,7 +332,6 @@ export const SyncService = {
                 }
                 if (metaSettings.soundSettings) {
                     if (metaSettings.soundSettings.normal) store.setSoundSetting('normal', metaSettings.soundSettings.normal);
-                    if (metaSettings.soundSettings.strict) store.setSoundSetting('strict', metaSettings.soundSettings.strict);
                     if (metaSettings.soundSettings.critical) store.setSoundSetting('critical', metaSettings.soundSettings.critical);
                 }
                 if (metaSettings.homeViewMode) {
@@ -353,7 +352,7 @@ export const SyncService = {
         if (!currentStore) return;
         const authEmail = userData?.email || currentStore.session?.user?.email;
         const isOwner = isWhitelistedPremiumEmail(authEmail);
-        const desiredControlLevel = currentStore.defaultControlLevel;
+        const desiredControlLevel = normalizeControlLevel(currentStore.defaultControlLevel);
         const desiredIsPremium = isOwner ? true : (remoteProfile?.is_premium ? true : Boolean(currentStore.isPremium));
         const desiredOnboarding = Boolean(currentStore.onboardingCompleted);
 
@@ -656,7 +655,7 @@ export const SyncService = {
             due_date_ms: local.due_date_ms,
             snooze_until_ms: local.snooze_until_ms || null,
             repeat_rule: parsedRepeatRule,
-            control_level: local.control_level,
+            control_level: normalizeControlLevel(local.control_level),
             priority: local.priority,
             status: local.status,
             next_attempt_ms: local.next_attempt_ms,
@@ -690,7 +689,7 @@ export const SyncService = {
             remote.due_date_ms,
             remote.snooze_until_ms || null,
             remote.repeat_rule ? (typeof remote.repeat_rule === 'string' ? remote.repeat_rule : JSON.stringify(remote.repeat_rule)) : null,
-            remote.control_level,
+            normalizeControlLevel(remote.control_level),
             remote.priority,
             remote.status,
             remote.next_attempt_ms,

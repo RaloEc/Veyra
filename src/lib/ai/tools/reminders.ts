@@ -1,5 +1,6 @@
 import { useStore } from '../../../store/useStore';
 import { ReminderService } from '../../../services/reminderService';
+import { normalizeControlLevel } from '../../../types/db';
 import { ReminderIntentSchema, ReminderIntent } from '../schemas';
 import { combineDateAndTimeToMs } from '../utils/dates';
 import { ToolDefinition } from '../providers/provider';
@@ -16,7 +17,7 @@ export const reminderToolDefinitions: ToolDefinition[] = [
         time: { type: 'string', description: 'Hora en formato HH:MM (opcional)' },
         controlLevel: {
           type: 'string',
-          enum: ['normal', 'strict', 'critical'],
+          enum: ['normal', 'critical'],
           description: 'Nivel de control y alarma de Veyra',
         },
         recurrence: {
@@ -93,7 +94,7 @@ export async function executeReminderTool(
       if (changes.title) updates.title = changes.title;
       if (changes.description !== undefined) updates.description = changes.description;
       if (changes.control_level || changes.controlLevel) {
-        updates.control_level = changes.control_level || changes.controlLevel;
+        updates.control_level = normalizeControlLevel(changes.control_level || changes.controlLevel);
       }
       if (changes.repeat_rule || changes.repeatRule) {
         updates.repeat_rule = changes.repeat_rule || changes.repeatRule;
@@ -132,7 +133,7 @@ export async function executeReminderTool(
         if (changes.title) updates.title = changes.title;
         if (changes.description !== undefined) updates.description = changes.description;
         if (changes.control_level || changes.controlLevel) {
-          updates.control_level = changes.control_level || changes.controlLevel;
+          updates.control_level = normalizeControlLevel(changes.control_level || changes.controlLevel);
         }
         if (changes.due_date_ms) {
           updates.due_date_ms = changes.due_date_ms;

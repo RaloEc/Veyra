@@ -31,15 +31,6 @@ export function useVeyraTheme() {
                 hasSideBar: true,
             };
         }
-        if (lvl === 'strict') {
-            return {
-                main: isDark ? VEYRA_TOKENS.colors.semantics.strict.primaryDark : VEYRA_TOKENS.colors.semantics.strict.primary,
-                bg: isDark ? VEYRA_TOKENS.colors.semantics.strict.badgeBgDark : VEYRA_TOKENS.colors.semantics.strict.badgeBgLight,
-                text: isDark ? VEYRA_TOKENS.colors.semantics.strict.badgeTextDark : VEYRA_TOKENS.colors.semantics.strict.badgeTextLight,
-                dot: isDark ? VEYRA_TOKENS.colors.semantics.strict.primaryDark : VEYRA_TOKENS.colors.semantics.strict.dot,
-                hasSideBar: true,
-            };
-        }
         return {
             main: isDark ? '#71717A' : '#94A3B8',
             bg: isDark ? VEYRA_TOKENS.colors.semantics.normal.badgeBgDark : VEYRA_TOKENS.colors.semantics.normal.badgeBgLight,

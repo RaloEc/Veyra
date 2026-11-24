@@ -53,8 +53,7 @@ export function DailyBriefingCard() {
 
     const totalToday = todayReminders.length + todayCompleted.length;
     const criticalCount = todayReminders.filter(r => r.control_level === 'critical').length;
-    const strictCount = todayReminders.filter(r => r.control_level === 'strict').length;
-    const normalCount = todayReminders.filter(r => r.control_level === 'normal').length;
+    const normalCount = todayReminders.filter(r => r.control_level !== 'critical').length;
 
     const progressPercent = totalToday > 0 ? Math.round((todayCompleted.length / totalToday) * 100) : 100;
 

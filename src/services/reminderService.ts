@@ -1,5 +1,5 @@
 import { getDB, withDB } from '../db';
-import { Reminder, ReminderStatus, ControlLevel } from '../types/db';
+import { Reminder, ReminderStatus, ControlLevel, normalizeControlLevel } from '../types/db';
 import * as Crypto from 'expo-crypto';
 import { updateTodayWidget } from '../widgets/widgetUpdater';
 
@@ -61,8 +61,9 @@ export const ReminderService = {
         const now = Date.now();
 
         // Map control level to priority (simple logic for now)
-        const priorityMap = { normal: 0, strict: 1, critical: 2 };
-        const priority = priorityMap[controlLevel];
+        const normalizedLevel = normalizeControlLevel(controlLevel);
+        const priorityMap = { normal: 0, critical: 2 };
+        const priority = priorityMap[normalizedLevel];
 
         const newReminder: Reminder = {
             id,
@@ -70,12 +71,12 @@ export const ReminderService = {
             title,
             description,
             due_date_ms: dueDate,
-            control_level: controlLevel,
+            control_level: normalizedLevel,
             priority,
             status: 'pending',
             next_attempt_ms: dueDate,
             retry_count: 0,
-            max_retries: controlLevel === 'critical' ? 10 : 3,
+            max_retries: normalizedLevel === 'critical' ? 10 : 3,
             last_modified_ms: now,
             deleted: 0,
             repeat_rule: repeatRule,
@@ -89,7 +90,7 @@ export const ReminderService = {
         await db.runAsync(
             `INSERT INTO reminders (id, user_id, title, description, due_date_ms, control_level, priority, status, next_attempt_ms, retry_count, max_retries, last_modified_ms, deleted, repeat_rule, attachments, links, subtasks, event_id, offset_minutes)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [id, newReminder.user_id, title, description || null, dueDate, controlLevel, priority, 'pending', dueDate, 0, newReminder.max_retries, now, 0, repeatRule || null, attachments || null, links || null, subtasks || null, eventId || null, offsetMinutes !== undefined ? offsetMinutes : null]
+            [id, newReminder.user_id, title, description || null, dueDate, normalizedLevel, priority, 'pending', dueDate, 0, newReminder.max_retries, now, 0, repeatRule || null, attachments || null, links || null, subtasks || null, eventId || null, offsetMinutes !== undefined ? offsetMinutes : null]
         );
 
         triggerWidgetSync();

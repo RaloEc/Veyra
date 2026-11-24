@@ -213,8 +213,7 @@ export function MonthCalendarView({ onSelectReminder }: MonthCalendarViewProps) 
 
                         // Categorización de puntos indicadores
                         const hasCritical = dayItems.some(r => r.status === 'pending' && r.control_level === 'critical');
-                        const hasStrict = dayItems.some(r => r.status === 'pending' && r.control_level === 'strict');
-                        const hasNormal = dayItems.some(r => r.status === 'pending' && r.control_level === 'normal');
+                        const hasNormal = dayItems.some(r => r.status === 'pending' && r.control_level !== 'critical');
                         const hasCompleted = dayItems.some(r => r.status === 'completed');
 
                         return (
@@ -260,15 +259,7 @@ export function MonthCalendarView({ onSelectReminder }: MonthCalendarViewProps) 
                                                     ]}
                                                 />
                                             )}
-                                            {hasStrict && !hasCritical && (
-                                                <View
-                                                    style={[
-                                                        styles.dot,
-                                                        { backgroundColor: isSelected ? '#ffffff' : (isDark ? '#FBBF24' : '#F59E0B') },
-                                                    ]}
-                                                />
-                                            )}
-                                            {hasNormal && (!hasCritical || !hasStrict) && (
+                                            {hasNormal && !hasCritical && (
                                                 <View
                                                     style={[
                                                         styles.dot,
@@ -276,7 +267,7 @@ export function MonthCalendarView({ onSelectReminder }: MonthCalendarViewProps) 
                                                     ]}
                                                 />
                                             )}
-                                            {hasCompleted && !hasCritical && !hasStrict && !hasNormal && (
+                                            {hasCompleted && !hasCritical && !hasNormal && (
                                                 <View
                                                     style={[
                                                         styles.dot,

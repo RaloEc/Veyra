@@ -6,7 +6,7 @@ let dbPromise: Promise<SQLite.SQLiteDatabase> | null = null;
 let dbInitPromise: Promise<void> | null = null;
 let txQueue: Promise<any> = Promise.resolve();
 
-const TARGET_DB_VERSION = 4;
+const TARGET_DB_VERSION = 5;
 
 /**
  * Serializa transacciones SQLite para evitar que múltiples tareas en segundo plano
@@ -584,6 +584,7 @@ export const initDatabase = async (force = false): Promise<void> => {
           UPDATE notes SET user_id = shared_owner_id WHERE is_shared = 1 AND shared_owner_id IS NOT NULL AND user_id != shared_owner_id;
           UPDATE reminders SET user_id = shared_owner_id WHERE is_shared = 1 AND shared_owner_id IS NOT NULL AND user_id != shared_owner_id;
           UPDATE folders SET user_id = shared_owner_id WHERE is_shared = 1 AND shared_owner_id IS NOT NULL AND user_id != shared_owner_id;
+          UPDATE reminders SET control_level = 'normal', priority = 0 WHERE LOWER(COALESCE(control_level, '')) IN ('strict', 'gentle');
         `);
       } catch {}
 

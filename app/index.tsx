@@ -591,7 +591,6 @@ const AgendaReminderRow = React.memo(function AgendaReminderRow({
 }: AgendaReminderRowProps) {
     const risk = calculateRiskInfo(item.due_date_ms, now, isDark, colors.textSecondary);
     const isCritical = item.control_level === 'critical';
-    const isStrict = item.control_level === 'strict';
 
     const { subtasksList, completedSubtasks } = useMemo(() => {
         if (!item.subtasks) return { subtasksList: [], completedSubtasks: 0 };
@@ -761,9 +760,7 @@ const AgendaReminderRow = React.memo(function AgendaReminderRow({
 
     const priorityColor = isCritical
         ? (isDark ? '#FB7185' : '#E11D48')
-        : isStrict
-            ? '#FB923C'
-            : (isDark ? 'rgba(255, 255, 255, 0.2)' : 'rgba(0, 0, 0, 0.15)');
+        : (isDark ? 'rgba(255, 255, 255, 0.2)' : 'rgba(0, 0, 0, 0.15)');
 
     return (
         <Reanimated.View
@@ -1934,13 +1931,6 @@ export default function HomeScreen() {
 
     const getSeverityConfig = (level?: string) => {
         switch (level?.toLowerCase()) {
-            case 'strict':
-                return {
-                    label: language === 'es' ? 'Strict' : 'Strict',
-                    color: '#FB923C',
-                    bg: isDark ? '#432316' : '#FFEDD5',
-                    border: isDark ? 'rgba(251, 146, 60, 0.25)' : 'rgba(251, 146, 60, 0.4)',
-                };
             case 'critical':
                 return {
                     label: language === 'es' ? 'Critical' : 'Critical',

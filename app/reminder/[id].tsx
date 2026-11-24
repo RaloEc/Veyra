@@ -680,7 +680,9 @@ export default function ReminderDetailScreen() {
                                 <View style={[styles.controlPill, { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.06)' : 'rgba(0, 0, 0, 0.05)' }]}>
                                     <View style={[styles.controlDot, { backgroundColor: controlColor.main }]} />
                                     <Text style={[styles.controlPillText, { color: colors.textSecondary }]}>
-                                        {reminder.control_level ? (language === 'es' ? (reminder.control_level === 'critical' ? 'Crítico' : reminder.control_level === 'strict' ? 'Estricto' : 'Normal') : reminder.control_level.charAt(0).toUpperCase() + reminder.control_level.slice(1)) : 'Normal'}
+                                        {reminder.control_level === 'critical'
+                                            ? (language === 'es' ? 'Crítico' : 'Critical')
+                                            : (language === 'es' ? 'Normal' : 'Normal')}
                                     </Text>
                                 </View>
 

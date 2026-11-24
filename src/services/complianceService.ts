@@ -12,7 +12,6 @@ export interface WeeklyActivity {
 
 export interface LevelDistribution {
     normal: { total: number; completed: number; failed: number; rate: number };
-    strict: { total: number; completed: number; failed: number; rate: number };
     critical: { total: number; completed: number; failed: number; rate: number };
 }
 
@@ -204,21 +203,18 @@ export const ComplianceService = {
 
         const levelDistribution: LevelDistribution = {
             normal: { total: 0, completed: 0, failed: 0, rate: 0 },
-            strict: { total: 0, completed: 0, failed: 0, rate: 0 },
             critical: { total: 0, completed: 0, failed: 0, rate: 0 },
         };
 
         levelData.forEach(r => {
-            const level = r.control_level as keyof LevelDistribution;
-            if (levelDistribution[level]) {
-                levelDistribution[level].total++;
-                if (r.status === 'completed') levelDistribution[level].completed++;
-                if (r.status === 'failed') levelDistribution[level].failed++;
-            }
+            const level: keyof LevelDistribution = r.control_level === 'critical' ? 'critical' : 'normal';
+            levelDistribution[level].total++;
+            if (r.status === 'completed') levelDistribution[level].completed++;
+            if (r.status === 'failed') levelDistribution[level].failed++;
         });
 
         // Calculate rates
-        (['normal', 'strict', 'critical'] as const).forEach(level => {
+        (['normal', 'critical'] as const).forEach(level => {
             const l = levelDistribution[level];
             const decidedTotal = l.completed + l.failed;
             l.rate = decidedTotal > 0 ? (l.completed / decidedTotal) * 100 : 0;
@@ -370,7 +366,7 @@ export const ComplianceService = {
         }
 
         // Level compliance comparison
-        const levels = ['normal', 'strict', 'critical'] as const;
+        const levels = ['normal', 'critical'] as const;
         const ratedLevels = levels
             .filter(l => (levelDistribution[l].completed + levelDistribution[l].failed) >= 2)
             .sort((a, b) => levelDistribution[b].rate - levelDistribution[a].rate);

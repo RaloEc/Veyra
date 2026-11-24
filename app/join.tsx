@@ -386,8 +386,8 @@ export default function JoinScreen() {
                                             remoteReminder.due_date_ms,
                                             remoteReminder.snooze_until_ms || null,
                                             remoteReminder.repeat_rule || null,
-                                            remoteReminder.control_level || 'NORMAL',
-                                            remoteReminder.priority || 1,
+                                            remoteReminder.control_level?.toLowerCase() === 'critical' ? 'critical' : 'normal',
+                                            remoteReminder.control_level?.toLowerCase() === 'critical' ? 2 : 0,
                                             'pending',
                                             remoteReminder.next_attempt_ms || remoteReminder.due_date_ms,
                                             now,
@@ -404,7 +404,7 @@ export default function JoinScreen() {
                                 const now = Date.now();
                                 await db.runAsync(
                                     `INSERT OR REPLACE INTO reminders (id, user_id, title, due_date_ms, control_level, priority, status, next_attempt_ms, retry_count, max_retries, created_at_ms, last_modified_ms, deleted, is_shared, shared_owner_id)
-                                     VALUES (?, ?, ?, ?, 'NORMAL', 1, 'pending', ?, 0, 3, ?, ?, 0, 1, ?)`,
+                                     VALUES (?, ?, ?, ?, 'normal', 0, 'pending', ?, 0, 3, ?, ?, 0, 1, ?)`,
                                     [item.target_id, invitation.owner_id, item.target_name || 'Recordatorio compartido', now + 3600000, now + 3600000, now, now, invitation.owner_id]
                                 );
                             }

@@ -353,7 +353,7 @@
         "faqs_title": "Frequently Asked Questions",
         "faqs": {
             "q1": "How do control levels work?",
-            "a1": "Control levels determine how persistent the app is with your reminders:\n\n• Normal: A single notification.\n• Strict: Notification + 2 reminders every 15 minutes.\n• Critical: Notification + 5 reminders every 5 minutes with intense sound and vibration.",
+            "a1": "Control levels determine how persistent the app is with your reminders:\n\n• Normal: A single notification.\n• Critical: Notification + 5 reminders every 5 minutes with full-screen alarm, intense sound and vibration.",
             "q2": "Can I disable repeated notifications?",
             "a2": "Yes, you can change the control level of any reminder to \"Normal\" by editing it. You can also adjust global settings in Settings.",
             "q3": "What happens if I delete a reminder?",
@@ -415,8 +415,8 @@
             },
             "levels": {
                 "title": "Alarm Control Levels",
-                "desc": "Access to Critical Level: 10 retries every 5 min for life-or-death tasks.",
-                "free": "Normal & Strict",
+                "desc": "Access to Critical Level: continuous alarm and 5 retries every 5 min for urgent tasks.",
+                "free": "Normal & Critical",
                 "pro": "Critical"
             },
             "stats": {

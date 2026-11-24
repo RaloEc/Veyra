@@ -1,4 +1,6 @@
-export type ControlLevel = 'normal' | 'strict' | 'critical';
+export type ControlLevel = 'normal' | 'critical';
+export const normalizeControlLevel = (raw?: string | null): ControlLevel =>
+    raw?.toLowerCase() === 'critical' ? 'critical' : 'normal';
 export type ReminderStatus = 'pending' | 'completed' | 'failed' | 'snoozed';
 
 export interface Subtask {

@@ -8,6 +8,7 @@ import { useNotesStore } from '../store/useNotesStore';
 import { useFoldersStore } from '../store/useFoldersStore';
 import { useEventsStore } from '../store/useEventsStore';
 import Constants from 'expo-constants';
+import { normalizeControlLevel } from '../types/db';
 
 class RealtimeServiceManager {
     private channel: RealtimeChannel | null = null;
@@ -160,7 +161,7 @@ class RealtimeServiceManager {
                         const s = payload.settings;
                         if (s.accentTheme) useStore.getState().setAccentTheme(s.accentTheme, true);
                         if (s.theme) useStore.getState().setTheme(s.theme);
-                        if (s.defaultControlLevel) useStore.getState().setDefaultControlLevel(s.defaultControlLevel);
+                        if (s.defaultControlLevel) useStore.getState().setDefaultControlLevel(normalizeControlLevel(s.defaultControlLevel));
                         if (s.userName) useStore.getState().setUserName(s.userName);
                         if (s.notePageFormat) useStore.getState().setNotePageFormat(s.notePageFormat);
                     }

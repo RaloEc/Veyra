@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, Modal, Pressable, Platform } from 'react-native';
 import { useTranslation } from 'react-i18next';
-import { Bell, AlertCircle, ShieldAlert, ChevronDown, Check, X } from '@tamagui/lucide-icons';
+import { Bell, ShieldAlert, ChevronDown, Check, X } from '@tamagui/lucide-icons';
 import { ControlLevel } from '../../types/db';
 import { useVeyraTheme } from '../../theme/useVeyraTheme';
 import { VeyraSurface } from '../ui/VeyraSurface';
@@ -14,7 +14,7 @@ interface PrioritySelectorProps {
 }
 
 /**
- * PrioritySelector — Selector de nivel de control (Normal, Strict, Critical)
+ * PrioritySelector — Selector de nivel de control (Normal, Critical)
  */
 export function PrioritySelector({ controlLevel, setControlLevel, flat }: PrioritySelectorProps) {
     const { t } = useTranslation();
@@ -28,13 +28,6 @@ export function PrioritySelector({ controlLevel, setControlLevel, flat }: Priori
             icon: Bell,
             color: colors.textSecondary,
             descKey: 'create.priority.normal.desc',
-        },
-        {
-            key: 'strict',
-            label: t('create.priority.strict.label'),
-            icon: AlertCircle,
-            color: isDark ? '#FBBF24' : '#F59E0B',
-            descKey: 'create.priority.strict.desc',
         },
         {
             key: 'critical',

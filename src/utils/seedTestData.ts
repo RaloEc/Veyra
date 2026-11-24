@@ -10,7 +10,7 @@ import { useFoldersStore } from '../store/useFoldersStore';
  * que aprovecha todas las funcionalidades construidas en Veyra:
  * - Carpetas temáticas personalizadas con iconos Lucide y colores (fijadas y generales)
  * - Notas con formato enriquecido (organizadas en carpetas, fijadas y sin carpeta)
- * - Recordatorios con todos los niveles de control (normal, strict, critical)
+ * - Recordatorios con los niveles de control (normal, critical)
  * - Subtareas interactivas (pendientes y completadas)
  * - Eventos a lo largo de todo el mes para nutrir el calendario interactivo
  */
@@ -167,16 +167,16 @@ export async function seedTestData() {
         subtasks1
     );
 
-    // 2. Recordatorio Hoy (Estricto a las 11:30)
-    const todayStrict = new Date(currentYear, currentMonth, currentDay, 11, 30, 0);
+    // 2. Recordatorio Hoy (Normal a las 11:30)
+    const todayMeeting = new Date(currentYear, currentMonth, currentDay, 11, 30, 0);
     const subtasks2 = JSON.stringify([
         { id: 'st-4', title: 'Revisar orden del día y prioridades', completed: true },
         { id: 'st-5', title: 'Asignar responsables por bloque técnico', completed: false },
     ]);
     await ReminderService.createReminder(
         'Reunión de planificación semanal',
-        todayStrict.getTime(),
-        'strict',
+        todayMeeting.getTime(),
+        'normal',
         'local_user',
         '<p>Alinear objetivos del sprint y resolver bloqueos técnicos pendientes.</p>',
         undefined,
@@ -223,7 +223,7 @@ export async function seedTestData() {
     await ReminderService.createReminder(
         'Renovación de suscripción del servidor',
         yesterdayDate.getTime(),
-        'strict',
+        'normal',
         'local_user',
         '<p>Confirmar que el débito automático se procesó correctamente.</p>',
         undefined,
@@ -237,7 +237,7 @@ export async function seedTestData() {
     await ReminderService.createReminder(
         'Mantenimiento preventivo del vehículo',
         day5.getTime(),
-        'strict',
+        'normal',
         'local_user',
         '<p>Cambio de aceite, filtro y revisión de frenos.</p>'
     );

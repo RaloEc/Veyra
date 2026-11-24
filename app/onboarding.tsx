@@ -4,7 +4,7 @@ import { useRouter } from 'expo-router';
 import { useStore } from '../src/store/useStore';
 import { NotificationService } from '../src/services/notificationService';
 import { ControlLevel } from '../src/types/db';
-import { ArrowLeft, Sun, Moon, Zap, Shield, Flame, Bell, Cloud, ChevronRight, ArrowRight, ShieldAlert } from '@tamagui/lucide-icons';
+import { ArrowLeft, Sun, Moon, Zap, Flame, Bell, Cloud, ChevronRight, ArrowRight, ShieldAlert } from '@tamagui/lucide-icons';
 import { Dimensions, TouchableOpacity, StyleSheet, Alert, Platform, ScrollView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -122,14 +122,6 @@ const Step1_Control = ({ selected, onSelect }: { selected: string | null; onSele
             Icon: Zap,
             colorToken: '$green10',
             bgToken: '$green2',
-        },
-        {
-            id: 'strict',
-            label: t('onboarding.step1.levels.strict.label'),
-            sub: t('onboarding.step1.levels.strict.sub'),
-            Icon: Shield,
-            colorToken: '$blue10',
-            bgToken: '$blue2',
         },
         {
             id: 'critical',

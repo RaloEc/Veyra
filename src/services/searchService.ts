@@ -168,7 +168,6 @@ export const SearchService = {
             reminder.repeat_rule ? 'recurrente' : '',
             reminder.status === 'completed' ? 'completado hecho finalizado' : 'pendiente activo',
             reminder.control_level === 'critical' ? 'critico urgente vital' : '',
-            reminder.control_level === 'strict' ? 'estricto importante' : '',
         ].filter(Boolean);
 
         const keywords = keywordsArr.join(' ');

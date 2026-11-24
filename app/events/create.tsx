@@ -50,7 +50,6 @@ import {
     Tag as TagIcon,
     Sun,
     ShieldAlert,
-    AlertCircle,
     Folder as FolderIcon,
     FolderPlus,
 } from '@tamagui/lucide-icons';
@@ -93,14 +92,6 @@ const CONTROL_LEVELS: { key: ControlLevel; label: string; shortDesc: string; ico
         icon: Bell,
         color: '#64748B',
         desc: 'Notificación estándar. Ideal para clases, reuniones y eventos habituales.',
-    },
-    {
-        key: 'strict',
-        label: 'Estricto',
-        shortDesc: 'Insistente',
-        icon: AlertCircle,
-        color: '#F59E0B',
-        desc: 'Alarma persistente. Te avisará insistentemente antes del evento.',
     },
     {
         key: 'critical',

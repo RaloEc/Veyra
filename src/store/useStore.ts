@@ -12,7 +12,7 @@ import { SyncService, registerSyncStoreHandlers } from '../services/syncService'
 import { TagService, registerTagsChangedListener } from '../services/TagService';
 import { supabase } from '../lib/supabase';
 import { parseRepeatRule, getNextRecurrenceDate } from '../utils/recurrence';
-import { Reminder, ControlLevel, ReminderStatus, Tag } from '../types/db';
+import { Reminder, ControlLevel, ReminderStatus, Tag, normalizeControlLevel } from '../types/db';
 import { AccentTheme } from '../theme/accentColors';
 import { defaultLanguage } from '../lib/i18n';
 import { PREMIUM_WHITELIST_EMAILS, isWhitelistedPremiumEmail } from '../constants/premium';
@@ -85,10 +85,9 @@ interface AppState {
     setDefaultControlLevel: (level: ControlLevel) => void;
     soundSettings: {
         normal: string;
-        strict: string;
         critical: string;
     };
-    setSoundSetting: (level: 'normal' | 'strict' | 'critical', sound: string) => void;
+    setSoundSetting: (level: 'normal' | 'critical', sound: string) => void;
     isPremium: boolean;
     setPremium: (status: boolean) => void;
     language: string;
@@ -736,7 +735,7 @@ export const useStore = create<AppState>()(
             },
             setUserAvatar: (avatar) => set({ userAvatar: avatar }),
             defaultControlLevel: 'normal',
-            setDefaultControlLevel: (level: ControlLevel) => set({ defaultControlLevel: level }),
+            setDefaultControlLevel: (level: ControlLevel) => set({ defaultControlLevel: normalizeControlLevel(level) }),
             isHydrated: false,
             session: null,
             setSession: (session) => {
@@ -771,10 +770,9 @@ export const useStore = create<AppState>()(
             setDetailReminder: (reminder) => set({ detailReminder: reminder }),
             soundSettings: {
                 normal: 'ping_brillante.wav',
-                strict: 'buzzer_fabrica.wav',
                 critical: 'alarma_fuego.mp3',
             },
-            setSoundSetting: (level: 'normal' | 'strict' | 'critical', sound: string) => set(state => ({
+            setSoundSetting: (level: 'normal' | 'critical', sound: string) => set(state => ({
                 soundSettings: {
                     ...state.soundSettings,
                     [level]: sound
@@ -948,13 +946,18 @@ export const useStore = create<AppState>()(
             name: 'app-storage',
             version: 2,
             migrate: (persistedState: any, version: number) => {
+                const normalizedLevel = normalizeControlLevel(persistedState?.defaultControlLevel);
                 if (version < 2 || !persistedState) {
                     return {
                         ...persistedState,
+                        defaultControlLevel: normalizedLevel,
                         amoledEnabled: false,
                     };
                 }
-                return persistedState;
+                return {
+                    ...persistedState,
+                    defaultControlLevel: normalizedLevel,
+                };
             },
             storage: createJSONStorage(() => AsyncStorage),
             // Solo persistimos el tema y el onboarding para evitar conflictos de sincronización con SQLite
@@ -988,6 +991,7 @@ export const useStore = create<AppState>()(
                 useStore.setState({
                     isHydrated: true,
                     isSyncing: false,
+                    defaultControlLevel: normalizeControlLevel(state?.defaultControlLevel),
                     userEmail: effectiveEmail,
                     isPremium: isOwner ? true : Boolean(state?.isPremium),
                 });

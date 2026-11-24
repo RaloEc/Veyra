@@ -348,20 +348,17 @@ export default function SearchScreen() {
         switch (type) {
             case 'reminder': {
                 const isCrit = meta.controlLevel === 'critical';
-                const isStrict = meta.controlLevel === 'strict';
                 const isDone = meta.status === 'completed';
                 return {
                     label: isDone
                         ? (language === 'es' ? 'Recordatorio (Hecho)' : 'Reminder (Done)')
                         : (language === 'es' ? 'Recordatorio' : 'Reminder'),
                     icon: Bell,
-                    color: isDone ? '#10B981' : isCrit ? '#EF4444' : isStrict ? '#F59E0B' : accent.primary,
+                    color: isDone ? '#10B981' : isCrit ? '#EF4444' : accent.primary,
                     bg: isDone
                         ? (isDark ? 'rgba(16,185,129,0.18)' : '#D1FAE5')
                         : isCrit
                         ? (isDark ? 'rgba(239,68,68,0.18)' : '#FEE2E2')
-                        : isStrict
-                        ? (isDark ? 'rgba(245,158,11,0.18)' : '#FEF3C7')
                         : (isDark ? `${accent.primary}25` : `${accent.primary}15`),
                 };
             }

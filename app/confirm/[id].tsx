@@ -23,7 +23,6 @@ import {
     Check,
     Clock,
     AlertOctagon,
-    Zap,
     Bell,
     Volume2,
     VolumeX,
@@ -192,12 +191,11 @@ export default function ConfirmScreen() {
     const reminder = reminderFromStore || dbReminder || lastReminderRef.current;
 
     const isCritical = reminder?.control_level === 'critical';
-    const isStrict = reminder?.control_level === 'strict';
 
     const pulseAnim = useRef(new Animated.Value(1)).current;
 
     useEffect(() => {
-        if (isCritical || isStrict) {
+        if (isCritical) {
             const loop = Animated.loop(
                 Animated.sequence([
                     Animated.timing(pulseAnim, {
@@ -215,23 +213,23 @@ export default function ConfirmScreen() {
             loop.start();
             return () => loop.stop();
         }
-    }, [isCritical, isStrict]);
+    }, [isCritical]);
 
     useEffect(() => {
         if (!reminder) return;
-        const soundId = soundSettings[reminder.control_level] || 'alarma_fuego.mp3';
+        const soundId = isCritical
+            ? (soundSettings.critical || 'alarma_fuego.mp3')
+            : (soundSettings.normal || 'ping_brillante.wav');
 
         // Iniciar patrón de vibración según nivel si la vibración está activada
         if (vibrationEnabled ?? true) {
             try {
                 const vibrationPattern = isCritical
                     ? [0, 800, 300, 800, 300, 800, 300, 1000]
-                    : isStrict
-                        ? [0, 600, 300, 600, 300, 600]
-                        : [0, 300, 200, 300];
+                    : [0, 300, 200, 300];
 
-                // Bucle continuo para crítico y estricto, una vez para normal
-                Vibration.vibrate(vibrationPattern, isCritical || isStrict);
+                // Bucle continuo para crítico, una vez para normal
+                Vibration.vibrate(vibrationPattern, isCritical);
             } catch (vibErr) {
                 console.warn('[ConfirmScreen] Error iniciando vibración:', vibErr);
             }
@@ -264,8 +262,8 @@ export default function ConfirmScreen() {
                 if (VeyraAlarm.isAvailable()) {
                     const started = await VeyraAlarm.startAlarmSound(
                         soundId,
-                        isCritical || isStrict,
-                        isCritical || isStrict
+                        isCritical,
+                        isCritical
                     );
                     if (started && !isCancelled) {
                         setIsMuted(false);
@@ -283,7 +281,7 @@ export default function ConfirmScreen() {
                 const playUri = asset?.localUri || asset?.uri;
 
                 const newPlayer = createAudioPlayer(playUri ? { uri: playUri } : source);
-                newPlayer.loop = isCritical || isStrict;
+                newPlayer.loop = isCritical;
                 newPlayer.volume = 1.0;
                 newPlayer.play();
                 activePlayer = newPlayer;
@@ -310,7 +308,7 @@ export default function ConfirmScreen() {
             }
             playerRef.current = null;
         };
-    }, [reminder?.id, reminder?.control_level, isCritical, isStrict]);
+    }, [reminder?.id, reminder?.control_level, isCritical]);
 
     const stopAlarmSound = useCallback(async () => {
         try {
@@ -500,7 +498,7 @@ export default function ConfirmScreen() {
         }
     }, [language]);
 
-    const themeColor = isCritical ? '#E11D48' : isStrict ? '#F59E0B' : '#3B82F6';
+    const themeColor = isCritical ? '#E11D48' : '#3B82F6';
 
     if (!reminder) {
         if (isLoadingDb) {
@@ -582,8 +580,6 @@ export default function ConfirmScreen() {
                     >
                         {isCritical ? (
                             <AlertOctagon size={42} color={themeColor} strokeWidth={2.4} />
-                        ) : isStrict ? (
-                            <Zap size={42} color={themeColor} strokeWidth={2.4} />
                         ) : (
                             <Bell size={42} color={themeColor} strokeWidth={2.4} />
                         )}
@@ -594,8 +590,6 @@ export default function ConfirmScreen() {
                             <Text style={[styles.levelBadgeText, { color: themeColor }]}>
                                 {isCritical
                                     ? (language === 'es' ? 'RECORDATORIO CRÍTICO' : 'CRITICAL REMINDER')
-                                    : isStrict
-                                    ? (language === 'es' ? 'RECORDATORIO ESTRICTO' : 'STRICT REMINDER')
                                     : (language === 'es' ? 'RECORDATORIO' : 'REMINDER')}
                             </Text>
                         </View>
