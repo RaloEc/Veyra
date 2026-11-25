@@ -197,6 +197,9 @@ Deno.serve(async (req: Request) => {
     let tokenData;
     try {
       tokenData = await getFreshDriveAccessToken(adminClient, att.integration_id);
+      if (tokenData.userId !== att.storage_owner_id) {
+        return jsonResponse({ error: "Resource not found" }, 404);
+      }
     } catch (err) {
       if (err instanceof DriveAuthError) {
         return jsonResponse(
