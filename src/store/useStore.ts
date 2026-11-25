@@ -15,9 +15,6 @@ import { parseRepeatRule, getNextRecurrenceDate } from '../utils/recurrence';
 import { Reminder, ControlLevel, ReminderStatus, Tag, normalizeControlLevel } from '../types/db';
 import { AccentTheme } from '../theme/accentColors';
 import { defaultLanguage } from '../lib/i18n';
-import { PREMIUM_WHITELIST_EMAILS, isWhitelistedPremiumEmail } from '../constants/premium';
-
-export { PREMIUM_WHITELIST_EMAILS, isWhitelistedPremiumEmail };
 
 const externalStoreReloaders: Array<() => Promise<any>> = [];
 export function registerExternalStoreReloader(fn: () => Promise<any>) {
@@ -727,10 +724,9 @@ export const useStore = create<AppState>()(
             setUserName: (name) => set({ userName: name }),
             setUserEmail: (email) => {
                 const authenticatedEmail = get().session?.user?.email;
-                const isOwner = isWhitelistedPremiumEmail(authenticatedEmail || email);
                 set({
                     userEmail: email,
-                    isPremium: isOwner ? true : (authenticatedEmail ? get().isPremium : false),
+                    isPremium: authenticatedEmail ? get().isPremium : false,
                 });
             },
             setUserAvatar: (avatar) => set({ userAvatar: avatar }),
@@ -740,7 +736,6 @@ export const useStore = create<AppState>()(
             session: null,
             setSession: (session) => {
                 const email = session?.user?.email ?? null;
-                const isOwner = isWhitelistedPremiumEmail(email);
                 const prevUserId = get().session?.user?.id;
                 const newUserId = session?.user?.id;
                 const sameUser = Boolean(prevUserId && prevUserId === newUserId);
@@ -748,7 +743,7 @@ export const useStore = create<AppState>()(
                     session,
                     userEmail: email,
                     // En TOKEN_REFRESHED / USER_UPDATED del mismo usuario no resetear el estado premium
-                    isPremium: isOwner ? true : (sameUser ? get().isPremium : false),
+                    isPremium: sameUser ? get().isPremium : false,
                 });
 
                 // Registrar push token solo cuando cambia el usuario (login), no en cada evento de auth
@@ -780,9 +775,7 @@ export const useStore = create<AppState>()(
             })),
             isPremium: false,
             setPremium: (status: boolean) => {
-                const authEmail = get().session?.user?.email || get().userEmail;
-                const isOwner = isWhitelistedPremiumEmail(authEmail);
-                set({ isPremium: isOwner ? true : status });
+                set({ isPremium: status });
             },
             language: defaultLanguage,
             setLanguage: (lang: string) => set({ language: lang }),
@@ -987,13 +980,12 @@ export const useStore = create<AppState>()(
                 currentSyncStartTime = 0;
                 const sessionEmail = state?.session?.user?.email;
                 const effectiveEmail = sessionEmail || state?.userEmail || null;
-                const isOwner = isWhitelistedPremiumEmail(sessionEmail || state?.userEmail);
                 useStore.setState({
                     isHydrated: true,
                     isSyncing: false,
                     defaultControlLevel: normalizeControlLevel(state?.defaultControlLevel),
                     userEmail: effectiveEmail,
-                    isPremium: isOwner ? true : Boolean(state?.isPremium),
+                    isPremium: Boolean(state?.isPremium),
                 });
             },
         }

@@ -14,7 +14,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import * as Linking from 'expo-linking';
-import { Mail, Lock, ChevronLeft, Eye, EyeOff, User, Shield, AlertCircle } from '@tamagui/lucide-icons';
+import { Mail, Lock, ChevronLeft, Eye, EyeOff, User, Shield, AlertCircle, Check } from '@tamagui/lucide-icons';
 
 import { supabase } from '../src/lib/supabase';
 import { signInWithGoogleNative } from '../src/services/googleAuthService';
@@ -39,6 +39,8 @@ export default function RegisterScreen() {
     const [googleLoading, setGoogleLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [showPassword, setShowPassword] = useState(false);
+    const [ageVerified, setAgeVerified] = useState(false);
+    const [termsAccepted, setTermsAccepted] = useState(false);
 
     async function signUpWithEmail() {
         const trimmedName = name.trim();
@@ -50,6 +52,10 @@ export default function RegisterScreen() {
         }
         if (password.length < 6) {
             setError(t('auth.password_too_short'));
+            return;
+        }
+        if (!ageVerified || !termsAccepted) {
+            setError(t('auth.consent_required', 'Debes declarar ser mayor de 18 años y aceptar los Términos y la Política de Privacidad.'));
             return;
         }
 
@@ -82,6 +88,16 @@ export default function RegisterScreen() {
             useStore.getState().setCloudSyncEnabled(true);
             if (data?.session) {
                 useStore.getState().setSession(data.session);
+                try {
+                    const { error: consentError } = await supabase.rpc('record_user_consent', {
+                        age_verified: true,
+                    });
+                    if (consentError) {
+                        console.warn('[Register] record_user_consent warning:', consentError);
+                    }
+                } catch (consentErr) {
+                    console.warn('[Register] record_user_consent failed:', consentErr);
+                }
                 router.replace('/onboarding');
             } else {
                 Alert.alert(
@@ -99,6 +115,11 @@ export default function RegisterScreen() {
     }
 
     async function signUpWithGoogle() {
+        if (!ageVerified || !termsAccepted) {
+            setError(t('auth.consent_required', 'Debes declarar ser mayor de 18 años y aceptar los Términos y la Política de Privacidad.'));
+            return;
+        }
+
         setGoogleLoading(true);
         setError(null);
         try {
@@ -272,6 +293,71 @@ export default function RegisterScreen() {
                                 </Text>
                             </View>
 
+                            {/* Consentimientos obligatorios (+18 y Términos) */}
+                            <View style={styles.consentGroup}>
+                                <TouchableOpacity
+                                    style={styles.checkboxRow}
+                                    onPress={() => {
+                                        setAgeVerified((prev) => !prev);
+                                        if (error) setError(null);
+                                    }}
+                                    activeOpacity={0.75}
+                                >
+                                    <View
+                                        style={[
+                                            styles.checkboxBox,
+                                            {
+                                                borderColor: ageVerified ? accent.primary : colors.borderSubtle,
+                                                backgroundColor: ageVerified ? accent.primary : colors.surfaceElevated,
+                                            },
+                                        ]}
+                                    >
+                                        {ageVerified && <Check size={13} color="#FFFFFF" strokeWidth={3} />}
+                                    </View>
+                                    <Text style={[styles.checkboxLabel, { color: colors.textPrimary, fontSize: typography.caption.fontSize }]}>
+                                        {t('auth.age_18_confirm', 'Declaro ser mayor de 18 años.')}
+                                    </Text>
+                                </TouchableOpacity>
+
+                                <TouchableOpacity
+                                    style={styles.checkboxRow}
+                                    onPress={() => {
+                                        setTermsAccepted((prev) => !prev);
+                                        if (error) setError(null);
+                                    }}
+                                    activeOpacity={0.75}
+                                >
+                                    <View
+                                        style={[
+                                            styles.checkboxBox,
+                                            {
+                                                borderColor: termsAccepted ? accent.primary : colors.borderSubtle,
+                                                backgroundColor: termsAccepted ? accent.primary : colors.surfaceElevated,
+                                            },
+                                        ]}
+                                    >
+                                        {termsAccepted && <Check size={13} color="#FFFFFF" strokeWidth={3} />}
+                                    </View>
+                                    <Text style={[styles.checkboxLabel, { color: colors.textSecondary, fontSize: typography.caption.fontSize }]}>
+                                        {t('auth.terms_prefix', 'Acepto los ')}{' '}
+                                        <Text
+                                            style={{ color: accent.primary, fontWeight: '700' }}
+                                            onPress={() => Linking.openURL('https://veyra-lake.vercel.app/terms')}
+                                        >
+                                            {t('auth.terms_link', 'Términos de Servicio')}
+                                        </Text>{' '}
+                                        {t('auth.terms_and', 'y la ')}{' '}
+                                        <Text
+                                            style={{ color: accent.primary, fontWeight: '700' }}
+                                            onPress={() => Linking.openURL('https://veyra-lake.vercel.app/privacy')}
+                                        >
+                                            {t('auth.privacy_link', 'Política de Privacidad')}
+                                        </Text>
+                                        .
+                                    </Text>
+                                </TouchableOpacity>
+                            </View>
+
                             {/* Error Alert */}
                             {error && (
                                 <VeyraSurface
@@ -302,7 +388,7 @@ export default function RegisterScreen() {
                             size="lg"
                             label={t('auth.register_btn')}
                             loading={loading}
-                            disabled={loading || googleLoading}
+                            disabled={loading || googleLoading || !ageVerified || !termsAccepted}
                             onPress={signUpWithEmail}
                         />
 
@@ -322,7 +408,7 @@ export default function RegisterScreen() {
                             label={t('auth.continue_with_google', 'Continuar con Google')}
                             iconLeft={<GoogleBrandIcon size={18} />}
                             loading={googleLoading}
-                            disabled={loading || googleLoading}
+                            disabled={loading || googleLoading || !ageVerified || !termsAccepted}
                             onPress={signUpWithGoogle}
                         />
 
@@ -432,6 +518,29 @@ const styles = StyleSheet.create({
     passwordHintText: {
         fontWeight: '500',
         paddingHorizontal: 2,
+    },
+    consentGroup: {
+        gap: 12,
+        paddingTop: 4,
+    },
+    checkboxRow: {
+        flexDirection: 'row',
+        alignItems: 'flex-start',
+        gap: 10,
+    },
+    checkboxBox: {
+        width: 20,
+        height: 20,
+        borderRadius: 6,
+        borderWidth: 1.5,
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginTop: 1,
+    },
+    checkboxLabel: {
+        flex: 1,
+        lineHeight: 19,
+        fontWeight: '500',
     },
     errorCard: {
         flexDirection: 'row',

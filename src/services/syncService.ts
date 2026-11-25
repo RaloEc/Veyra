@@ -7,7 +7,6 @@ import { SearchService } from './searchService';
 import { NotificationService } from './notificationService';
 import { CollaborationService } from './collaborationService';
 import { WidgetService } from './widgetService';
-import { isWhitelistedPremiumEmail } from '../constants/premium';
 import { notifyTagsChanged } from './TagService';
 import i18n from '../lib/i18n';
 import { computeNotePreviewText } from '../utils/pageUtils';
@@ -296,11 +295,7 @@ export const SyncService = {
                 if (remoteProfile.default_control_level) {
                     store.setDefaultControlLevel(normalizeControlLevel(remoteProfile.default_control_level));
                 }
-                const authEmail = userData?.email || store.session?.user?.email;
-                const isOwner = isWhitelistedPremiumEmail(authEmail);
-                if (isOwner) {
-                    store.setPremium(true);
-                } else if (remoteProfile?.is_premium !== undefined) {
+                if (remoteProfile?.is_premium !== undefined) {
                     store.setPremium(Boolean(remoteProfile.is_premium));
                 } else {
                     store.setPremium(false);
@@ -351,16 +346,13 @@ export const SyncService = {
         const currentStore = syncStoreHandlers.getMainStoreState?.();
         if (!currentStore) return;
         const authEmail = userData?.email || currentStore.session?.user?.email;
-        const isOwner = isWhitelistedPremiumEmail(authEmail);
         const desiredControlLevel = normalizeControlLevel(currentStore.defaultControlLevel);
-        const desiredIsPremium = isOwner ? true : (remoteProfile?.is_premium ? true : Boolean(currentStore.isPremium));
         const desiredOnboarding = Boolean(currentStore.onboardingCompleted);
 
         const hasProfileDiff =
             !remoteProfile ||
             remoteProfile.email !== (authEmail || remoteProfile.email) ||
             remoteProfile.default_control_level !== desiredControlLevel ||
-            Boolean(remoteProfile.is_premium) !== desiredIsPremium ||
             Boolean(remoteProfile.onboarding_completed) !== desiredOnboarding;
 
         if (hasProfileDiff) {
@@ -368,7 +360,6 @@ export const SyncService = {
                 id: userId,
                 email: authEmail || undefined,
                 default_control_level: desiredControlLevel,
-                is_premium: desiredIsPremium,
                 onboarding_completed: desiredOnboarding,
                 updated_at: new Date().toISOString(),
             };
