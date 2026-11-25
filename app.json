@@ -114,7 +114,8 @@
       "expo-audio",
       "expo-asset",
       "expo-speech-recognition",
-      "expo-secure-store"
+      "expo-secure-store",
+      "./plugins/withAndroidSecurity"
     ],
     "scheme": "veyra",
     "extra": {
