@@ -1,0 +1,47 @@
+# Supabase Project Configuration — Veyra (Canonical Backend)
+# Ref: T0.1e / T0.1f (Auditoria V-53)
+project_id = "rrwoompvuggcczggfgiq"
+
+[functions.ai]
+verify_jwt = true
+
+[functions.attach-drive-files]
+verify_jwt = true
+
+[functions.attachment-signed-url]
+verify_jwt = true
+
+[functions.collab-notify]
+verify_jwt = true
+
+[functions.dispatch-reminders]
+verify_jwt = true
+
+[functions.drive-proxy]
+verify_jwt = true
+
+[functions.google-connect]
+verify_jwt = true
+
+[functions.google-disconnect]
+verify_jwt = true
+
+[functions.notify-state-change]
+verify_jwt = true
+
+[functions.picker-token]
+verify_jwt = true
+
+[functions.quota-reserve]
+verify_jwt = true
+
+# Excepcion intencional: invocada desde Service Worker / push action sin sesion activa.
+# Mitigada por verificacion HMAC-SHA256 obligatoria via ACTION_TOKEN_HMAC_SECRET.
+[functions.reminder-action]
+verify_jwt = false
+
+[functions.send-test-push]
+verify_jwt = true
+
+[functions.upload-finalize]
+verify_jwt = true
