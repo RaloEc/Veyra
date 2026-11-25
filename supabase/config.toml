@@ -1,5 +1,9 @@
 # Supabase Project Configuration — Veyra (Canonical Backend)
 # Ref: T0.1e / T0.1f (Auditoria V-53)
+#
+# A partir de T0.1, todos los deploys se hacen vía CLI:
+# supabase functions deploy <fn> --project-ref rrwoompvuggcczggfgiq
+# El MCP deploy_edge_function queda prohibido para producción.
 project_id = "rrwoompvuggcczggfgiq"
 
 [functions.ai]
