@@ -1,8 +1,10 @@
 import * as Notifications from 'expo-notifications';
+import * as FileSystem from 'expo-file-system/legacy';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from '../lib/supabase';
 import { withDB } from '../db';
 import { WidgetService } from './widgetService';
+import { VeyraAlarm } from './veyraAlarm';
 import { useStore } from '../store/useStore';
 import { useNotesStore } from '../store/useNotesStore';
 import { useFoldersStore } from '../store/useFoldersStore';
@@ -36,28 +38,25 @@ export const AccountDeletionService = {
             const { data: { session } } = await supabase.auth.getSession();
             const userId = session?.user?.id;
 
-            // 2. Si el usuario está autenticado en Supabase, eliminar datos en la nube
+            // 2. Si el usuario está autenticado en Supabase, eliminar datos en la nube vía RPC atómica
             if (userId) {
                 console.log(`[AccountDeletion] 🗑️ Iniciando eliminación de cuenta remota para usuario: ${userId}`);
 
-                // Intentar mediante la función RPC delete_user_account() (si fue creada en Supabase)
                 const { error: rpcError } = await supabase.rpc('delete_user_account');
-
                 if (rpcError) {
-                    console.warn('[AccountDeletion] RPC delete_user_account no disponible o falló, borrando tablas manualmente:', rpcError.message);
-                    
-                    // Fallback directo a borrar los registros del usuario en cada tabla pública
-                    await Promise.allSettled([
-                        supabase.from('reminders').delete().eq('user_id', userId),
-                        supabase.from('notes').delete().eq('user_id', userId),
-                        supabase.from('folders').delete().eq('user_id', userId),
-                        supabase.from('events').delete().eq('user_id', userId),
-                        supabase.from('compliance_events').delete().eq('user_id', userId),
-                        supabase.from('profiles').delete().eq('id', userId),
-                    ]);
+                    console.error('[AccountDeletion] ❌ Error en RPC delete_user_account:', rpcError.message);
+                    return {
+                        success: false,
+                        error: rpcError.message || 'No se pudo eliminar la cuenta en el servidor.',
+                        details: {
+                            cloudDeleted: false,
+                            localPurged: false,
+                            notificationsCancelled: false,
+                        },
+                    };
                 }
 
-                // Cerrar sesión en el cliente de autenticación de Supabase
+                // Cerrar sesión local tras confirmación exitosa del borrado remoto
                 try {
                     await supabase.auth.signOut();
                 } catch (e) {
@@ -69,18 +68,32 @@ export const AccountDeletionService = {
                 cloudDeleted = true; // No había cuenta remota conectada, era modo invitado local
             }
 
-            // 3. Cancelar todas las notificaciones locales y alarmas
+            // 3. Cancelar alarmas nativas (AlarmManager) y notificaciones locales programadas
             try {
+                if (VeyraAlarm.isAvailable()) {
+                    let reminderIds: string[] = [];
+                    await withDB(async (db) => {
+                        const rows = await db.getAllAsync<{ id: string }>('SELECT id FROM reminders');
+                        reminderIds = rows.map((r) => r.id).filter(Boolean);
+                    });
+                    await Promise.allSettled(reminderIds.map((id) => VeyraAlarm.cancel(id)));
+                }
                 await Notifications.cancelAllScheduledNotificationsAsync();
                 notificationsCancelled = true;
             } catch (err) {
-                console.warn('[AccountDeletion] Advertencia al cancelar notificaciones:', err);
+                console.warn('[AccountDeletion] Advertencia al cancelar notificaciones/alarmas:', err);
             }
 
-            // 4. Purgar todas las tablas de la base de datos local SQLite
+            // 4. Purgar todas las tablas de la base de datos local SQLite (incluyendo Yjs y caché de búsqueda)
             try {
                 await withDB(async (db) => {
                     await db.execAsync(`
+                        DELETE FROM yjs_note_updates;
+                        DELETE FROM yjs_note_snapshots;
+                        DELETE FROM pending_image_uploads;
+                        DELETE FROM search_index;
+                        DELETE FROM item_tags;
+                        DELETE FROM tags;
                         DELETE FROM reminders;
                         DELETE FROM compliance_events;
                         DELETE FROM notification_attempts;
@@ -95,6 +108,23 @@ export const AccountDeletionService = {
             } catch (dbErr) {
                 console.error('[AccountDeletion] Error purgando SQLite:', dbErr);
                 throw dbErr;
+            }
+
+            // 4b. Limpiar cachés de archivos locales (cloud_cache, veyra-yjs-*)
+            try {
+                const dirs = [FileSystem.cacheDirectory, FileSystem.documentDirectory].filter(
+                    (d): d is string => Boolean(d)
+                );
+                for (const baseDir of dirs) {
+                    const entries = await FileSystem.readDirectoryAsync(baseDir).catch(() => [] as string[]);
+                    for (const entry of entries) {
+                        if (entry === 'cloud_cache' || entry.startsWith('veyra-yjs-') || entry === 'images') {
+                            await FileSystem.deleteAsync(`${baseDir}${entry}`, { idempotent: true }).catch(() => {});
+                        }
+                    }
+                }
+            } catch (fsErr) {
+                console.warn('[AccountDeletion] FileSystem cleanup warning:', fsErr);
             }
 
             // 5. Restablecer los estados de los stores en memoria (Zustand)
@@ -147,10 +177,12 @@ export const AccountDeletionService = {
                 const keys = await AsyncStorage.getAllKeys();
                 const keysToRemove = keys.filter(k => 
                     k.includes('veyra') || 
+                    k.includes('yjs') ||
                     k.includes('supabase') || 
                     k.includes('sync') || 
                     k.includes('auth') ||
-                    k.includes('user')
+                    k.includes('user') ||
+                    k === 'app-storage'
                 );
                 if (keysToRemove.length > 0) {
                     await AsyncStorage.multiRemove(keysToRemove);
