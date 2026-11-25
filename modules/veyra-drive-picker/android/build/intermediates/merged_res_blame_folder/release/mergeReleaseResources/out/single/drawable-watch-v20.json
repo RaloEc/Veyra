@@ -1,0 +1,14 @@
+[
+    {
+        "merged": "com.ralo.veyra.picker.veyra-drive-picker-release-15:/drawable-watch-v20/common_google_signin_btn_text_dark_normal.xml",
+        "source": "com.ralo.veyra.picker.veyra-drive-picker-play-services-auth-22.0.0-3:/drawable-watch-v20/common_google_signin_btn_text_dark_normal.xml"
+    },
+    {
+        "merged": "com.ralo.veyra.picker.veyra-drive-picker-release-15:/drawable-watch-v20/common_google_signin_btn_text_disabled.xml",
+        "source": "com.ralo.veyra.picker.veyra-drive-picker-play-services-auth-22.0.0-3:/drawable-watch-v20/common_google_signin_btn_text_disabled.xml"
+    },
+    {
+        "merged": "com.ralo.veyra.picker.veyra-drive-picker-release-15:/drawable-watch-v20/common_google_signin_btn_text_light_normal.xml",
+        "source": "com.ralo.veyra.picker.veyra-drive-picker-play-services-auth-22.0.0-3:/drawable-watch-v20/common_google_signin_btn_text_light_normal.xml"
+    }
+]

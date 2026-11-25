@@ -1,0 +1,14 @@
+[
+    {
+        "merged": "com.ralo.veyra.picker.veyra-drive-picker-release-15:/layout/notification_template_part_chronometer.xml",
+        "source": "com.ralo.veyra.picker.veyra-drive-picker-core-1.8.0-4:/layout/notification_template_part_chronometer.xml"
+    },
+    {
+        "merged": "com.ralo.veyra.picker.veyra-drive-picker-release-15:/layout/custom_dialog.xml",
+        "source": "com.ralo.veyra.picker.veyra-drive-picker-core-1.8.0-4:/layout/custom_dialog.xml"
+    },
+    {
+        "merged": "com.ralo.veyra.picker.veyra-drive-picker-release-15:/layout/notification_template_part_time.xml",
+        "source": "com.ralo.veyra.picker.veyra-drive-picker-core-1.8.0-4:/layout/notification_template_part_time.xml"
+    }
+]

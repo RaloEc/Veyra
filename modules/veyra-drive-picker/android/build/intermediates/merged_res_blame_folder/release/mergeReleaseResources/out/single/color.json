@@ -1,0 +1,14 @@
+[
+    {
+        "merged": "com.ralo.veyra.picker.veyra-drive-picker-release-15:/color/common_google_signin_btn_tint.xml",
+        "source": "com.ralo.veyra.picker.veyra-drive-picker-play-services-base-18.5.0-10:/color/common_google_signin_btn_tint.xml"
+    },
+    {
+        "merged": "com.ralo.veyra.picker.veyra-drive-picker-release-15:/color/common_google_signin_btn_text_dark.xml",
+        "source": "com.ralo.veyra.picker.veyra-drive-picker-play-services-base-18.5.0-10:/color/common_google_signin_btn_text_dark.xml"
+    },
+    {
+        "merged": "com.ralo.veyra.picker.veyra-drive-picker-release-15:/color/common_google_signin_btn_text_light.xml",
+        "source": "com.ralo.veyra.picker.veyra-drive-picker-play-services-base-18.5.0-10:/color/common_google_signin_btn_text_light.xml"
+    }
+]
