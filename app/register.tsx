@@ -144,7 +144,7 @@ export default function RegisterScreen() {
                 <VeyraIconButton
                     variant="ghost"
                     size="sm"
-                    icon={<ChevronLeft size={24} color={colors.textPrimary} />}
+                    icon={<ChevronLeft size={24} color={colors.textPrimary as any} />}
                     onPress={() => router.back()}
                 />
             </View>
@@ -163,7 +163,7 @@ export default function RegisterScreen() {
                         <View style={styles.titleGroup}>
                             <View style={styles.brandRow}>
                                 <View style={[styles.brandBadge, { backgroundColor: `${accent.primary}18`, borderColor: `${accent.primary}35` }]}>
-                                    <Shield size={12} color={accent.primary} />
+                                    <Shield size={12} color={accent.primary as any} />
                                     <Text style={[styles.brandBadgeText, { color: accent.primary }]}>
                                         VEYRA
                                     </Text>
@@ -183,7 +183,7 @@ export default function RegisterScreen() {
                             {/* Nombre */}
                             <View style={styles.inputGroup}>
                                 <View style={styles.inputLabelRow}>
-                                    <User size={14} color={focusedField === 'name' ? accent.primary : colors.textMuted} />
+                                    <User size={14} color={(focusedField === 'name' ? accent.primary : colors.textMuted) as any} />
                                     <Text style={[styles.inputLabelText, { color: focusedField === 'name' ? accent.primary : colors.textMuted, fontSize: typography.micro.fontSize }]}>
                                         {t('auth.name', { defaultValue: 'Nombre' })}
                                     </Text>
@@ -213,7 +213,7 @@ export default function RegisterScreen() {
                             {/* Email */}
                             <View style={styles.inputGroup}>
                                 <View style={styles.inputLabelRow}>
-                                    <Mail size={14} color={focusedField === 'email' ? accent.primary : colors.textMuted} />
+                                    <Mail size={14} color={(focusedField === 'email' ? accent.primary : colors.textMuted) as any} />
                                     <Text style={[styles.inputLabelText, { color: focusedField === 'email' ? accent.primary : colors.textMuted, fontSize: typography.micro.fontSize }]}>
                                         {t('auth.email')}
                                     </Text>
@@ -244,7 +244,7 @@ export default function RegisterScreen() {
                             {/* Password */}
                             <View style={styles.inputGroup}>
                                 <View style={styles.inputLabelRow}>
-                                    <Lock size={14} color={focusedField === 'password' ? accent.primary : colors.textMuted} />
+                                    <Lock size={14} color={(focusedField === 'password' ? accent.primary : colors.textMuted) as any} />
                                     <Text style={[styles.inputLabelText, { color: focusedField === 'password' ? accent.primary : colors.textMuted, fontSize: typography.micro.fontSize }]}>
                                         {t('auth.password')}
                                     </Text>
@@ -282,9 +282,9 @@ export default function RegisterScreen() {
                                         hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                                     >
                                         {showPassword ? (
-                                            <EyeOff size={18} color={focusedField === 'password' ? accent.primary : colors.textMuted} />
+                                            <EyeOff size={18} color={(focusedField === 'password' ? accent.primary : colors.textMuted) as any} />
                                         ) : (
-                                            <Eye size={18} color={focusedField === 'password' ? accent.primary : colors.textMuted} />
+                                            <Eye size={18} color={(focusedField === 'password' ? accent.primary : colors.textMuted) as any} />
                                         )}
                                     </TouchableOpacity>
                                 </View>
