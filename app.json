@@ -113,7 +113,8 @@
       ],
       "expo-audio",
       "expo-asset",
-      "expo-speech-recognition"
+      "expo-speech-recognition",
+      "expo-secure-store"
     ],
     "scheme": "veyra",
     "extra": {
