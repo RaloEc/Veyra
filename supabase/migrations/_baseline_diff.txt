@@ -1,0 +1,174 @@
+==============================================================================
+T0.1.5.e — REPORTE DE PARIDAD SEMÁNTICA (MIGRACIONES LOCALES VS BASELINE PROD)
+Proyecto: rrwoompvuggcczggfgiq | Fecha: 2026-11-25 | Método: Catálogo MCP (read-only)
+==============================================================================
+
+Migraciones incrementales comparadas (14 archivos):
+  - 20261028_tags_and_all_day_events.sql
+  - 20261030201409_fix_tags_rls_and_indexes_recovered.sql
+  - 20261118235832_auto_create_profile_on_signup_recovered.sql
+  - 20261118235933_enable_push_cron_and_triggers_recovered.sql
+  - 20261118_auto_create_profile_and_cron.sql
+  - 20261119214408_poc_p11_upload_reservations_schema_recovered.sql
+  - 20261120010948_poc_phase_0b_cleanup_schema_recovered.sql
+  - 20261120_01_phase4_storage_core.sql
+  - 20261120_02_veyra_attachments_bucket_rls.sql
+  - 20261120_03_freeze_legacy_attachments_bucket.sql
+  - 20261120_04_soft_delete_attachment_rpc.sql
+  - 20261121_01_phase6_user_integrations.sql
+  - 20261123121717_fix_web_push_subscription_upsert_rpc_recovered.sql
+  - 20261123_remove_strict_control_level.sql
+
+Resumen cuantitativo normalizado:
+  tables     | Prod:  26 | Local inc.:  10 | Solo Prod:  17 | Solo Local:   1
+  functions  | Prod:  29 | Local inc.:  16 | Solo Prod:  14 | Solo Local:   1
+  triggers   | Prod:   4 | Local inc.:   2 | Solo Prod:   2 | Solo Local:   0
+  policies   | Prod:  62 | Local inc.:  12 | Solo Prod:  53 | Solo Local:   3
+  indexes    | Prod:  44 | Local inc.:  15 | Solo Prod:  29 | Solo Local:   0
+  buckets    | Prod:   2 | Local inc.:   2 | Solo Prod:   1 | Solo Local:   1
+
+--- TABLES ---
+  [Solo en PROD baseline (17)]:
+    + collaboration_activity  --> JUSTIFICADO: Esquema base pre-migraciones (Studio inicial) o índice/constraint implícito capturado en _baseline_2026-11-25_prod_schema.sql.
+    + collaborations  --> JUSTIFICADO: Esquema base pre-migraciones (Studio inicial) o índice/constraint implícito capturado en _baseline_2026-11-25_prod_schema.sql.
+    + compliance_events  --> JUSTIFICADO: Esquema base pre-migraciones (Studio inicial) o índice/constraint implícito capturado en _baseline_2026-11-25_prod_schema.sql.
+    + events  --> JUSTIFICADO: Esquema base pre-migraciones (Studio inicial) o índice/constraint implícito capturado en _baseline_2026-11-25_prod_schema.sql.
+    + folders  --> JUSTIFICADO: Esquema base pre-migraciones (Studio inicial) o índice/constraint implícito capturado en _baseline_2026-11-25_prod_schema.sql.
+    + note_templates  --> JUSTIFICADO (V-56d): Tabla creada vía Studio SQL Editor fuera de schema_migrations; ahora capturada en _baseline_2026-11-25_prod_schema.sql.
+    + note_yjs_activity  --> JUSTIFICADO (V-56c): Tabla creada ad-hoc fuera de schema_migrations; ahora capturada en _baseline_2026-11-25_prod_schema.sql.
+    + note_yjs_snapshots  --> JUSTIFICADO (V-54): Tabla Yjs aplicada desde src/poc-yjs/deploy-01..05 fuera de supabase/migrations; ahora en baseline.
+    + note_yjs_updates  --> JUSTIFICADO (V-54): Tabla Yjs aplicada desde src/poc-yjs/deploy-01..05 fuera de supabase/migrations; ahora en baseline.
+    + notes  --> JUSTIFICADO: Esquema base pre-migraciones (Studio inicial) o índice/constraint implícito capturado en _baseline_2026-11-25_prod_schema.sql.
+    + notification_deliveries  --> JUSTIFICADO (V-56b): Tabla creada ad-hoc fuera de schema_migrations; ahora capturada en _baseline_2026-11-25_prod_schema.sql.
+    + profiles  --> JUSTIFICADO: Esquema base pre-migraciones (Studio inicial) o índice/constraint implícito capturado en _baseline_2026-11-25_prod_schema.sql.
+    + push_tokens  --> JUSTIFICADO: Esquema base pre-migraciones (Studio inicial) o índice/constraint implícito capturado en _baseline_2026-11-25_prod_schema.sql.
+    + reminders  --> JUSTIFICADO: Esquema base pre-migraciones (Studio inicial) o índice/constraint implícito capturado en _baseline_2026-11-25_prod_schema.sql.
+    + share_invitations  --> JUSTIFICADO: Esquema base pre-migraciones (Studio inicial) o índice/constraint implícito capturado en _baseline_2026-11-25_prod_schema.sql.
+    + web_push_subscriptions  --> JUSTIFICADO (V-56a): Tabla creada ad-hoc fuera de schema_migrations; ahora capturada en _baseline_2026-11-25_prod_schema.sql.
+    + yjs_diagnostics  --> JUSTIFICADO (V-18b): Tabla ad-hoc de debug creada fuera de migraciones. DROP preparado en 20261125_drop_yjs_diagnostics.sql.
+  [Solo en MIGRACIONES LOCALES (1)]:
+    - poc_upload_reservations  --> JUSTIFICADO: Tabla temporal creada en 20261119214408 y eliminada en 20261120010948_poc_phase_0b_cleanup_schema_recovered.sql.
+
+--- FUNCTIONS ---
+  [Solo en PROD baseline (14)]:
+    + accept_share_invitation  --> JUSTIFICADO: Esquema base pre-migraciones (Studio inicial) o índice/constraint implícito capturado en _baseline_2026-11-25_prod_schema.sql.
+    + activate_note_yjs_mode  --> JUSTIFICADO: Objeto PoC Yjs aplicado desde src/poc-yjs/deploy-02..05 (ahora en baseline).
+    + append_note_yjs_update  --> JUSTIFICADO: Objeto PoC Yjs aplicado desde src/poc-yjs/deploy-02..05 (ahora en baseline).
+    + compact_note_yjs_snapshot  --> JUSTIFICADO: Objeto PoC Yjs aplicado desde src/poc-yjs/deploy-02..05 (ahora en baseline).
+    + delete_user_account  --> JUSTIFICADO: Esquema base pre-migraciones (Studio inicial) o índice/constraint implícito capturado en _baseline_2026-11-25_prod_schema.sql.
+    + handle_owner_premium_status  --> JUSTIFICADO (V-55): Trigger/función ad-hoc creado fuera de migraciones (ahora en baseline).
+    + is_note_editor  --> JUSTIFICADO: Objeto PoC Yjs aplicado desde src/poc-yjs/deploy-02..05 (ahora en baseline).
+    + is_note_reader  --> JUSTIFICADO: Objeto PoC Yjs aplicado desde src/poc-yjs/deploy-02..05 (ahora en baseline).
+    + is_target_collaborator  --> JUSTIFICADO: Esquema base pre-migraciones (Studio inicial) o índice/constraint implícito capturado en _baseline_2026-11-25_prod_schema.sql.
+    + protect_note_yjs_content  --> JUSTIFICADO: Objeto PoC Yjs aplicado desde src/poc-yjs/deploy-02..05 (ahora en baseline).
+    + set_guest_permission  --> JUSTIFICADO: Esquema base pre-migraciones (Studio inicial) o índice/constraint implícito capturado en _baseline_2026-11-25_prod_schema.sql.
+    + update_collaboration_role  --> JUSTIFICADO: Esquema base pre-migraciones (Studio inicial) o índice/constraint implícito capturado en _baseline_2026-11-25_prod_schema.sql.
+    + update_collaboration_role_by_member  --> JUSTIFICADO: Esquema base pre-migraciones (Studio inicial) o índice/constraint implícito capturado en _baseline_2026-11-25_prod_schema.sql.
+    + upsert_yjs_activity  --> JUSTIFICADO: Objeto PoC Yjs aplicado desde src/poc-yjs/deploy-02..05 (ahora en baseline).
+  [Solo en MIGRACIONES LOCALES (1)]:
+    - poc_has_active_reservation  --> JUSTIFICADO: Objeto temporal PoC eliminado por 20261120010948_poc_phase_0b_cleanup_schema_recovered.sql.
+
+--- TRIGGERS ---
+  [Solo en PROD baseline (2)]:
+    + trg_owner_premium  --> JUSTIFICADO (V-55): Trigger/función ad-hoc creado fuera de migraciones (ahora en baseline).
+    + trg_protect_note_yjs_content  --> JUSTIFICADO: Objeto PoC Yjs aplicado desde src/poc-yjs/deploy-02..05 (ahora en baseline).
+  [Solo en MIGRACIONES LOCALES (0)]:
+
+--- POLICIES ---
+  [Solo en PROD baseline (53)]:
+    + collaboration_activity::actors can insert activity  --> JUSTIFICADO: Esquema base pre-migraciones (Studio inicial) o índice/constraint implícito capturado en _baseline_2026-11-25_prod_schema.sql.
+    + collaboration_activity::collaborators can read activity  --> JUSTIFICADO: Esquema base pre-migraciones (Studio inicial) o índice/constraint implícito capturado en _baseline_2026-11-25_prod_schema.sql.
+    + collaborations::members and owners can view collaborations  --> JUSTIFICADO: Esquema base pre-migraciones (Studio inicial) o índice/constraint implícito capturado en _baseline_2026-11-25_prod_schema.sql.
+    + collaborations::owner can insert collaborations  --> JUSTIFICADO: Esquema base pre-migraciones (Studio inicial) o índice/constraint implícito capturado en _baseline_2026-11-25_prod_schema.sql.
+    + collaborations::owner can update collaborations  --> JUSTIFICADO: Esquema base pre-migraciones (Studio inicial) o índice/constraint implícito capturado en _baseline_2026-11-25_prod_schema.sql.
+    + collaborations::owner or member can delete collaboration  --> JUSTIFICADO: Esquema base pre-migraciones (Studio inicial) o índice/constraint implícito capturado en _baseline_2026-11-25_prod_schema.sql.
+    + compliance_events::users can insert own compliance  --> JUSTIFICADO: Esquema base pre-migraciones (Studio inicial) o índice/constraint implícito capturado en _baseline_2026-11-25_prod_schema.sql.
+    + compliance_events::users can select own compliance  --> JUSTIFICADO: Esquema base pre-migraciones (Studio inicial) o índice/constraint implícito capturado en _baseline_2026-11-25_prod_schema.sql.
+    + events::users can delete own events  --> JUSTIFICADO: Esquema base pre-migraciones (Studio inicial) o índice/constraint implícito capturado en _baseline_2026-11-25_prod_schema.sql.
+    + events::users can insert own events  --> JUSTIFICADO: Esquema base pre-migraciones (Studio inicial) o índice/constraint implícito capturado en _baseline_2026-11-25_prod_schema.sql.
+    + events::users can select own or shared events  --> JUSTIFICADO: Esquema base pre-migraciones (Studio inicial) o índice/constraint implícito capturado en _baseline_2026-11-25_prod_schema.sql.
+    + events::users can update own or shared events  --> JUSTIFICADO: Esquema base pre-migraciones (Studio inicial) o índice/constraint implícito capturado en _baseline_2026-11-25_prod_schema.sql.
+    + folders::users can delete own folders  --> JUSTIFICADO: Esquema base pre-migraciones (Studio inicial) o índice/constraint implícito capturado en _baseline_2026-11-25_prod_schema.sql.
+    + folders::users can insert own folders  --> JUSTIFICADO: Esquema base pre-migraciones (Studio inicial) o índice/constraint implícito capturado en _baseline_2026-11-25_prod_schema.sql.
+    + folders::users can select own or shared folders  --> JUSTIFICADO: Esquema base pre-migraciones (Studio inicial) o índice/constraint implícito capturado en _baseline_2026-11-25_prod_schema.sql.
+    + folders::users can update own or shared folders  --> JUSTIFICADO: Esquema base pre-migraciones (Studio inicial) o índice/constraint implícito capturado en _baseline_2026-11-25_prod_schema.sql.
+    + note_templates::users can manage their own templates  --> JUSTIFICADO (V-56): Objeto ad-hoc creado fuera de schema_migrations (ahora en baseline).
+    + note_yjs_activity::activity_insert  --> JUSTIFICADO: Objeto PoC Yjs aplicado desde src/poc-yjs/deploy-02..05 (ahora en baseline).
+    + note_yjs_activity::activity_select  --> JUSTIFICADO: Objeto PoC Yjs aplicado desde src/poc-yjs/deploy-02..05 (ahora en baseline).
+    + note_yjs_activity::activity_update  --> JUSTIFICADO: Objeto PoC Yjs aplicado desde src/poc-yjs/deploy-02..05 (ahora en baseline).
+    + note_yjs_snapshots::note_yjs_snapshots_select  --> JUSTIFICADO: Objeto PoC Yjs aplicado desde src/poc-yjs/deploy-02..05 (ahora en baseline).
+    + note_yjs_updates::note_yjs_updates_select  --> JUSTIFICADO: Objeto PoC Yjs aplicado desde src/poc-yjs/deploy-02..05 (ahora en baseline).
+    + notes::users can delete own notes  --> JUSTIFICADO: Esquema base pre-migraciones (Studio inicial) o índice/constraint implícito capturado en _baseline_2026-11-25_prod_schema.sql.
+    + notes::users can insert own notes  --> JUSTIFICADO: Esquema base pre-migraciones (Studio inicial) o índice/constraint implícito capturado en _baseline_2026-11-25_prod_schema.sql.
+    + notes::users can select own or shared notes  --> JUSTIFICADO: Esquema base pre-migraciones (Studio inicial) o índice/constraint implícito capturado en _baseline_2026-11-25_prod_schema.sql.
+    + notes::users can update own or shared notes  --> JUSTIFICADO: Esquema base pre-migraciones (Studio inicial) o índice/constraint implícito capturado en _baseline_2026-11-25_prod_schema.sql.
+    + notification_deliveries::service and users can read deliveries  --> JUSTIFICADO (V-56): Objeto ad-hoc creado fuera de schema_migrations (ahora en baseline).
+    + profiles::users can insert own profile  --> JUSTIFICADO: Esquema base pre-migraciones (Studio inicial) o índice/constraint implícito capturado en _baseline_2026-11-25_prod_schema.sql.
+    + profiles::users can update own profile  --> JUSTIFICADO: Esquema base pre-migraciones (Studio inicial) o índice/constraint implícito capturado en _baseline_2026-11-25_prod_schema.sql.
+    + profiles::users can view own profile  --> JUSTIFICADO: Esquema base pre-migraciones (Studio inicial) o índice/constraint implícito capturado en _baseline_2026-11-25_prod_schema.sql.
+    + push_tokens::users can manage own push tokens  --> JUSTIFICADO: Esquema base pre-migraciones (Studio inicial) o índice/constraint implícito capturado en _baseline_2026-11-25_prod_schema.sql.
+    + realtime.messages::realtime_broadcast_note_live_cursor  --> JUSTIFICADO: Esquema base pre-migraciones (Studio inicial) o índice/constraint implícito capturado en _baseline_2026-11-25_prod_schema.sql.
+    + realtime.messages::realtime_broadcast_note_live_edit  --> JUSTIFICADO: Esquema base pre-migraciones (Studio inicial) o índice/constraint implícito capturado en _baseline_2026-11-25_prod_schema.sql.
+    + realtime.messages::realtime_broadcast_note_yjs  --> JUSTIFICADO: Objeto PoC Yjs aplicado desde src/poc-yjs/deploy-02..05 (ahora en baseline).
+    + realtime.messages::realtime_listen_note_live_cursor  --> JUSTIFICADO: Esquema base pre-migraciones (Studio inicial) o índice/constraint implícito capturado en _baseline_2026-11-25_prod_schema.sql.
+    + realtime.messages::realtime_listen_note_live_edit  --> JUSTIFICADO: Esquema base pre-migraciones (Studio inicial) o índice/constraint implícito capturado en _baseline_2026-11-25_prod_schema.sql.
+    + realtime.messages::realtime_listen_note_yjs  --> JUSTIFICADO: Objeto PoC Yjs aplicado desde src/poc-yjs/deploy-02..05 (ahora en baseline).
+    + realtime.messages::realtime_presence_note_yjs  --> JUSTIFICADO: Objeto PoC Yjs aplicado desde src/poc-yjs/deploy-02..05 (ahora en baseline).
+    + reminders::users can delete own reminders  --> JUSTIFICADO: Esquema base pre-migraciones (Studio inicial) o índice/constraint implícito capturado en _baseline_2026-11-25_prod_schema.sql.
+    + reminders::users can insert own reminders  --> JUSTIFICADO: Esquema base pre-migraciones (Studio inicial) o índice/constraint implícito capturado en _baseline_2026-11-25_prod_schema.sql.
+    + reminders::users can select own or shared reminders  --> JUSTIFICADO: Esquema base pre-migraciones (Studio inicial) o índice/constraint implícito capturado en _baseline_2026-11-25_prod_schema.sql.
+    + reminders::users can update own or shared reminders  --> JUSTIFICADO: Esquema base pre-migraciones (Studio inicial) o índice/constraint implícito capturado en _baseline_2026-11-25_prod_schema.sql.
+    + share_invitations::anyone can view valid invitations  --> JUSTIFICADO: Esquema base pre-migraciones (Studio inicial) o índice/constraint implícito capturado en _baseline_2026-11-25_prod_schema.sql.
+    + share_invitations::owner can manage own invitations  --> JUSTIFICADO: Esquema base pre-migraciones (Studio inicial) o índice/constraint implícito capturado en _baseline_2026-11-25_prod_schema.sql.
+    + storage.objects::users can delete own attachments  --> JUSTIFICADO: Política legacy del bucket attachments o veyra-attachments creada en Studio o migración 20261120_02 (capturada en baseline).
+    + storage.objects::users can read own attachments  --> JUSTIFICADO: Política legacy del bucket attachments o veyra-attachments creada en Studio o migración 20261120_02 (capturada en baseline).
+    + storage.objects::users can update own attachments  --> JUSTIFICADO: Política legacy del bucket attachments o veyra-attachments creada en Studio o migración 20261120_02 (capturada en baseline).
+    + storage.objects::users can upload own attachments  --> JUSTIFICADO: Política legacy del bucket attachments o veyra-attachments creada en Studio o migración 20261120_02 (capturada en baseline).
+    + web_push_subscriptions::users can delete their own web push subscriptions  --> JUSTIFICADO (V-56): Objeto ad-hoc creado fuera de schema_migrations (ahora en baseline).
+    + web_push_subscriptions::users can insert their own web push subscriptions  --> JUSTIFICADO (V-56): Objeto ad-hoc creado fuera de schema_migrations (ahora en baseline).
+    + web_push_subscriptions::users can view their own web push subscriptions  --> JUSTIFICADO (V-56): Objeto ad-hoc creado fuera de schema_migrations (ahora en baseline).
+    + yjs_diagnostics::allow all insert to yjs_diagnostics  --> JUSTIFICADO: Objeto PoC Yjs aplicado desde src/poc-yjs/deploy-02..05 (ahora en baseline).
+    + yjs_diagnostics::allow all select to yjs_diagnostics  --> JUSTIFICADO: Objeto PoC Yjs aplicado desde src/poc-yjs/deploy-02..05 (ahora en baseline).
+  [Solo en MIGRACIONES LOCALES (3)]:
+    - poc_upload_reservations::poc_users_insert_own_reservations  --> JUSTIFICADO: Objeto temporal PoC eliminado por 20261120010948_poc_phase_0b_cleanup_schema_recovered.sql.
+    - poc_upload_reservations::poc_users_select_own_reservations  --> JUSTIFICADO: Objeto temporal PoC eliminado por 20261120010948_poc_phase_0b_cleanup_schema_recovered.sql.
+    - storage.objects::poc_drive_v31_insert_with_reservation  --> JUSTIFICADO: Objeto temporal PoC eliminado por 20261120010948_poc_phase_0b_cleanup_schema_recovered.sql.
+
+--- INDEXES ---
+  [Solo en PROD baseline (29)]:
+    + collaborations_target_type_target_id_member_id_key  --> JUSTIFICADO: Esquema base pre-migraciones (Studio inicial) o índice/constraint implícito capturado en _baseline_2026-11-25_prod_schema.sql.
+    + event_notification_deliveries_event_id_attempt_key_key  --> JUSTIFICADO (V-56): Objeto ad-hoc creado fuera de schema_migrations (ahora en baseline).
+    + idx_activity_note_started  --> JUSTIFICADO: Esquema base pre-migraciones (Studio inicial) o índice/constraint implícito capturado en _baseline_2026-11-25_prod_schema.sql.
+    + idx_collab_act_target  --> JUSTIFICADO: Esquema base pre-migraciones (Studio inicial) o índice/constraint implícito capturado en _baseline_2026-11-25_prod_schema.sql.
+    + idx_collab_member  --> JUSTIFICADO: Esquema base pre-migraciones (Studio inicial) o índice/constraint implícito capturado en _baseline_2026-11-25_prod_schema.sql.
+    + idx_collab_target  --> JUSTIFICADO: Esquema base pre-migraciones (Studio inicial) o índice/constraint implícito capturado en _baseline_2026-11-25_prod_schema.sql.
+    + idx_events_tags  --> JUSTIFICADO: Esquema base pre-migraciones (Studio inicial) o índice/constraint implícito capturado en _baseline_2026-11-25_prod_schema.sql.
+    + idx_events_user_sync  --> JUSTIFICADO: Esquema base pre-migraciones (Studio inicial) o índice/constraint implícito capturado en _baseline_2026-11-25_prod_schema.sql.
+    + idx_folders_parent_id  --> JUSTIFICADO: Esquema base pre-migraciones (Studio inicial) o índice/constraint implícito capturado en _baseline_2026-11-25_prod_schema.sql.
+    + idx_folders_user_sync  --> JUSTIFICADO: Esquema base pre-migraciones (Studio inicial) o índice/constraint implícito capturado en _baseline_2026-11-25_prod_schema.sql.
+    + idx_note_yjs_updates_idempotency  --> JUSTIFICADO: Objeto PoC Yjs aplicado desde src/poc-yjs/deploy-02..05 (ahora en baseline).
+    + idx_note_yjs_updates_note_clock  --> JUSTIFICADO: Objeto PoC Yjs aplicado desde src/poc-yjs/deploy-02..05 (ahora en baseline).
+    + idx_notes_user_sync  --> JUSTIFICADO: Esquema base pre-migraciones (Studio inicial) o índice/constraint implícito capturado en _baseline_2026-11-25_prod_schema.sql.
+    + idx_notification_deliveries_lookup  --> JUSTIFICADO (V-56): Objeto ad-hoc creado fuera de schema_migrations (ahora en baseline).
+    + idx_push_tokens_user  --> JUSTIFICADO: Esquema base pre-migraciones (Studio inicial) o índice/constraint implícito capturado en _baseline_2026-11-25_prod_schema.sql.
+    + idx_reminders_user_sync  --> JUSTIFICADO: Esquema base pre-migraciones (Studio inicial) o índice/constraint implícito capturado en _baseline_2026-11-25_prod_schema.sql.
+    + idx_share_invitations_code  --> JUSTIFICADO: Esquema base pre-migraciones (Studio inicial) o índice/constraint implícito capturado en _baseline_2026-11-25_prod_schema.sql.
+    + idx_share_invitations_target  --> JUSTIFICADO: Esquema base pre-migraciones (Studio inicial) o índice/constraint implícito capturado en _baseline_2026-11-25_prod_schema.sql.
+    + idx_web_push_subscriptions_user_id  --> JUSTIFICADO (V-56): Objeto ad-hoc creado fuera de schema_migrations (ahora en baseline).
+    + notification_deliveries_reminder_id_attempt_type_key  --> JUSTIFICADO (V-56): Objeto ad-hoc creado fuera de schema_migrations (ahora en baseline).
+    + push_tokens_user_id_token_key  --> JUSTIFICADO: Esquema base pre-migraciones (Studio inicial) o índice/constraint implícito capturado en _baseline_2026-11-25_prod_schema.sql.
+    + share_invitations_invite_code_key  --> JUSTIFICADO: Esquema base pre-migraciones (Studio inicial) o índice/constraint implícito capturado en _baseline_2026-11-25_prod_schema.sql.
+    + storage_deletion_queue_idempotency_key_key  --> JUSTIFICADO: Esquema base pre-migraciones (Studio inicial) o índice/constraint implícito capturado en _baseline_2026-11-25_prod_schema.sql.
+    + tags_user_id_slug_key  --> JUSTIFICADO: Esquema base pre-migraciones (Studio inicial) o índice/constraint implícito capturado en _baseline_2026-11-25_prod_schema.sql.
+    + unique_note_user_session  --> JUSTIFICADO: Esquema base pre-migraciones (Studio inicial) o índice/constraint implícito capturado en _baseline_2026-11-25_prod_schema.sql.
+    + upload_reservations_attachment_id_key  --> JUSTIFICADO: Esquema base pre-migraciones (Studio inicial) o índice/constraint implícito capturado en _baseline_2026-11-25_prod_schema.sql.
+    + uq_upload_reservations_bucket_path  --> JUSTIFICADO: Esquema base pre-migraciones (Studio inicial) o índice/constraint implícito capturado en _baseline_2026-11-25_prod_schema.sql.
+    + uq_user_integrations_user_provider  --> JUSTIFICADO: Esquema base pre-migraciones (Studio inicial) o índice/constraint implícito capturado en _baseline_2026-11-25_prod_schema.sql.
+    + web_push_subscriptions_endpoint_key  --> JUSTIFICADO (V-56): Objeto ad-hoc creado fuera de schema_migrations (ahora en baseline).
+  [Solo en MIGRACIONES LOCALES (0)]:
+
+--- BUCKETS ---
+  [Solo en PROD baseline (1)]:
+    + attachments  --> JUSTIFICADO: Esquema base pre-migraciones (Studio inicial) o índice/constraint implícito capturado en _baseline_2026-11-25_prod_schema.sql.
+  [Solo en MIGRACIONES LOCALES (1)]:
+    - poc-drive-v31  --> JUSTIFICADO: Definido en migración local preliminar (20261028/20261118) o renombrado/reemplazado en prod.
