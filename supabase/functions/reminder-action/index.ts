@@ -10,11 +10,10 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-const ENV_VAPID_PRIVATE = Deno.env.get('VAPID_PRIVATE_KEY');
-if (!ENV_VAPID_PRIVATE) {
-  console.warn('[reminder-action] VAPID_PRIVATE_KEY secret not configured; using fallback key.');
+const ACTION_TOKEN_HMAC_SECRET = Deno.env.get('ACTION_TOKEN_HMAC_SECRET');
+if (!ACTION_TOKEN_HMAC_SECRET) {
+  throw new Error('[reminder-action] ACTION_TOKEN_HMAC_SECRET secret not configured');
 }
-const VAPID_PRIVATE_KEY = ENV_VAPID_PRIVATE || 'MqjjQWUlfIYV-v911pFFiOYvZqzDWRZ7rr6hbGl8IxY';
 
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
@@ -46,7 +45,7 @@ Deno.serve(async (req: Request) => {
     const isValid = await verifyActionToken(
       String(token || ''),
       String(reminderId),
-      VAPID_PRIVATE_KEY
+      ACTION_TOKEN_HMAC_SECRET
     );
     if (!isValid) {
       return new Response(JSON.stringify({ error: 'Invalid or expired action token' }), {

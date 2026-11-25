@@ -11,15 +11,15 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-const VAPID_PUBLIC_KEY = Deno.env.get('VAPID_PUBLIC_KEY') || 'BN6CaKHTF5yD1p3DhLk7Wg9bcChY4OrYA7t8SSfsZ8Ca5BGU6qVRmzcb7kGU9QNkHLMyJ2exCnGMOMOpEIvKqQg';
-const VAPID_PRIVATE_KEY = Deno.env.get('VAPID_PRIVATE_KEY') || 'MqjjQWUlfIYV-v911pFFiOYvZqzDWRZ7rr6hbGl8IxY';
+const VAPID_PUBLIC_KEY = Deno.env.get('VAPID_PUBLIC_KEY');
+const VAPID_PRIVATE_KEY = Deno.env.get('VAPID_PRIVATE_KEY');
 const VAPID_SUBJECT = Deno.env.get('VAPID_SUBJECT') || 'mailto:admin@veyra.app';
 
-try {
-  webPush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
-} catch (e) {
-  console.warn('[notify-state-change] WebPush VAPID config warning:', e);
+if (!VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY) {
+  throw new Error('[notify-state-change] VAPID_PUBLIC_KEY or VAPID_PRIVATE_KEY secret not configured');
 }
+
+webPush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
 
 serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {

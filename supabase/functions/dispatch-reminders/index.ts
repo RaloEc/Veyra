@@ -11,9 +11,17 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-const VAPID_PUBLIC_KEY = Deno.env.get('VAPID_PUBLIC_KEY') || 'BN6CaKHTF5yD1p3DhLk7Wg9bcChY4OrYA7t8SSfsZ8Ca5BGU6qVRmzcb7kGU9QNkHLMyJ2exCnGMOMOpEIvKqQg';
-const VAPID_PRIVATE_KEY = Deno.env.get('VAPID_PRIVATE_KEY') || 'MqjjQWUlfIYV-v911pFFiOYvZqzDWRZ7rr6hbGl8IxY';
+const VAPID_PUBLIC_KEY = Deno.env.get('VAPID_PUBLIC_KEY');
+const VAPID_PRIVATE_KEY = Deno.env.get('VAPID_PRIVATE_KEY');
+const ACTION_TOKEN_HMAC_SECRET = Deno.env.get('ACTION_TOKEN_HMAC_SECRET');
 const VAPID_SUBJECT = Deno.env.get('VAPID_SUBJECT') || 'mailto:admin@veyra.app';
+
+if (!VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY) {
+  throw new Error('[dispatch-reminders] VAPID_PUBLIC_KEY or VAPID_PRIVATE_KEY secret not configured');
+}
+if (!ACTION_TOKEN_HMAC_SECRET) {
+  throw new Error('[dispatch-reminders] ACTION_TOKEN_HMAC_SECRET secret not configured');
+}
 
 webPush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
 
@@ -221,7 +229,7 @@ serve(async (req: Request) => {
         level !== 'critical' &&
         isWithinQuietHours(nowMs, settings.quietHoursStart, settings.quietHoursEnd, settings.timezone);
 
-      const actionToken = await signActionToken(rem.id, nowMs + 24 * 60 * 60 * 1000, VAPID_PRIVATE_KEY);
+      const actionToken = await signActionToken(rem.id, nowMs + 24 * 60 * 60 * 1000, ACTION_TOKEN_HMAC_SECRET);
       const titlePrefix = attemptType === 'lead'
         ? `⏰ En ${leadMinutes} min: `
         : level === 'critical'

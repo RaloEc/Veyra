@@ -10,20 +10,13 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-const ENV_VAPID_PUBLIC = Deno.env.get('VAPID_PUBLIC_KEY');
-const ENV_VAPID_PRIVATE = Deno.env.get('VAPID_PRIVATE_KEY');
-
-if (!ENV_VAPID_PUBLIC || !ENV_VAPID_PRIVATE) {
-  console.warn('[send-test-push] VAPID_PUBLIC_KEY or VAPID_PRIVATE_KEY secret not configured; using fallback keys.');
-}
-
-const VAPID_PUBLIC_KEY =
-  ENV_VAPID_PUBLIC ||
-  'BN6CaKHTF5yD1p3DhLk7Wg9bcChY4OrYA7t8SSfsZ8Ca5BGU6qVRmzcb7kGU9QNkHLMyJ2exCnGMOMOpEIvKqQg';
-const VAPID_PRIVATE_KEY =
-  ENV_VAPID_PRIVATE ||
-  'MqjjQWUlfIYV-v911pFFiOYvZqzDWRZ7rr6hbGl8IxY';
+const VAPID_PUBLIC_KEY = Deno.env.get('VAPID_PUBLIC_KEY');
+const VAPID_PRIVATE_KEY = Deno.env.get('VAPID_PRIVATE_KEY');
 const VAPID_SUBJECT = Deno.env.get('VAPID_SUBJECT') || 'mailto:admin@veyra.app';
+
+if (!VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY) {
+  throw new Error('[send-test-push] VAPID_PUBLIC_KEY or VAPID_PRIVATE_KEY secret not configured');
+}
 
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
