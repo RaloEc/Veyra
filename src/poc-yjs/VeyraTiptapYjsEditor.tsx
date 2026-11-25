@@ -1308,11 +1308,11 @@ Responde únicamente con el JSON sin bloques de código markdown alrededor.`;
                 <WebView
                     ref={webViewRef}
                     source={{ html, baseUrl: 'https://veyra.app' }}
-                    originWhitelist={['*']}
-                    allowFileAccess={true}
-                    allowUniversalAccessFromFileURLs={true}
-                    allowFileAccessFromFileURLs={true}
-                    mixedContentMode="always"
+                    originWhitelist={['https://*']}
+                    allowFileAccess={false}
+                    allowUniversalAccessFromFileURLs={false}
+                    allowFileAccessFromFileURLs={false}
+                    mixedContentMode="never"
                     javaScriptEnabled={true}
                     domStorageEnabled={true}
                     allowsFullscreenVideo={true}

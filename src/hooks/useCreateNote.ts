@@ -190,7 +190,7 @@ export function useCreateNote(
 
         const folderId = cachedNote?.folder_id;
         let channel = supabase
-            .channel(`collab_perms_${activeId}`)
+            .channel(`collab_perms_${activeId}`, { config: { private: true } })
             .on(
                 'postgres_changes',
                 {

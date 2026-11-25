@@ -207,7 +207,7 @@ export const ShareModal: React.FC<ShareModalProps> = ({
         if (!visible || !targetId || isEvent) return;
 
         const channel = supabase
-            .channel(`share_modal_live_${targetId}`)
+            .channel(`share_modal_live_${targetId}`, { config: { private: true } })
             .on('broadcast', { event: 'LIVE_NOTE_CHANGE' }, ({ payload }) => {
                 if (!payload) return;
                 if (payload.changeType === 'PERMISSIONS_UPDATE') {

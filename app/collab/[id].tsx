@@ -138,7 +138,7 @@ export default function CollaborationManagementScreen() {
         // Suscribirse a cambios en tiempo real de actividad y colaboraciones
         const channelName = `collab_mgmt_${targetType}_${id}_${Date.now()}`;
         const channel = supabase
-            .channel(channelName)
+            .channel(channelName, { config: { private: true } })
             .on(
                 'postgres_changes',
                 { event: '*', schema: 'public', table: 'collaboration_activity', filter: `target_id=eq.${id}` },

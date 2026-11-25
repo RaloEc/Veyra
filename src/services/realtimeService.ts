@@ -34,7 +34,7 @@ class RealtimeServiceManager {
         console.log(`[RealtimeService] 🚀 Iniciando suscripción Realtime para usuario: ${userId}`);
 
         this.channel = supabase
-            .channel(`collab_sync_${userId}`)
+            .channel(`collab_sync_${userId}`, { config: { private: true } })
             // ─── 1. REMINDERS ──────────────────────────────────────────
             .on(
                 'postgres_changes',

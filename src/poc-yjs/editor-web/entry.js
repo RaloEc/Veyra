@@ -1133,7 +1133,8 @@ function initEditor(fragmentName) {
                 render: (user) => {
                     const cursor = document.createElement('span');
                     cursor.classList.add('collaboration-cursor__caret');
-                    const userColor = user.color || '#8B5CF6';
+                    const rawColor = typeof user.color === 'string' ? user.color.trim() : '';
+                    const userColor = /^#[0-9A-Fa-f]{6}$/.test(rawColor) ? rawColor : '#8B5CF6';
 
                     // Línea vertical visible del cursor (100% absoluta, 0 impacto en el line-box)
                     const line = document.createElement('span');

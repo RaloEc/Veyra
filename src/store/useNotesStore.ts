@@ -84,7 +84,7 @@ export const useNotesStore = create<NotesState>((set, get) => ({
                     collabMonitorActiveUserId = userId;
                     try {
                         supabase
-                            .channel(`user_collab_monitor_${userId}`)
+                            .channel(`user_collab_monitor_${userId}`, { config: { private: true } })
                             .on('broadcast', { event: 'LIVE_NOTE_CHANGE' }, ({ payload }) => {
                                 if (!payload) return;
                                 if (payload.changeType === 'PERMISSIONS_UPDATE' && payload.revoked) {

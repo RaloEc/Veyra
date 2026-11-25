@@ -436,7 +436,7 @@ export const CollaborationService = {
             }
 
             const isPrivateTopic = channelName.startsWith('note_live_') || channelName.startsWith('note_yjs_');
-            const tempChannel = supabase.channel(channelName, isPrivateTopic ? { config: { private: true } } : undefined);
+            const tempChannel = supabase.channel(channelName, { config: { private: true } });
             await new Promise<void>((resolve) => {
                 const timer = setTimeout(() => {
                     supabase.removeChannel(tempChannel).catch(() => {});

@@ -53,7 +53,7 @@ export const CollaboratorsAvatars: React.FC<CollaboratorsAvatarsProps> = ({
 
         // Escuchar cambios de permisos, visibilidad o miembros en tiempo real
         const channel = supabase
-            .channel(`avatars_live_${targetId}`)
+            .channel(`avatars_live_${targetId}`, { config: { private: true } })
             .on('broadcast', { event: 'LIVE_NOTE_CHANGE' }, ({ payload }) => {
                 if (!payload) return;
                 if (payload.changeType === 'PERMISSIONS_UPDATE') {
