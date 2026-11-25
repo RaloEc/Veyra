@@ -1,70 +1,33 @@
 // Supabase Edge Function: reminder-action
-// Recibe acciones de los botones interactivos del Service Worker (Completar / Posponer)
+// Executes notification quick actions (complete / snooze) after strict HMAC verification.
 
-import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
+import 'jsr:@supabase/functions-js/edge-runtime.d.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.8';
+import { verifyActionToken } from '../_shared/actionToken.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-const VAPID_PRIVATE_KEY = Deno.env.get('VAPID_PRIVATE_KEY') || 'MqjjQWUlfIYV-v911pFFiOYvZqzDWRZ7rr6hbGl8IxY';
-
-async function verifyActionToken(token: string, reminderId: string, secret: string): Promise<boolean> {
-  if (!token || !reminderId) return false;
-
-  // Fallback for legacy token-${reminderId}-${timestamp} format
-  if (token.startsWith(`token-${reminderId}-`)) {
-    return true;
-  }
-
-  const parts = token.split('.');
-  if (parts.length !== 2) return false;
-
-  const [expStr, sigHex] = parts;
-  const expMs = Number(expStr);
-  if (!Number.isFinite(expMs) || expMs < Date.now()) {
-    return false;
-  }
-
-  if (!/^[0-9a-f]+$/i.test(sigHex) || sigHex.length % 2 !== 0) {
-    return false;
-  }
-
-  const sigBytes = new Uint8Array(sigHex.length / 2);
-  for (let i = 0; i < sigBytes.length; i++) {
-    sigBytes[i] = parseInt(sigHex.slice(i * 2, i * 2 + 2), 16);
-  }
-
-  const key = await crypto.subtle.importKey(
-    'raw',
-    new TextEncoder().encode(secret),
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['verify']
-  );
-
-  return crypto.subtle.verify(
-    'HMAC',
-    key,
-    sigBytes,
-    new TextEncoder().encode(`${reminderId}:${expStr}`)
-  );
+const ENV_VAPID_PRIVATE = Deno.env.get('VAPID_PRIVATE_KEY');
+if (!ENV_VAPID_PRIVATE) {
+  console.warn('[reminder-action] VAPID_PRIVATE_KEY secret not configured; using fallback key.');
 }
+const VAPID_PRIVATE_KEY = ENV_VAPID_PRIVATE || 'MqjjQWUlfIYV-v911pFFiOYvZqzDWRZ7rr6hbGl8IxY';
 
-serve(async (req: Request) => {
+Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
   }
 
   try {
-    const supabaseUrl = Deno.env.get('SUPABASE_URL') || '';
-    const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || '';
-    const supabase = createClient(supabaseUrl, supabaseServiceKey);
-
+    const supabase = createClient(
+      Deno.env.get('SUPABASE_URL') || '',
+      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || ''
+    );
     const body = await req.json();
-    const { reminderId, action, minutes, token } = body;
+    const { reminderId, action, minutes, token } = body ?? {};
 
     if (!reminderId || !action) {
       return new Response(JSON.stringify({ error: 'Missing reminderId or action' }), {
@@ -73,7 +36,18 @@ serve(async (req: Request) => {
       });
     }
 
-    const isValid = await verifyActionToken(String(token || ''), String(reminderId), VAPID_PRIVATE_KEY);
+    if (action !== 'complete' && action !== 'snooze') {
+      return new Response(JSON.stringify({ error: 'Invalid action' }), {
+        status: 400,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    const isValid = await verifyActionToken(
+      String(token || ''),
+      String(reminderId),
+      VAPID_PRIVATE_KEY
+    );
     if (!isValid) {
       return new Response(JSON.stringify({ error: 'Invalid or expired action token' }), {
         status: 401,
@@ -82,20 +56,14 @@ serve(async (req: Request) => {
     }
 
     const nowMs = Date.now();
-
     if (action === 'complete') {
       const { data: updated, error } = await supabase
         .from('reminders')
-        .update({
-          status: 'completed',
-          last_modified_ms: nowMs,
-        })
+        .update({ status: 'completed', last_modified_ms: nowMs })
         .eq('id', reminderId)
         .select('user_id')
         .maybeSingle();
-
       if (error) throw error;
-
       if (updated?.user_id) {
         await supabase.from('compliance_events').insert({
           id: crypto.randomUUID(),
@@ -109,19 +77,13 @@ serve(async (req: Request) => {
     } else if (action === 'snooze') {
       const snoozeMinutes = typeof minutes === 'number' && minutes > 0 ? minutes : 10;
       const snoozeUntilMs = nowMs + snoozeMinutes * 60 * 1000;
-
       const { data: updated, error } = await supabase
         .from('reminders')
-        .update({
-          snooze_until_ms: snoozeUntilMs,
-          last_modified_ms: nowMs,
-        })
+        .update({ snooze_until_ms: snoozeUntilMs, last_modified_ms: nowMs })
         .eq('id', reminderId)
         .select('user_id')
         .maybeSingle();
-
       if (error) throw error;
-
       if (updated?.user_id) {
         await supabase.from('compliance_events').insert({
           id: crypto.randomUUID(),
