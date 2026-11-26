@@ -43,6 +43,7 @@ export async function signInWithGoogleNative(): Promise<{
     scheme: 'veyra',
     path: 'auth/callback',
   });
+  console.log('[GoogleAuth] redirectTo:', redirectTo);
 
   const { data, error: oauthError } = await supabase.auth.signInWithOAuth({
     provider: 'google',
@@ -50,6 +51,9 @@ export async function signInWithGoogleNative(): Promise<{
       redirectTo,
       skipBrowserRedirect: true,
       scopes: 'openid email profile',
+      queryParams: {
+        prompt: 'select_account consent',
+      },
     },
   });
 
@@ -61,7 +65,9 @@ export async function signInWithGoogleNative(): Promise<{
     throw new Error('No se pudo generar la URL de autenticación de Google.');
   }
 
-  const result = await WebBrowser.openAuthSessionAsync(data.url, redirectTo);
+  const result = await WebBrowser.openAuthSessionAsync(data.url, redirectTo, {
+    preferEphemeralSession: true,
+  });
 
   if (result.type === 'cancel' || result.type === 'dismiss') {
     return { cancelled: true, session: null, user: null };
